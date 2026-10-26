@@ -1,0 +1,14 @@
+title = "Cafe secret scan"
+[extend]
+useDefault = true
+
+[[rules]]
+id = "cafe-secret-key"
+description = "Explicit secret_key assignment with a complete hexadecimal secret"
+regex = '''(?i)secret_key\s*[:=]\s*["']?([a-f0-9]{64})(?:["']|\s|$)'''
+secretGroup = 1
+keywords = ["secret_key"]
+
+[allowlist]
+regexTarget = "line"
+regexes = ['''^SCHEMA_SHA256 = "[a-f0-9]{64}"$''']

@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+set -eu
+# Works both at tools/hooks and after installation in .git/hooks.
+repo=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+cd "$repo"
+python3 -B tools/publication_lint.py
+python3 -B tools/claims_check.py
+python3 -B tools/verify_clean_clone.py --verify-receipt
+if ! command -v gitleaks >/dev/null 2>&1; then
+    echo 'Push blocked: pinned gitleaks is unavailable; no download was authorized.' >&2
+    exit 1
+fi
+version=$(gitleaks version)
+case "$version" in 8.18.4|v8.18.4) ;; *) echo 'Push blocked: wrong gitleaks version.' >&2; exit 1 ;; esac
+gitleaks detect --source . --config .gitleaks.toml --log-opts=--all --redact=100 --no-banner

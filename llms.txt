@@ -1,0 +1,7 @@
+# Café
+Windows desktop tool for Twitch streamers.
+Read [repository rules](AGENTS.md) before edits.
+Read [context protocol](catalogue/protocol.json), then [subject catalogue](catalogue/subjects.json), subject index, page and advertised anchor.
+Local browse convention: catalogue/protocol.json -> catalogue/subjects.json.
+Read docs/ for architecture. Component identities remain future targets.
+Context router available (uncalibrated). Use tools/resolve_cafe.py for exact coordinates; rebuild after source edits.

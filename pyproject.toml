@@ -1,0 +1,51 @@
+# P04 runtime manifest: Python connectors + MCP broker declaration only. No build backend, no lock, no install.
+[project]
+name = "cafe-connectors"
+dynamic = ["version"]
+requires-python = "==3.13.17"
+dependencies = [
+    "mcp==2.3.0",
+]
+
+[project.scripts]
+cafe-connector = "connectors.connector_main:main"
+cafe-mcp-broker = "connectors.mcp_broker:main"
+
+[tool.cafe]
+unit = "P04"
+role = "python_connectors_and_mcp_broker"
+declaration_status = "manifest_declared_only"
+approval_install_lock_status = "pending"
+packaging_build_status = "blocked_missing_build_backend"
+route_sources = ["SW-0070", "PL21"]
+
+[tool.cafe.entrypoints]
+python_connector = { path = "connectors/connector_main.py", target = "connectors.connector_main:main", status = "planned_absent_until_implementation", compute_owner = "rust_authority_core" }
+python_mcp_broker = { path = "connectors/mcp_broker.py", target = "connectors.mcp_broker:main", status = "planned_absent_until_implementation", compute_owner = "rust_authority_core" }
+
+[tool.cafe.dependency_citations]
+mcp = { version = "==2.3.0", citations = ["C18"] }
+
+[tool.cafe.runtime_baselines]
+cpython = { version = "3.13.17", distribution_build = "20261021", citations = ["C25"], kind = "private_packaged_interpreter" }
+obs_studio = { version = "32.2.2", protocol = "obs-websocket v5", citations = ["C09", "C10"], kind = "external_runtime_baseline" }
+codex_cli = { version = "0.164.0", citations = ["C19"], kind = "cited_registration_baseline" }
+
+[tool.cafe.build_blockers]
+product_release_version = "AUSENTE — no inventar"
+python_build_backend = "AUSENTE — no inventar"
+python_obs_library = "AUSENTE — no inventar"
+python_twitch_library = "AUSENTE — no inventar"
+
+[tool.cafe.control_profile_ref]
+canonical_manifest = "package.json#/cafe/control_profile"
+profile_id = "cafe-target-control-profile-v0"
+stage = "TARGET"
+citations = ["C20", "C21"]
+schema_id = "AUSENTE — no inventar"
+request_fields = ["schema", "kind", "request_id", "authority_epoch", "expected_revision", "body"]
+reply_fields = ["request_id", "state", "revision", "error", "receipt"]
+large_integers_js_encoding = "decimal_string"
+unknown_keys = "reject_before_admission"
+stale_revisions = "reject_before_admission"
+limits_status = "AUSENTE — no inventar"

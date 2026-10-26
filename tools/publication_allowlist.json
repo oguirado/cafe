@@ -1,0 +1,17 @@
+{
+  "schema": "cafe.publication-allowlist.v1",
+  "lines": [
+    {
+      "pattern": "^route_sources\\ =\\ \\[\"SW\\-0070\",\\ \"PL04\"\\]$",
+      "reason": "Reviewed static source-catalogue citation metadata, not a private host or unavailable source path."
+    },
+    {
+      "pattern": "^\\ \\ \\ \\ \\ \\ \"SW\\-0070\",$",
+      "reason": "Reviewed static source-catalogue citation metadata, not a private host or unavailable source path."
+    },
+    {
+      "pattern": "^route_sources\\ =\\ \\[\"SW\\-0070\",\\ \"PL21\"\\]$",
+      "reason": "Reviewed static source-catalogue citation metadata, not a private host or unavailable source path."
+    }
+  ]
+}

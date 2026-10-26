@@ -1,0 +1,197 @@
+[
+ {
+  "name": "i_exact_id",
+  "repo": {
+   "n_synth": 0
+  },
+  "q": "PM-001.1",
+  "params": {
+   "m_min": 1,
+   "tau_cov": 0,
+   "tau_peak": 0
+  },
+  "budget": 2000,
+  "expect": {
+   "reason": "exact_id",
+   "flag": false,
+   "rows_min": 1
+  }
+ },
+ {
+  "name": "ii_retired_only",
+  "repo": {
+   "n_synth": 0
+  },
+  "q": "zymurgy",
+  "params": {
+   "m_min": 1,
+   "tau_cov": 0,
+   "tau_peak": 0
+  },
+  "budget": 2000,
+  "expect": {
+   "reason": "no_candidate",
+   "flag": true,
+   "rows_max": 0
+  }
+ },
+ {
+  "name": "iii_nine_ids_overflow",
+  "repo": {
+   "n_synth": 9
+  },
+  "q": "PM-010",
+  "params": {
+   "m_min": 1,
+   "tau_cov": 0,
+   "tau_peak": 0
+  },
+  "budget": 420,
+  "expect": {
+   "reason": "exact_id",
+   "flag": false,
+   "overflow": true
+  }
+ },
+ {
+  "name": "iv_broad_term",
+  "repo": {
+   "n_synth": 0
+  },
+  "q": "graph",
+  "params": {
+   "m_min": 2,
+   "tau_cov": 0,
+   "tau_peak": 0
+  },
+  "budget": 2000,
+  "expect": {
+   "reason": "low_term_match",
+   "flag": true,
+   "rows_min": 1
+  }
+ },
+ {
+  "name": "v_stopwords",
+  "repo": {
+   "n_synth": 0
+  },
+  "q": "the of and to",
+  "params": {
+   "m_min": 1,
+   "tau_cov": 0,
+   "tau_peak": 0
+  },
+  "budget": 2000,
+  "expect": {
+   "reason": "no_query_term",
+   "flag": true,
+   "rows_max": 0
+  }
+ },
+ {
+  "name": "vi_tau_null",
+  "repo": {
+   "n_synth": 0
+  },
+  "q": "paging cache",
+  "params": {
+   "tau_cov": null,
+   "tau_peak": null
+  },
+  "budget": 2000,
+  "expect": {
+   "reason": "uncalibrated",
+   "flag": false,
+   "rows_min": 1
+  }
+ },
+ {
+  "name": "vii_expansion_overrides_empty_t",
+  "repo": {
+   "n_synth": 0
+  },
+  "q": "flushing",
+  "params": {
+   "m_min": 1,
+   "tau_cov": 0,
+   "tau_peak": 0,
+   "w_exp": 500
+  },
+  "budget": 2000,
+  "thes": [
+   {
+    "id": "TH-002",
+    "when": [
+     "flushing"
+    ],
+    "to": [
+     "spectral"
+    ],
+    "single_ok": true,
+    "provenance": {
+     "source": "authored"
+    }
+   }
+  ],
+  "expect": {
+   "reason": "low_term_match",
+   "flag": true,
+   "rows_min": 1
+  }
+ },
+ {
+  "name": "vii_neg_no_expansion_empty_t",
+  "repo": {
+   "n_synth": 0
+  },
+  "q": "flushing",
+  "params": {
+   "m_min": 1,
+   "tau_cov": 0,
+   "tau_peak": 0
+  },
+  "budget": 2000,
+  "expect": {
+   "reason": "no_query_term",
+   "flag": true,
+   "rows_max": 0
+  }
+ },
+ {
+  "name": "viii_overflow_flag_priced",
+  "repo": {
+   "n_synth": 9
+  },
+  "q": "PM-010",
+  "params": {
+   "m_min": 1,
+   "tau_cov": 0,
+   "tau_peak": 0
+  },
+  "budget": 330,
+  "expect": {
+   "reason": "exact_id",
+   "flag": false,
+   "overflow": true,
+   "rows_min": 1,
+   "rows_max": 1
+  }
+ },
+ {
+  "name": "ix_budget_below_empty_envelope",
+  "repo": {
+   "n_synth": 9
+  },
+  "q": "PM-010",
+  "params": {
+   "m_min": 1,
+   "tau_cov": 0,
+   "tau_peak": 0
+  },
+  "budget": 100,
+  "expect": {
+   "error": "E_BUDGET"
+  }
+ }
+]

@@ -1,0 +1,8 @@
+{
+  "subjects": [
+    {
+      "id": "backend",
+      "index": "subjects/backend/index.json"
+    }
+  ]
+}

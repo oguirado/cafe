@@ -1,0 +1,260 @@
+{
+ "entries": [
+  {
+   "id": "TH-001",
+   "provenance": {
+    "qids": [
+     "W-H19",
+     "W-M05"
+    ],
+    "source": "dev_split"
+   },
+   "to": [
+    "server",
+    "competitive"
+   ],
+   "when": [
+    "cache eviction",
+    "cache replacement",
+    "page replacement"
+   ]
+  },
+  {
+   "id": "TH-002",
+   "provenance": {
+    "qids": [
+     "W-H16"
+    ],
+    "source": "dev_split"
+   },
+   "to": [
+    "edit",
+    "alignment"
+   ],
+   "when": [
+    "diff alignment",
+    "text diff"
+   ]
+  },
+  {
+   "id": "TH-003",
+   "provenance": {
+    "qids": [
+     "Q-ALG-03",
+     "W-R17"
+    ],
+    "source": "dev_split"
+   },
+   "to": [
+    "shuffle"
+   ],
+   "when": [
+    "random walk expander",
+    "expander mixing",
+    "expander random"
+   ]
+  },
+  {
+   "id": "TH-004",
+   "provenance": {
+    "qids": [
+     "Q-ALG-05"
+    ],
+    "source": "dev_split"
+   },
+   "to": [
+    "coloring",
+    "chromatic"
+   ],
+   "when": [
+    "graph colouring",
+    "colouring bounds",
+    "register allocation",
+    "register allocator"
+   ]
+  },
+  {
+   "id": "TH-005",
+   "provenance": {
+    "qids": [
+     "Q-ALG-06"
+    ],
+    "source": "dev_split"
+   },
+   "to": [
+    "butterfly",
+    "multiplication"
+   ],
+   "when": [
+    "number theoretic",
+    "big integer",
+    "arbitrary precision"
+   ]
+  },
+  {
+   "id": "TH-006",
+   "provenance": {
+    "qids": [
+     "Q-ML-03"
+    ],
+    "source": "dev_split"
+   },
+   "to": [
+    "concave",
+    "sobolev",
+    "gibbs"
+   ],
+   "when": [
+    "langevin dynamics",
+    "posterior distributions",
+    "posterior sampling"
+   ]
+  },
+  {
+   "id": "TH-007",
+   "provenance": {
+    "qids": [
+     "Q-ML-05",
+     "W-R12"
+    ],
+    "source": "dev_split"
+   },
+   "to": [
+    "brenier",
+    "wasserstein"
+   ],
+   "when": [
+    "optimal transport",
+    "transport distances"
+   ]
+  },
+  {
+   "id": "TH-008",
+   "provenance": {
+    "qids": [
+     "Q-ML-06"
+    ],
+    "source": "dev_split"
+   },
+   "to": [
+    "lattice",
+    "covering"
+   ],
+   "when": [
+    "quantise weights",
+    "low bit",
+    "model weights"
+   ]
+  },
+  {
+   "id": "TH-009",
+   "provenance": {
+    "qids": [
+     "Q-NUM-06"
+    ],
+    "source": "dev_split"
+   },
+   "to": [
+    "packing",
+    "configuration",
+    "additive"
+   ],
+   "when": [
+    "integrality gap",
+    "job scheduling"
+   ]
+  },
+  {
+   "id": "TH-010",
+   "provenance": {
+    "qids": [
+     "W-R18"
+    ],
+    "source": "dev_split"
+   },
+   "single_ok": true,
+   "to": [
+    "subset",
+    "sum",
+    "packing"
+   ],
+   "when": [
+    "knapsack"
+   ]
+  },
+  {
+   "id": "TH-011",
+   "provenance": {
+    "qids": [
+     "Q-GFX-03"
+    ],
+    "source": "dev_split"
+   },
+   "to": [
+    "lipschitz",
+    "height"
+   ],
+   "when": [
+    "fractal dimension",
+    "procedural terrain",
+    "fractal surfaces"
+   ]
+  },
+  {
+   "id": "TH-012",
+   "provenance": {
+    "qids": [
+     "W-R19",
+     "Q-DS-04"
+    ],
+    "source": "dev_split"
+   },
+   "to": [
+    "cotype",
+    "markov",
+    "lipschitz"
+   ],
+   "when": [
+    "metric embedding",
+    "embedding distortion",
+    "dimension reduction"
+   ]
+  },
+  {
+   "id": "TH-013",
+   "provenance": {
+    "qids": [
+     "W-M20"
+    ],
+    "source": "dev_split"
+   },
+   "to": [
+    "contraction",
+    "correlation",
+    "channel"
+   ],
+   "when": [
+    "information bottleneck",
+    "relevant compression"
+   ]
+  },
+  {
+   "id": "TH-014",
+   "provenance": {
+    "qids": [
+     "W-H17"
+    ],
+    "source": "dev_split"
+   },
+   "to": [
+    "normalization"
+   ],
+   "when": [
+    "proof assistant",
+    "lean formalization"
+   ]
+  }
+ ],
+ "schema": "ctx.thesaurus.v1",
+ "version": 1
+}

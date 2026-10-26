@@ -1,0 +1,5 @@
+id	subject_id	paper	page
+PM-001.1	1	papers/EN-0000_PM-001.1.md	catalogue/subjects/1/pages/p001.jsonl
+PM-001.2	1	papers/EN-0001_PM-001.2.md	catalogue/subjects/1/pages/p001.jsonl
+PM-002.1	2	papers/EN-0002_PM-002.1.md	catalogue/subjects/2/pages/p001.jsonl
+PM-003.1	2	papers/EN-0003_PM-003.1.md	catalogue/subjects/2/pages/p001.jsonl

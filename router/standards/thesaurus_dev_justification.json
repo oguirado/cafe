@@ -1,0 +1,94 @@
+{
+ "entries": {
+  "TH-001": {
+   "dev_qids": [
+    "W-H19",
+    "W-M05"
+   ],
+   "justification": "gold PM-110.x (k-server, competitive ratio) cards carry no cache/paging words; PM-110.1/.2 were the ranks 1-4 hits only by 'competitive'"
+  },
+  "TH-002": {
+   "dev_qids": [
+    "W-H16"
+   ],
+   "justification": "gold PM-121.1/PM-099.x use 'edit distance'; 'diff' has df 5"
+  },
+  "TH-003": {
+   "dev_qids": [
+    "Q-ALG-03",
+    "W-R17"
+   ],
+   "justification": "gold PM-238.2/.8 (Thorp shuffle mixing) absent from top-20 for Q-ALG-03"
+  },
+  "TH-004": {
+   "dev_qids": [
+    "Q-ALG-05"
+   ],
+   "justification": "British spelling 'colouring' (df 1) vs card 'coloring' (df 34); gold PM-184.1 absent from top-20"
+  },
+  "TH-005": {
+   "dev_qids": [
+    "Q-ALG-06"
+   ],
+   "justification": "gold PM-109.1 (integer multiplication, butterfly layer) absent from top-20"
+  },
+  "TH-006": {
+   "dev_qids": [
+    "Q-ML-03"
+   ],
+   "justification": "gold PM-093.1 (log-Sobolev, log-concave) and PM-139.1 (log-concave sampling) absent from top-20"
+  },
+  "TH-007": {
+   "dev_qids": [
+    "Q-ML-05",
+    "W-R12"
+   ],
+   "justification": "gold PM-360.2/PM-374.1 (Brenier maps) at rank 17-19 or absent"
+  },
+  "TH-008": {
+   "dev_qids": [
+    "Q-ML-06"
+   ],
+   "justification": "gold PM-092.1 (lattice covering) and PM-094.1 absent from top-20; 'quantise' has df 0"
+  },
+  "TH-009": {
+   "dev_qids": [
+    "Q-NUM-06"
+   ],
+   "justification": "gold PM-118.1 (bin packing additive gap) at rank 2"
+  },
+  "TH-010": {
+   "dev_qids": [
+    "W-R18"
+   ],
+   "justification": "gold PM-138.2 (subset sum) absent from top-20; 'knapsack' has df 0"
+  },
+  "TH-011": {
+   "dev_qids": [
+    "Q-GFX-03"
+   ],
+   "justification": "gold PM-232.3 (real Lipschitz height surfaces) at rank 5"
+  },
+  "TH-012": {
+   "dev_qids": [
+    "W-R19",
+    "Q-DS-04"
+   ],
+   "justification": "gold PM-331.1/PM-332.1 (metric Markov cotype) absent from top-20 for W-R19"
+  },
+  "TH-013": {
+   "dev_qids": [
+    "W-M20"
+   ],
+   "justification": "gold PM-119.1/PM-140.x at ranks 14-18"
+  },
+  "TH-014": {
+   "dev_qids": [
+    "W-H17"
+   ],
+   "justification": "gold PM-245.1 (type-system normalization) at rank 20"
+  }
+ },
+ "note": "authored only from DEV misses (gold absent from or low in v2 P0 top-20) and card text of those gold docs; no TEST/bench access",
+ "schema": "ctx.thesaurus-justification.v1"
+}

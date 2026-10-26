@@ -1,0 +1,17 @@
+{
+  "subject": "backend",
+  "pages": [
+    {
+      "id": "backend-book",
+      "path": "subjects/backend/page.md",
+      "anchors": [
+        "backend-overview",
+        "backend-boundaries",
+        "backend-journal",
+        "backend-oracle",
+        "backend-negative"
+      ],
+      "token_limit": 4000
+    }
+  ]
+}

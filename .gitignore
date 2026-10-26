@@ -1,0 +1,13 @@
+local/
+.env*
+target/
+node_modules/
+__pycache__/
+*.pyc
+*.so
+*.o
+dist/
+build/
+*.log
+recordings/
+twitch_data/

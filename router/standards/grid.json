@@ -1,0 +1,17 @@
+{
+ "schema": "ctx.grid.v1",
+ "order": ["profile", "w_exp", "w_phr", "lcp5", "w_dom", "intent_boost", "w_edge"],
+ "values": {
+  "profile": ["P0", "P1", "P2"],
+  "w_exp": [0, 250, 500],
+  "w_phr": [0, 500],
+  "lcp5": [0, 1],
+  "w_dom": [0, 100, 200],
+  "intent_boost": [0, 1],
+  "w_edge": [0, 250]
+ },
+ "w_edge_requires_null_test": true,
+ "abstention": {"m_min": [1, 2], "pass_through_floor": "4/5"},
+ "defaults": {"profile": "P0", "w_exp": 0, "w_phr": 0, "lcp5": 0, "w_dom": 0, "intent_boost": 0, "w_edge": 0},
+ "promotion_class_floor": "-1/20"
+}

@@ -1,0 +1,109 @@
+# P05 pure authority; only operator-approved serialization dependencies are enabled.
+[package]
+name = "cafe-core"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+autobins = false
+
+[[bin]]
+name = "cafe-core"
+path = "core/src/main.rs"
+
+[[test]]
+name = "journal_recovery"
+path = "core/tests/journal_recovery.rs"
+
+[[test]]
+name = "capsule_registry"
+path = "core/tests/capsule_registry.rs"
+
+[dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+sha2 = "=0.11.0"
+tokio = { version = "=1.53.2", default-features = false, features = ["rt", "process", "io-util", "net", "sync", "time"] }
+
+[package.metadata.cafe]
+unit = "P10"
+role = "authority_core"
+declaration_status = "pure_authority_scope"
+approval_install_lock_status = "serialization_and_sha256_closures_approved"
+build_status = "pure_authority_build_approved_after_lock_audit"
+route_sources = ["SW-0070", "PL04"]
+
+[package.metadata.cafe.entrypoints]
+authority = { name = "cafe-core", path = "core/src/main.rs", status = "pure_no_effects_skeleton" }
+
+[package.metadata.cafe.dependency_citations]
+serde = { version = "=1.0.229", features = ["derive"], source = "operator P05 decision", approval = "approved" }
+serde_json = { version = "=1.0.151", source = "operator P05 decision", approval = "approved" }
+
+[package.metadata.cafe.dependency_citations.sha2]
+version = "=0.11.0"
+source = "operator P06 decision; RustCrypto"
+approval = "approved"
+
+[package.metadata.cafe.dependency_citations.tokio]
+version = "=1.53.2"
+source = "operator P08 decision, supersedes architecture C22 version 1.54.1"
+reason = "1.53.2 exceeds fourteen-day release-age policy; 1.54.1 excluded as three days old"
+approval = "approved"
+
+[package.metadata.cafe.pending_dependencies]
+
+
+[package.metadata.cafe.toolchain_approval]
+edition = "2024"
+rust_version = "1.97"
+source = "operator P05 decision"
+
+[package.metadata.cafe.runtime_baselines]
+ffmpeg = { version = "8.1.3", citations = ["C22", "C25"], kind = "external_audited_executable", rust_binding_required = false }
+
+[package.metadata.cafe.build_blockers]
+product_release_version = "AUSENTE — no inventar"
+rust_vault_crate = "AUSENTE — no inventar"
+
+[package.metadata.cafe.control_profile_ref]
+canonical_manifest = "package.json#/cafe/control_profile"
+profile_id = "cafe-target-control-profile-v0"
+stage = "TARGET"
+citations = ["C20", "C21"]
+schema_id = "AUSENTE — no inventar"
+request_fields = ["schema", "kind", "request_id", "authority_epoch", "expected_revision", "body"]
+reply_fields = ["request_id", "state", "revision", "error", "receipt"]
+large_integers_js_encoding = "decimal_string"
+unknown_keys = "reject_before_admission"
+stale_revisions = "reject_before_admission"
+limits_status = "AUSENTE — no inventar"
+
+[[bin]]
+name = "cafe-authority-fixture"
+path = "core/tests/authority_fixture.rs"
+
+[[test]]
+name = "python_connector_supervisor"
+path = "core/tests/python_connector_supervisor.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "=0.62.2", default-features = false, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Graphics_Capture", "Graphics_DirectX_Direct3D11", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi_Common", "Win32_System_WinRT_Direct3D11", "Win32_System_WinRT_Graphics_Capture", "Win32_System_Performance", "Security_Authorization_AppCapabilityAccess", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader"] }
+
+[package.metadata.cafe.dependency_citations.windows]
+version = "=0.62.2"
+citations = ["D02", "D06"]
+source = "operator P09 decision; Microsoft windows-rs"
+approval = "approved"
+target = "cfg(windows)"
+
+[[test]]
+name = "window_pairing"
+path = "core/tests/window_pairing.rs"
+
+[[test]]
+name = "windows_capture"
+path = "core/tests/windows_capture.rs"
+
+[[bin]]
+name = "cafe-wgc-synthetic"
+path = "core/tests/wgc_synthetic.rs"

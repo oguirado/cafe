@@ -1,0 +1,473 @@
+{
+ "schema": "ctx.vocabulary.v1",
+ "version": "v0",
+ "tags": [
+  {
+   "tag": "software",
+   "label": "software",
+   "synonyms": [
+    "software"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "games_simulation",
+   "label": "games simulation",
+   "synonyms": [
+    "games",
+    "simulation"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "tools",
+   "label": "tools",
+   "synonyms": [
+    "tools"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "algorithms",
+   "label": "algorithms",
+   "synonyms": [
+    "algorithms"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "data_structures",
+   "label": "data structures",
+   "synonyms": [
+    "data",
+    "structures"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "hardware_accelerators",
+   "label": "hardware accelerators",
+   "synonyms": [
+    "accelerators",
+    "hardware"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "crypto_security",
+   "label": "crypto security",
+   "synonyms": [
+    "crypto",
+    "security"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "machine_learning",
+   "label": "machine learning",
+   "synonyms": [
+    "learning",
+    "machine"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "optimisation_operations_research",
+   "label": "optimisation operations research",
+   "synonyms": [
+    "operations",
+    "optimisation",
+    "research"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "distributed_systems",
+   "label": "distributed systems",
+   "synonyms": [
+    "distributed",
+    "systems"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "other",
+   "label": "other",
+   "synonyms": [
+    "other"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "subject/s1",
+   "label": "Number theory",
+   "synonyms": [
+    "cycles",
+    "eigensheaf",
+    "geometric",
+    "hecke",
+    "heegner",
+    "langlands",
+    "nearby",
+    "number",
+    "points",
+    "poisson",
+    "quadratic",
+    "summation",
+    "theory",
+    "twists"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "subject/s2",
+   "label": "Algebra",
+   "synonyms": [
+    "algebra",
+    "algebraic",
+    "auslander",
+    "characteristic",
+    "conjecture",
+    "defect",
+    "extension",
+    "group",
+    "groups",
+    "mixed",
+    "reiten",
+    "theory",
+    "trivial"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "subject/s3",
+   "label": "Algebraic and complex geometry",
+   "synonyms": [
+    "abundance",
+    "algebraic",
+    "and",
+    "complex",
+    "constant",
+    "dimension",
+    "geometry",
+    "ideal",
+    "log",
+    "minimal",
+    "model",
+    "multiplier",
+    "nef",
+    "numerical",
+    "program",
+    "reduction",
+    "seshadri"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "subject/s4",
+   "label": "Topology",
+   "synonyms": [
+    "chromatic",
+    "cohomology",
+    "continuous",
+    "curve",
+    "descent",
+    "fargues",
+    "fontaine",
+    "morava",
+    "splitting",
+    "theory",
+    "topology"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "subject/s5",
+   "label": "Group theory",
+   "synonyms": [
+    "artin",
+    "boone",
+    "bounded",
+    "central",
+    "compiler",
+    "conjecture",
+    "finiteness",
+    "group",
+    "higman",
+    "kernel",
+    "residual",
+    "steinberg",
+    "theory"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "subject/s6",
+   "label": "Mathematical logic",
+   "synonyms": [
+    "abstract",
+    "amalgamation",
+    "calculus",
+    "choiceless",
+    "class",
+    "counting",
+    "elementary",
+    "logic",
+    "mathematical",
+    "number",
+    "partition",
+    "polynomial",
+    "skolem",
+    "time",
+    "wenheim"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "subject/s7",
+   "label": "Differential geometry",
+   "synonyms": [
+    "curvature",
+    "differential",
+    "eigenfunction",
+    "finite",
+    "fixed",
+    "geometry",
+    "hamiltonian",
+    "hausdorff",
+    "involution",
+    "laplace",
+    "measure",
+    "perimeter",
+    "points",
+    "scalar"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "subject/s8",
+   "label": "Convex and metric geometry",
+   "synonyms": [
+    "and",
+    "arithmetic",
+    "body",
+    "cone",
+    "convex",
+    "covering",
+    "cylinder",
+    "distortion",
+    "geometry",
+    "hyperbolicity",
+    "interval",
+    "lattice",
+    "metric",
+    "triangular"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "subject/s9",
+   "label": "Partial differential equations",
+   "synonyms": [
+    "approximation",
+    "ball",
+    "calder",
+    "carleman",
+    "differential",
+    "equations",
+    "estimate",
+    "evans",
+    "forced",
+    "halting",
+    "navier",
+    "partial",
+    "problem",
+    "stokes"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "subject/s10",
+   "label": "Real and complex analysis",
+   "synonyms": [
+    "analysis",
+    "and",
+    "complex",
+    "estimate",
+    "furstenberg",
+    "kakeya",
+    "littlewood",
+    "multilinear",
+    "packets",
+    "phase",
+    "polynomials",
+    "real",
+    "signs",
+    "stationary",
+    "wave"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "subject/s11",
+   "label": "Functional analysis",
+   "synonyms": [
+    "analysis",
+    "approximation",
+    "asymptotic",
+    "auc",
+    "banach",
+    "branching",
+    "convexity",
+    "countably",
+    "diamonds",
+    "faber",
+    "functional",
+    "midpoint",
+    "polynomials",
+    "property",
+    "renorming",
+    "space",
+    "uniform"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "subject/s12",
+   "label": "Dynamical systems and ergodic theory",
+   "synonyms": [
+    "and",
+    "birkhoff",
+    "caustic",
+    "collar",
+    "conditional",
+    "conjecture",
+    "convergence",
+    "dynamical",
+    "entropy",
+    "ergodic",
+    "independence",
+    "mixing",
+    "pointwise",
+    "systems",
+    "theory",
+    "transformation",
+    "zero"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "subject/s13",
+   "label": "Combinatorics",
+   "synonyms": [
+    "analysis",
+    "arithmetic",
+    "bernoulli",
+    "biased",
+    "combinatorics",
+    "fourier",
+    "lifts",
+    "measure",
+    "positivity",
+    "power",
+    "product",
+    "progressions",
+    "reflection",
+    "saving"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "subject/s14",
+   "label": "Theoretical computer science",
+   "synonyms": [
+    "accuracy",
+    "angular",
+    "approximation",
+    "computer",
+    "contingency",
+    "fields",
+    "finite",
+    "fpras",
+    "generalized",
+    "hardness",
+    "height",
+    "of",
+    "science",
+    "star",
+    "tables",
+    "theoretical"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "subject/s15",
+   "label": "Probability and statistical mechanics",
+   "synonyms": [
+    "and",
+    "bath",
+    "chordal",
+    "dynamics",
+    "field",
+    "free",
+    "gaussian",
+    "heat",
+    "honeycomb",
+    "lattice",
+    "mechanics",
+    "probability",
+    "shuffle",
+    "sle",
+    "statistical",
+    "thorp",
+    "total",
+    "variation"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "subject/s16",
+   "label": "Operator algebras",
+   "synonyms": [
+    "algebra",
+    "algebras",
+    "amalgamated",
+    "comparison",
+    "crossed",
+    "cuntz",
+    "free",
+    "jiang",
+    "neumann",
+    "operator",
+    "product",
+    "semigroup",
+    "stability",
+    "su",
+    "von"
+   ],
+   "parents": []
+  },
+  {
+   "tag": "subject/s17",
+   "label": "Mathematical physics",
+   "synonyms": [
+    "area",
+    "condition",
+    "constant",
+    "dominant",
+    "enclosing",
+    "energy",
+    "inequality",
+    "limit",
+    "mathematical",
+    "minimum",
+    "orbital",
+    "penrose",
+    "physics",
+    "spacetime",
+    "thermodynamic"
+   ],
+   "parents": []
+  }
+ ]
+}

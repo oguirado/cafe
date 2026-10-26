@@ -1,0 +1,163 @@
+{
+  "corpus": "cafe",
+  "files": [
+    {
+      "id": "py-authority-channel",
+      "language": "python",
+      "path": "connectors/cafe/authority_channel.py",
+      "symbol_prefix": "cafe.authority_channel."
+    },
+    {
+      "id": "py-channel-auth",
+      "language": "python",
+      "path": "connectors/cafe/channel_auth.py",
+      "symbol_prefix": "cafe.channel_auth."
+    },
+    {
+      "id": "rust-authority-auth",
+      "language": "rust",
+      "path": "core/src/authority_auth.rs",
+      "symbol_prefix": "cafe_authority_fixture::authority_auth::"
+    },
+    {
+      "id": "rust-authority-journal",
+      "language": "rust",
+      "path": "core/src/authority_journal.rs",
+      "symbol_prefix": "cafe_core::authority_journal::"
+    },
+    {
+      "id": "rust-capsule-pairing",
+      "language": "rust",
+      "path": "core/src/capsule_pairing.rs",
+      "symbol_prefix": "cafe_core::capsule_pairing::"
+    },
+    {
+      "id": "rust-capsule-registry",
+      "language": "rust",
+      "path": "core/src/capsule_registry.rs",
+      "symbol_prefix": "cafe_core::capsule_registry::"
+    },
+    {
+      "id": "rust-frame-pool",
+      "language": "rust",
+      "path": "core/src/capture_frame_pool.rs",
+      "symbol_prefix": "cafe_core::capture_frame_pool::"
+    },
+    {
+      "id": "rust-capture-health",
+      "language": "rust",
+      "path": "core/src/capture_health.rs",
+      "symbol_prefix": "cafe_core::capture_health::"
+    },
+    {
+      "id": "rust-journal-replay",
+      "language": "rust",
+      "path": "core/src/journal_replay.rs",
+      "symbol_prefix": "cafe_core::journal_replay::"
+    },
+    {
+      "id": "rust-main",
+      "language": "rust",
+      "path": "core/src/main.rs",
+      "symbol_prefix": "cafe_core::"
+    },
+    {
+      "id": "rust-python-supervisor",
+      "language": "rust",
+      "path": "core/src/python_connector_supervisor.rs",
+      "symbol_prefix": "cafe_authority_fixture::python_connector_supervisor::"
+    },
+    {
+      "id": "rust-wgc-producer",
+      "language": "rust",
+      "path": "core/src/windows_graphics_capture.rs",
+      "symbol_prefix": "cafe_core::windows_graphics_capture::"
+    },
+    {
+      "id": "rust-window-registry",
+      "language": "rust",
+      "path": "core/src/windows_window_registry.rs",
+      "symbol_prefix": "cafe_core::windows_window_registry::"
+    },
+    {
+      "id": "rust-authority-fixture",
+      "language": "rust",
+      "path": "core/tests/authority_fixture.rs",
+      "symbol_prefix": "cafe_authority_fixture::"
+    },
+    {
+      "id": "github-repo-rule",
+      "language": "markdown",
+      "path": "docs/GITHUB_REPO_RULE.md",
+      "symbol_prefix": ""
+    },
+    {
+      "id": "readme",
+      "language": "markdown",
+      "path": "docs/acceptance/README.md",
+      "symbol_prefix": ""
+    },
+    {
+      "id": "architecture-v0-1",
+      "language": "markdown",
+      "path": "docs/architecture/ARCHITECTURE.v0.1.md",
+      "symbol_prefix": ""
+    },
+    {
+      "id": "js-backend-supervisor",
+      "language": "js",
+      "path": "src/main/backendSupervisor.js",
+      "symbol_prefix": "cafe_shell::main::backendSupervisor::"
+    },
+    {
+      "id": "js-cafe-bridge",
+      "language": "js",
+      "path": "src/preload/cafeBridge.js",
+      "symbol_prefix": "cafe_shell::preload::cafeBridge::"
+    },
+    {
+      "id": "backend-book",
+      "language": "markdown",
+      "path": "subjects/backend/page.md",
+      "symbol_prefix": ""
+    }
+  ],
+  "rust_roots": [
+    {
+      "cfg": {
+        "windows": false
+      },
+      "crate": "cafe_core",
+      "entry": "core/src/main.rs",
+      "files": [
+        "core/src/authority_journal.rs",
+        "core/src/capsule_pairing.rs",
+        "core/src/capsule_registry.rs",
+        "core/src/capture_frame_pool.rs",
+        "core/src/capture_health.rs",
+        "core/src/journal_replay.rs",
+        "core/src/main.rs",
+        "core/src/windows_graphics_capture.rs",
+        "core/src/windows_window_registry.rs"
+      ],
+      "module_paths": {}
+    },
+    {
+      "cfg": {
+        "unix": true
+      },
+      "crate": "cafe_authority_fixture",
+      "entry": "core/tests/authority_fixture.rs",
+      "files": [
+        "core/src/authority_auth.rs",
+        "core/src/python_connector_supervisor.rs",
+        "core/tests/authority_fixture.rs"
+      ],
+      "module_paths": {
+        "core/tests/authority_fixture.rs::authority_auth": "core/src/authority_auth.rs",
+        "core/tests/authority_fixture.rs::python_connector_supervisor": "core/src/python_connector_supervisor.rs"
+      }
+    }
+  ],
+  "schema": "cafe.source-profile.v1"
+}

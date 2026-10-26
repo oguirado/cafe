@@ -1,0 +1,70 @@
+{
+  "schema": "cafe.claims-baseline.v1",
+  "documents": [
+    {
+      "path": "AGENTS.md",
+      "sha256": "f4295a1e796c4d44961e4c54a59ab40afd37d7984eb589ce81dc398b66eb8f11",
+      "scope": "inherited normative, upstream companion or sealed design; not a new implementation claim"
+    },
+    {
+      "path": "docs/GITHUB_REPO_RULE.md",
+      "sha256": "d58cf97f49188b272697f0ade394b4f3a86c7103d50e04841fc063c6ee0559d5",
+      "scope": "inherited normative, upstream companion or sealed design; not a new implementation claim"
+    },
+    {
+      "path": "docs/architecture/ARCHITECTURE.v0.1.md",
+      "sha256": "734f2ddfd439c9d2a27b6465df4a6c31db0186a566908d29f43f1a751670825d",
+      "scope": "inherited normative, upstream companion or sealed design; not a new implementation claim"
+    },
+    {
+      "path": "router/LOCAL_CHANGES.md",
+      "sha256": "d8947a25f1aee18ebd2dc25a4b2b4c841fa7eb9f79094eab35bede0e0a13faa7",
+      "scope": "inherited normative, upstream companion or sealed design; not a new implementation claim"
+    },
+    {
+      "path": "router/companions/extract_js.md",
+      "sha256": "4cff605227e599edd0e1fc65c91d23e581aade4f3ecfe72620bb10007cba57a9",
+      "scope": "inherited normative, upstream companion or sealed design; not a new implementation claim"
+    },
+    {
+      "path": "router/companions/extract_py.md",
+      "sha256": "c316384e2d01c330f672a13578d63f7fd7a8219c6884d6a4928551265771462c",
+      "scope": "inherited normative, upstream companion or sealed design; not a new implementation claim"
+    },
+    {
+      "path": "router/companions/extract_rust.md",
+      "sha256": "95a463b9413415e44fd9b1c4463608bf6617912648e3a8847bb245f108352021",
+      "scope": "inherited normative, upstream companion or sealed design; not a new implementation claim"
+    },
+    {
+      "path": "router/companions/router_index.md",
+      "sha256": "de55b2bddb42302eb0145a8975e98b4db82b326fff48e58041bf4a699c251e01",
+      "scope": "inherited normative, upstream companion or sealed design; not a new implementation claim"
+    },
+    {
+      "path": "router/tests/fixtures/repo3/papers/EN-0000_PM-001.1.md",
+      "sha256": "5e6b3dd15bb5db4f15ac11c42e1bb92343cc6d91d3cac6835e02e3360c4cb123",
+      "scope": "inherited normative, upstream companion or sealed design; not a new implementation claim"
+    },
+    {
+      "path": "router/tests/fixtures/repo3/papers/EN-0001_PM-001.2.md",
+      "sha256": "f6294efa00cac71b57bab09d059c3e753edae4d9d9df7bd60636c5a06927d435",
+      "scope": "inherited normative, upstream companion or sealed design; not a new implementation claim"
+    },
+    {
+      "path": "router/tests/fixtures/repo3/papers/EN-0002_PM-002.1.md",
+      "sha256": "b0df75b2872e0a1eafc100659658073224c50413981667bd5d97e16d90a36451",
+      "scope": "inherited normative, upstream companion or sealed design; not a new implementation claim"
+    },
+    {
+      "path": "router/tests/fixtures/repo3/papers/EN-0003_PM-003.1.md",
+      "sha256": "bf09640d1a6fd126a7098370c0cd55c12513a77f88cf3c23b186b9e1f640e0d6",
+      "scope": "inherited normative, upstream companion or sealed design; not a new implementation claim"
+    },
+    {
+      "path": "subjects/backend/page.md",
+      "sha256": "4d0f2ebce151d044aa1c17860bf63054dacd9509df4639fe847227e3b4cbbab6",
+      "scope": "inherited normative, upstream companion or sealed design; not a new implementation claim"
+    }
+  ]
+}

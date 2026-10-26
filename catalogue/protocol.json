@@ -1,0 +1,1 @@
+{"mounts": [{"corpus": "cafe", "path": "catalogue/router", "priority": 0}], "router": {"answer_schema": "ctx.shortlist.v2", "params": "catalogue/router/params.json", "path_rule": "lookup:catalogue/routes.tsv"}, "schema": "ctx.protocol.v2"}
