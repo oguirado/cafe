@@ -7,7 +7,8 @@ import json
 import os
 from pathlib import Path
 import secrets
-import select
+import queue
+import threading
 import socket
 import stat
 import subprocess
@@ -115,9 +116,21 @@ class Authority:
                 process.terminate()
 
     def read(self):
-        if not select.select([self.process.stdout], [], [], 10)[0]:
-            raise AssertionError('authority response deadline')
-        line = self.process.stdout.readline(auth.MAX_LINE + 1)
+        # Windows select cannot wait on a subprocess pipe. This bounded worker
+        # reads only this owned child's response, and close() reaps before join.
+        responses = queue.Queue(maxsize=1)
+        def receive():
+            try:
+                responses.put(self.process.stdout.readline(auth.MAX_LINE + 1))
+            except (OSError, ValueError):
+                responses.put(b'')
+        reader = threading.Thread(target=receive, daemon=True)
+        reader.start()
+        try:
+            line = responses.get(timeout=10)
+        except queue.Empty:
+            raise AssertionError('authority response deadline') from None
+        reader.join(timeout=1)
         self.output.append(line)
         with (self.root / 'authority.log').open('ab') as log:
             log.write(line)
@@ -275,8 +288,16 @@ class TestAuthorityChannel(unittest.TestCase):
     def test_rendezvous_owner_acl_and_one_time_bootstrap(self):
         self.a.broker_start()
         directory = self.root / 'rendezvous-1'
-        self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
-        self.assertEqual(stat.S_IMODE((directory / 'broker.sock').stat().st_mode), 0o600)
+        if os.name == 'nt':
+            from cafe.windows_auth import _api, _owner, _check_acl
+            kernel, security = _api()
+            storage, sid = _owner(kernel, security)
+            _check_acl(directory, True, kernel, security, sid)
+            _check_acl(directory / 'broker.pipe', False, kernel, security, sid)
+            self.assertNotIn(b'secret', (directory / 'broker.pipe').read_bytes())
+        else:
+            self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE((directory / 'broker.sock').stat().st_mode), 0o600)
         asyncio.run(auth.receive_ticket(directory))
         with self.assertRaises((OSError, ValueError, asyncio.TimeoutError)):
             asyncio.run(auth.receive_ticket(directory))

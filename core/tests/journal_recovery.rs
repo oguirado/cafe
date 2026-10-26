@@ -191,8 +191,20 @@ fn second_writer_and_recovery_are_rejected_while_lock_held() {
     let f = Fixture::new(); let mut holder = f.journal();
     assert!(matches!(Journal::open(&f.log, SESSION, Clock(7)), Err(JournalError::Locked)));
     assert!(matches!(recover(&f.log, &f.media, SESSION, Clock(7)), Err(JournalError::Locked)));
-    append_book(&mut holder, 1); drop(holder);
+    append_book(&mut holder, 1);
+    // A second handle reads the actual committed bytes while the writer stays live.
+    let mut reader = fs::File::open(&f.log).unwrap();
+    let mut observed = Vec::new();
+    std::io::Read::read_to_end(&mut reader, &mut observed).unwrap();
+    assert!(!observed.is_empty());
+    assert_eq!(observed, fs::read(&f.log).unwrap());
+    assert!(matches!(Journal::open(&f.log, SESSION, Clock(7)), Err(JournalError::Locked)));
+    let mut lock_name = f.log.as_os_str().to_os_string(); lock_name.push(".lock");
+    let lock_path = std::path::PathBuf::from(lock_name);
+    assert!(lock_path.is_file()); drop(holder);
+    assert!(lock_path.is_file(), "persistent lock path must never be unlinked");
     let reopened = f.journal(); assert_eq!(reopened.records().len(), 1);
+    drop(reopened); drop(reader);
 }
 
 #[test]

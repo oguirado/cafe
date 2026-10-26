@@ -168,7 +168,7 @@ struct Scan {
 }
 
 /// Exclusive single-writer journal handle. Holds the locked file for its
-/// whole lifetime; dropping releases the lock.
+/// whole lifetime; dropping releases the persistent sidecar lock.
 pub struct Journal {
     durability: Durability,
     file: File,
@@ -184,6 +184,8 @@ pub struct Journal {
     interrupted: Vec<u8>,
     staged: Option<StagedControl>,
     poisoned: bool,
+    // Last field: release exclusivity only after closing the data handle. Never unlink.
+    _writer_lock: File,
 }
 
 /// Canonical JSON bytes: recursively sorted object keys, compact UTF-8,
@@ -574,13 +576,19 @@ impl Journal {
         if session_id.is_empty() {
             return Err(JournalError::Invalid);
         }
+        // A separate inode keeps Windows mandatory locks away from data readers.
+        // Append to the complete name; replacing its extension would alias journals.
+        let mut lock_name = path.as_os_str().to_os_string();
+        lock_name.push(".lock");
+        let writer_lock = OpenOptions::new().read(true).write(true).create(true)
+            .open(PathBuf::from(lock_name)).map_err(|_| JournalError::Io)?;
+        writer_lock.try_lock().map_err(|_| JournalError::Locked)?;
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .open(path)
             .map_err(|_| JournalError::Io)?;
-        file.try_lock().map_err(|_| JournalError::Locked)?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).map_err(|_| JournalError::Io)?;
         let scan = scan_prefix(&bytes, session_id, epoch)?;
@@ -614,6 +622,7 @@ impl Journal {
             interrupted,
             staged: None,
             poisoned: false,
+            _writer_lock: writer_lock,
         })
     }
 

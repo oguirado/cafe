@@ -49,3 +49,43 @@ API references: [file flush rights](https://learn.microsoft.com/en-us/windows/wi
 [write-through move](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw),
 [NTFS metadata recovery](https://learn.microsoft.com/en-us/troubleshoot/windows-client/backup-and-storage/fat-hpfs-and-ntfs-file-systems) and
 [caching limits](https://learn.microsoft.com/en-us/windows/win32/fileio/file-caching).
+
+## Journal writer-lock lifecycle
+
+A writer first creates or opens the complete journal pathname plus `.lock` and
+holds its exclusive `try_lock` handle until its data handle closes. The lock
+file persists after success, error, recovery and process exit; it is never
+unlinked by a writer. Its presence alone does not mean an owner is alive: the
+OS handle lock is the admission authority. Administrators must not unlink or
+replace it while a writer may be alive. All cooperating writers use the same
+stable journal pathname. The journal data file itself is not locked, so separate
+read-only handles can observe bytes on Windows and Unix. Observers still need
+to validate framing and committed trailers; seeing bytes is not a receipt.
+Repairing replay takes the writer lock because it can quarantine/truncate data.
+The file and Unix directory durability barriers are unchanged.
+
+## Private Windows authentication rendezvous
+
+Windows secrets and nonces come exclusively from `BCryptGenRandom` with the
+system-preferred provider. A failed system call returns an error without a
+fallback or partial bytes. Unix retains its operating-system random source.
+The broker binds only loopback and delivers its one-use HMAC key over a local
+named pipe. Both the pipe and its fresh rendezvous directory have a protected
+DACL granting full access only to the current account SID. Metadata inherits
+that ACL and contains only a random pipe name and authority process identity,
+never the key. The Python receiver rejects reparse points, wrong ownership,
+additional ACEs, an unprotected directory DACL or a different pipe server.
+The pipe rejects remote clients and duplicate server instances. The receiver
+uses identification-only security quality of service, reads a bounded ticket
+and acknowledges receipt before the server handle closes. Later TCP admission
+still requires the existing one-use, epoch-bound HMAC proof.
+
+This is account isolation, not protection against another hostile process
+already running as the same account. Runtime Windows verification of the
+rendezvous, CSPRNG and all CI stages remains pending until the operator's next
+commit and hosted run. Native Discord and physical power-loss acceptance remain
+separate pending checks.
+
+API references: [mandatory locks](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex),
+[system RNG](https://learn.microsoft.com/en-us/windows/win32/api/bcrypt/nf-bcrypt-bcryptgenrandom) and
+[pipe ACLs](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights).

@@ -1,5 +1,5 @@
 //! Bounded private connector frames and one-use broker HMAC admission.
-//! Linux rendezvous is owner-only; Windows installation validation is pending.
+//! Owner-only Unix sockets or Windows named pipes deliver the one-use secret.
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -66,34 +66,76 @@ pub fn hmac_sha256(key:&[u8],message:&[u8])->[u8;32]{
     let mut inner=Sha256::new();let mut outer=Sha256::new();let mut ipad=[0u8;64];let mut opad=[0u8;64];for i in 0..64{ipad[i]=k[i]^0x36;opad[i]=k[i]^0x5c;}inner.update(ipad);inner.update(message);outer.update(opad);outer.update(inner.finalize());k.fill(0);ipad.fill(0);opad.fill(0);outer.finalize().into()
 }
 fn equal(a:&[u8],b:&[u8])->bool{if a.len()!=b.len(){return false;}a.iter().zip(b).fold(0u8,|x,(a,b)|x|(a^b))==0}
+// The same provider contract is exercised by real and simulated OS calls.
+fn entropy_using(fill: fn(&mut [u8;32])->Result<(),String>)->Result<[u8;32],String>{
+    let mut bytes=[0;32];
+    if let Err(error)=fill(&mut bytes){bytes.fill(0);return Err(error);}
+    Ok(bytes)
+}
 #[cfg(unix)]
-fn entropy()->Result<[u8;32],String>{use std::io::Read;let mut b=[0;32];std::fs::File::open("/dev/urandom").and_then(|mut f|f.read_exact(&mut b)).map_err(|_|"entropy_unavailable".to_owned())?;Ok(b)}
-#[cfg(not(unix))]
-fn entropy()->Result<[u8;32],String>{Err("windows_verification_pending".into())}
+fn fill_entropy(bytes:&mut [u8;32])->Result<(),String>{
+    use std::io::Read;
+    std::fs::File::open("/dev/urandom").and_then(|mut f|f.read_exact(bytes))
+        .map_err(|_|"entropy_unavailable".to_owned())
+}
+#[cfg(windows)]
+fn fill_entropy(bytes:&mut [u8;32])->Result<(),String>{
+    use windows::Win32::Security::Cryptography::{BCryptGenRandom,BCRYPT_USE_SYSTEM_PREFERRED_RNG};
+    // SAFETY: a writable fixed buffer and NULL provider match the system-RNG flag.
+    unsafe { BCryptGenRandom(None,bytes,BCRYPT_USE_SYSTEM_PREFERRED_RNG) }.ok()
+        .map_err(|_|"entropy_unavailable".to_owned())
+}
+#[cfg(not(any(unix,windows)))]
+fn fill_entropy(_bytes:&mut [u8;32])->Result<(),String>{Err("entropy_unsupported".into())}
+fn entropy()->Result<[u8;32],String>{entropy_using(fill_entropy)}
+#[cfg(test)]
+pub(crate) fn test_entropy()->Result<[u8;32],String>{entropy()}
+#[cfg(test)]
+pub(crate) fn test_failed_entropy()->Result<[u8;32],String>{
+    fn failed(bytes:&mut [u8;32])->Result<(),String>{bytes.fill(7);Err("simulated_os_failure".into())}
+    entropy_using(failed)
+}
+#[cfg(windows)]
+#[path="windows_auth.rs"]
+mod windows_auth;
 
 /// Owns listeners and only its private installation rendezvous directory.
 pub struct BrokerAuthority {port:u16,epoch:u64,effects:Arc<AtomicU64>,tasks:Vec<JoinHandle<()>>,dir:PathBuf}
 impl BrokerAuthority {
-    #[cfg(unix)]
+    #[cfg(any(unix,windows))]
     pub async fn start(dir:&Path,bind:&str,epoch:u64)->Result<Self,String>{
-        use std::os::unix::fs::{PermissionsExt, DirBuilderExt};
-        use std::os::fd::AsRawFd;
         if bind!="127.0.0.1" || epoch==0{return Err("loopback_only".into());}
+        let mut secret=entropy()?;
         let listener=tokio::net::TcpListener::bind(("127.0.0.1",0)).await.map_err(|_|"bind_failed".to_owned())?;
         let port=listener.local_addr().map_err(|_|"address_failed")?.port();
-        std::fs::DirBuilder::new().mode(0o700).create(dir).map_err(|_|"rendezvous_create_failed".to_owned())?;
-        let socket=dir.join("broker.sock");
-        // Linux fd-relative pathname avoids sockaddr_un limits on long private roots.
-        let directory=std::fs::File::open(dir).map_err(|_|"rendezvous_open_failed".to_owned())?;
-        let bind_path=format!("/proc/self/fd/{}/broker.sock",directory.as_raw_fd());
-        let uds=tokio::net::UnixListener::bind(&bind_path).map_err(|_|"rendezvous_bind_failed".to_owned())?;
-        std::fs::set_permissions(&socket,std::fs::Permissions::from_mode(0o600)).map_err(|_|"rendezvous_acl_failed".to_owned())?;
-        let mut secret=entropy()?;let key=Arc::new(Mutex::new(Some(secret)));let effects=Arc::new(AtomicU64::new(0));
+        #[cfg(unix)]
+        let uds={
+            use std::os::unix::fs::{PermissionsExt,DirBuilderExt};
+            use std::os::fd::AsRawFd;
+            std::fs::DirBuilder::new().mode(0o700).create(dir).map_err(|_|"rendezvous_create_failed".to_owned())?;
+            let directory=std::fs::File::open(dir).map_err(|_|"rendezvous_open_failed")?;
+            let bind_path=format!("/proc/self/fd/{}/broker.sock",directory.as_raw_fd());
+            let uds=tokio::net::UnixListener::bind(&bind_path).map_err(|_|"rendezvous_bind_failed")?;
+            std::fs::set_permissions(dir.join("broker.sock"),std::fs::Permissions::from_mode(0o600)).map_err(|_|"rendezvous_acl_failed")?;
+            uds
+        };
+        #[cfg(windows)]
+        let mut pipe=windows_auth::rendezvous(dir,&hex(&entropy()?))?;
+        let key=Arc::new(Mutex::new(Some(secret)));let effects=Arc::new(AtomicU64::new(0));
         let bootstrap=tokio::spawn(async move{
+            let value=json!({"schema":"cafe.rendezvous.v1","host":"127.0.0.1","port":port,"epoch":epoch.to_string(),"identity":"broker","secret":hex(&secret)});
+            #[cfg(unix)]
             if let Ok(Ok((mut stream,_)))=tokio::time::timeout(Duration::from_secs(30),uds.accept()).await {
-                let value=json!({"schema":"cafe.rendezvous.v1","host":"127.0.0.1","port":port,"epoch":epoch.to_string(),"identity":"broker","secret":hex(&secret)});
                 let _=write_frame(&mut stream,&value).await;
-            }secret.fill(0);
+            }
+            #[cfg(windows)]
+            if let Ok(Ok(()))=tokio::time::timeout(Duration::from_secs(30),pipe.connect()).await {
+                if write_frame(&mut pipe,&value).await.is_ok(){
+                    // Keep the server handle alive until the receiver has read.
+                    let _=read_frame(&mut pipe).await;
+                }
+            }
+            secret.fill(0);
         });
         let count=effects.clone();let serving=tokio::spawn(async move{
             loop {let Ok((mut stream,peer))=listener.accept().await else{break;};if peer.ip()!=std::net::Ipv4Addr::LOCALHOST{continue;}
@@ -113,8 +155,8 @@ impl BrokerAuthority {
         });
         Ok(Self{port,epoch,effects,tasks:vec![bootstrap,serving],dir:dir.to_path_buf()})
     }
-    #[cfg(not(unix))]
-    pub async fn start(_dir:&Path,_bind:&str,_epoch:u64)->Result<Self,String>{Err("windows_verification_pending".into())}
+    #[cfg(not(any(unix,windows)))]
+    pub async fn start(_dir:&Path,_bind:&str,_epoch:u64)->Result<Self,String>{Err("rendezvous_unsupported".into())}
     pub fn status(&self)->Value{json!({"host":"127.0.0.1","port":self.port,"epoch":self.epoch.to_string(),"effects":self.effects.load(Ordering::SeqCst),"rendezvous_ready":true})}
 }
-impl Drop for BrokerAuthority {fn drop(&mut self){for t in &self.tasks{t.abort();}let _=std::fs::remove_file(self.dir.join("broker.sock"));let _=std::fs::remove_dir(&self.dir);}}
+impl Drop for BrokerAuthority {fn drop(&mut self){for t in &self.tasks{t.abort();}let _=std::fs::remove_file(self.dir.join("broker.sock"));let _=std::fs::remove_file(self.dir.join("broker.pipe"));let _=std::fs::remove_dir(&self.dir);}}

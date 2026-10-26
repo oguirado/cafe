@@ -1,7 +1,7 @@
 """Closed bounded framing and one-use broker HMAC, using only the standard library.
 
 The installation rendezvous is private, never an environment variable or a log.
-Actual Windows named-pipe and SID ACL verification remains pending.
+Windows uses a local named pipe with checked account SID and owner-only ACL.
 """
 import asyncio
 import hashlib
@@ -90,28 +90,32 @@ async def write_frame(writer, value):
 
 
 async def receive_ticket(directory):
-    """Consume one private Unix bootstrap; metadata never contains a secret."""
+    """Consume one private platform bootstrap; metadata never contains a secret."""
     directory = Path(directory)
-    if os.name != 'posix':
-        raise ValueError('windows_verification_pending')
-    d = directory.lstat()
-    socket = directory / 'broker.sock'
-    s = socket.lstat()
-    if not stat.S_ISDIR(d.st_mode) or d.st_uid != os.getuid() or stat.S_IMODE(d.st_mode) != 0o700 or not stat.S_ISSOCK(s.st_mode) or s.st_uid != os.getuid() or stat.S_IMODE(s.st_mode) != 0o600:
-        raise ValueError('insecure_rendezvous')
-    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        actual = os.fstat(fd)
-        if (actual.st_dev, actual.st_ino) != (d.st_dev, d.st_ino):
-            raise ValueError('rendezvous_changed')
-        reader, writer = await asyncio.wait_for(asyncio.open_unix_connection('/proc/self/fd/' + str(fd) + '/broker.sock', limit=MAX_LINE), 5)
-    finally:
-        os.close(fd)
-    try:
-        ticket = await read_frame(reader)
-    finally:
-        writer.close()
-        await writer.wait_closed()
+    if os.name == 'nt':
+        from .windows_auth import _receive_ticket
+        ticket = await asyncio.to_thread(_receive_ticket, directory, MAX_LINE)
+    elif os.name == 'posix':
+        d = directory.lstat()
+        socket = directory / 'broker.sock'
+        s = socket.lstat()
+        if not stat.S_ISDIR(d.st_mode) or d.st_uid != os.getuid() or stat.S_IMODE(d.st_mode) != 0o700 or not stat.S_ISSOCK(s.st_mode) or s.st_uid != os.getuid() or stat.S_IMODE(s.st_mode) != 0o600:
+            raise ValueError('insecure_rendezvous')
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            actual = os.fstat(fd)
+            if (actual.st_dev, actual.st_ino) != (d.st_dev, d.st_ino):
+                raise ValueError('rendezvous_changed')
+            reader, writer = await asyncio.wait_for(asyncio.open_unix_connection('/proc/self/fd/' + str(fd) + '/broker.sock', limit=MAX_LINE), 5)
+        finally:
+            os.close(fd)
+        try:
+            ticket = await read_frame(reader)
+        finally:
+            writer.close()
+            await writer.wait_closed()
+    else:
+        raise ValueError('rendezvous_unsupported')
     if not _keys(ticket, ('schema', 'host', 'port', 'epoch', 'identity', 'secret')) or ticket['schema'] != 'cafe.rendezvous.v1' or ticket['host'] != '127.0.0.1' or ticket['identity'] != 'broker' or type(ticket['port']) is not int or not 0 < ticket['port'] <= 65535 or _clock(ticket['epoch']) == 0:
         raise ValueError('invalid_ticket')
     secret = ticket['secret']

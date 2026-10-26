@@ -1,4 +1,7 @@
 """One-command integration evidence and exceptional cleanup regressions."""
+import ast
+import inspect
+import types
 import importlib.util
 import io
 import json
@@ -20,13 +23,26 @@ sys.modules[QSPEC.name] = q
 QSPEC.loader.exec_module(q)
 
 
+def fixture_binary(target):
+    # Production currently declares the path inline, not through a helper.
+    # Reuse that exact expression; do not copy its platform/suffix rule here.
+    tree = ast.parse(inspect.getsource(gate.run_gate))
+    assignments = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                   and any(isinstance(t, ast.Name) and t.id == 'binary' for t in node.targets)]
+    if len(assignments) != 1:
+        raise AssertionError('gate fixture declaration must be unique')
+    expression = ast.Expression(assignments[0].value)
+    return eval(compile(expression, '<gate-fixture-expression>', 'eval'),
+                {'__builtins__': {}, 'target': target, 'os': gate.os})
+
+
 class TestIntegrationGate(unittest.TestCase):
     def test_target_owned_and_fixture_selected_without_caller_export(self):
         observed = []
         def run(command, root, env):
             observed.append(dict(env))
             if 'build' in command:
-                binary = Path(env['CARGO_TARGET_DIR']) / 'debug/cafe-authority-fixture'
+                binary = fixture_binary(Path(env['CARGO_TARGET_DIR']))
                 binary.parent.mkdir(parents=True)
                 binary.touch()
                 return subprocess.CompletedProcess(command, 0, '', '')
@@ -65,7 +81,7 @@ class TestIntegrationGate(unittest.TestCase):
             def run(command, root, env):
                 paths.append(Path(env['CARGO_TARGET_DIR']).parent)
                 if 'build' in command:
-                    binary = Path(env['CARGO_TARGET_DIR']) / 'debug/cafe-authority-fixture'
+                    binary = fixture_binary(Path(env['CARGO_TARGET_DIR']))
                     binary.parent.mkdir(parents=True)
                     binary.touch()
                     return subprocess.CompletedProcess(command, 0, '', '')
@@ -119,7 +135,7 @@ class TestIntegrationGate(unittest.TestCase):
                 raise KeyboardInterrupt
             child.communicate.side_effect = interrupted
             # All signal boundaries mocked: no unsafe PID reaches the kernel.
-            with self.subTest(pid=pid), mock.patch.object(gate.subprocess, 'Popen', return_value=child), mock.patch.object(gate.os, 'killpg') as killed, mock.patch.object(gate.os, 'getpgid') as pgid, mock.patch.object(gate.os, 'getsid'):
+            with self.subTest(pid=pid), mock.patch.object(gate.subprocess, 'Popen', return_value=child), mock.patch.object(gate.os, 'killpg', create=True) as killed, mock.patch.object(gate.os, 'getpgid', create=True) as pgid, mock.patch.object(gate.os, 'getsid', create=True):
                 with self.assertRaisesRegex(ValueError, 'not_owned_child'):
                     gate.run_owned(['fixture'], ROOT, {})
                 killed.assert_not_called()
@@ -131,7 +147,7 @@ class TestIntegrationGate(unittest.TestCase):
         for pgid, sid in [(900000002, 900000001), (900000001, 900000002)]:
             child = mock.Mock(pid=900000001)
             child.communicate.side_effect = KeyboardInterrupt
-            with self.subTest(pgid=pgid, sid=sid), mock.patch.object(gate.subprocess, 'Popen', return_value=child), mock.patch.object(gate.os, 'name', 'posix'), mock.patch.object(gate.os, 'getpgid', return_value=pgid), mock.patch.object(gate.os, 'getsid', return_value=sid), mock.patch.object(gate.os, 'killpg') as killed:
+            with self.subTest(pgid=pgid, sid=sid), mock.patch.object(gate.subprocess, 'Popen', return_value=child), mock.patch.object(gate.os, 'name', 'posix'), mock.patch.object(gate.os, 'getpgid', return_value=pgid, create=True), mock.patch.object(gate.os, 'getsid', return_value=sid, create=True), mock.patch.object(gate.os, 'killpg', create=True) as killed:
                 with self.assertRaisesRegex(ValueError, 'not_owned_session'):
                     gate.run_owned(['fixture'], ROOT, {})
                 killed.assert_not_called()
@@ -143,7 +159,7 @@ class TestIntegrationGate(unittest.TestCase):
             child = mock.Mock(pid=900000001)
             timeout = subprocess.TimeoutExpired(['fixture'], 1)
             child.communicate.side_effect = ([timeout, timeout, ('', '')] if hard else [timeout, ('', '')])
-            with self.subTest(hard=hard), mock.patch.object(gate.subprocess, 'Popen', return_value=child) as spawn, mock.patch.object(gate.os, 'name', 'posix'), mock.patch.object(gate.os, 'getpgid', return_value=child.pid), mock.patch.object(gate.os, 'getsid', return_value=child.pid), mock.patch.object(gate.os, 'killpg') as killed:
+            with self.subTest(hard=hard), mock.patch.object(gate.signal, 'SIGKILL', 9, create=True), mock.patch.object(gate.subprocess, 'Popen', return_value=child) as spawn, mock.patch.object(gate.os, 'name', 'posix'), mock.patch.object(gate.os, 'getpgid', return_value=child.pid, create=True), mock.patch.object(gate.os, 'getsid', return_value=child.pid, create=True), mock.patch.object(gate.os, 'killpg', create=True) as killed:
                 with self.assertRaises(subprocess.TimeoutExpired):
                     gate.run_owned(['fixture'], ROOT, {})
                 self.assertIs(spawn.call_args.kwargs['start_new_session'], True)
@@ -153,6 +169,25 @@ class TestIntegrationGate(unittest.TestCase):
                 self.assertEqual(killed.call_args_list, expected)
                 child.kill.assert_not_called()
                 child.terminate.assert_not_called()
+
+
+    def test_windows_fixture_selection_from_gate(self):
+        # A private OS proxy changes only the gate's selector, never pathlib or
+        # the host os module. The existing positive oracle must still pass.
+        with mock.patch.object(gate, 'os', types.SimpleNamespace(name='nt')):
+            self.test_target_owned_and_fixture_selected_without_caller_export()
+            self.test_failed_empty_skipped_and_unverified_suite_never_pass()
+
+    def test_signal_tests_without_posix_apis(self):
+        # Windows lacks these APIs. Never borrow a real kernel signal function.
+        # Execute all guard/timeout cases, including forced POSIX-session paths,
+        # against an initially empty API surface and mocked child handles only.
+        isolated = types.SimpleNamespace(name='nt', getpid=os.getpid)
+        with mock.patch.object(gate, 'os', isolated):
+            self.test_signal_guards_reject_unsafe_or_changed_child_ids()
+            self.test_group_signal_requires_child_leading_own_new_session()
+            self.test_timeout_signals_only_the_captured_child_group()
+        self.assertFalse(any(hasattr(isolated, key) for key in ('killpg', 'getpgid', 'getsid')))
 
 
 if __name__ == '__main__':

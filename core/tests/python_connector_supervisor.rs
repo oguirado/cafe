@@ -12,3 +12,11 @@ use serde_json::json;
 #[test] fn closed_frame_unknown_key(){let mut f=make_frame("observation",1,json!({"ready":true}));f["extra"]=json!(true);assert!(validate_connector_frame(&f,1).is_err());}
 #[test] fn unsafe_clock_rejected(){let mut f=make_frame("observation",1,json!({"ready":true}));f["authority_epoch"]=json!(1);assert!(validate_connector_frame(&f,1).is_err());}
 #[test] fn wildcard_before_listener(){let rt=tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();let result=rt.block_on(BrokerAuthority::start(std::path::Path::new("unused-rendezvous"),"0.0.0.0",1));assert!(result.is_err());assert!(!std::path::Path::new("unused-rendezvous").exists());}
+
+#[test] fn system_entropy_and_os_failure(){
+    let first=authority_auth::test_entropy().unwrap();
+    let second=authority_auth::test_entropy().unwrap();
+    assert_eq!(first.len(),32); assert_eq!(second.len(),32);
+    assert!(first!=second,"independent system CSPRNG calls must differ");
+    assert!(matches!(authority_auth::test_failed_entropy(),Err(e) if e=="simulated_os_failure"));
+}

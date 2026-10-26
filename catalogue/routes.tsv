@@ -7,6 +7,7 @@ js-backend-supervisor	src/main/backendSupervisor.js
 js-cafe-bridge	src/preload/cafeBridge.js
 py-authority-channel	connectors/cafe/authority_channel.py
 py-channel-auth	connectors/cafe/channel_auth.py
+py-windows-auth	connectors/cafe/windows_auth.py
 readme	docs/acceptance/README.md
 rust-authority-auth	core/src/authority_auth.rs
 rust-authority-fixture	core/tests/authority_fixture.rs
@@ -23,3 +24,4 @@ rust-main	core/src/main.rs
 rust-python-supervisor	core/src/python_connector_supervisor.rs
 rust-wgc-producer	core/src/windows_graphics_capture.rs
 rust-window-registry	core/src/windows_window_registry.rs
+rust-windows-auth	core/src/windows_auth.rs
