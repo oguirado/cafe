@@ -84,4 +84,29 @@ class TestCleanExport(unittest.TestCase):
   self.assertFalse(any(re.fullmatch(p,secret) for p in patterns))
 
 
+ def test_router_receipt_pattern_supports_growth_and_rejects_invalid_values(self):
+  patterns=tomllib.loads((ROOT/'.gitleaks.toml').read_text())['allowlist']['regexes']
+  receipt=json.loads((ROOT/'catalogue/router_sources.json').read_text())
+  def matches(value):
+   line=json.dumps(value,sort_keys=True,separators=(',',':'))
+   return any(re.fullmatch(p,line) for p in patterns)
+  added='core/tests/journal_recovery.rs'
+  self.assertTrue((ROOT/added).is_file())
+  receipt['families']['rust-extra-journal-fixture']=added
+  receipt['sources'][added]=hashlib.sha256((ROOT/added).read_bytes()).hexdigest()
+  receipt['metadata']['README.md']=hashlib.sha256((ROOT/'README.md').read_bytes()).hexdigest()
+  receipt['tools']['tools/publication_lint.py']=hashlib.sha256((ROOT/'tools/publication_lint.py').read_bytes()).hexdigest()
+  self.assertTrue(matches(receipt))
+  for invalid in ['..'+'/escape.rs','/'+'outside.rs','C:'+chr(92)+'outside.rs','local/secret.txt','node_modules/cache.js','tools/../outside.rs','gh'+'p_'+secrets.token_hex(18)]:
+   bad=json.loads(json.dumps(receipt));bad['families']['bad']=invalid
+   with self.subTest(invalid_path_shape=True):self.assertFalse(matches(bad))
+  for invalid in ['0'*63,'0'*65,'g'*64,'gh'+'p_'+secrets.token_hex(18)]:
+   bad=json.loads(json.dumps(receipt));bad['sources'][added]=invalid
+   with self.subTest(invalid_digest_shape=True):self.assertFalse(matches(bad))
+  bad=json.loads(json.dumps(receipt));bad['secret_'+'key']='0'*64
+  self.assertFalse(matches(bad))
+  bad=json.loads(json.dumps(receipt));bad['sources']['secret_'+'key']='0'*64
+  self.assertFalse(matches(bad))
+
+
 if __name__=='__main__':unittest.main()

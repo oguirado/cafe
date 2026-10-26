@@ -170,6 +170,7 @@ struct Scan {
 /// Exclusive single-writer journal handle. Holds the locked file for its
 /// whole lifetime; dropping releases the lock.
 pub struct Journal {
+    durability: Durability,
     file: File,
     path: PathBuf,
     session_id: String,
@@ -277,16 +278,72 @@ fn digest_of_preimage(record: &Record) -> Result<String, JournalError> {
     Ok(sha256_hex(&bytes))
 }
 
-/// Flushes the directory owning `path` so creations and renames there
-/// survive a crash.
-fn sync_parent_dir(path: &Path) -> Result<(), JournalError> {
-    let parent = path
-        .parent()
-        .filter(|candidate| !candidate.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let dir = File::open(parent).map_err(|_| JournalError::Io)?;
-    dir.sync_all().map_err(|_| JournalError::Io)?;
+/// All regular-file handles passed here were opened with write access.
+/// Unix also uses this wrapper for its existing read-only directory fsync.
+fn flush_handle(file: &File) -> Result<(), JournalError> {
+    file.sync_all().map_err(|_| JournalError::Io)?;
     Ok(())
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum DurabilityFault { File, Parent, Directory }
+
+#[derive(Default)]
+struct Durability {
+    #[cfg(test)]
+    fault: Option<DurabilityFault>,
+    #[cfg(test)]
+    directory_flushes: usize,
+}
+
+impl Durability {
+    fn flush(&mut self, file: &File) -> Result<(), JournalError> {
+        #[cfg(test)]
+        if self.fault == Some(DurabilityFault::File) { return Err(JournalError::Io); }
+        flush_handle(file)
+    }
+    fn regular_file(&mut self, path: &Path) -> Result<(), JournalError> {
+        let file = OpenOptions::new().write(true).open(path).map_err(|_| JournalError::Io)?;
+        self.flush(&file)
+    }
+    fn parent(&mut self, path: &Path) -> Result<(), JournalError> {
+        #[cfg(test)]
+        if self.fault == Some(DurabilityFault::Parent) { return Err(JournalError::Io); }
+        let parent = path.parent().filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        self.parent_platform(parent)
+    }
+    #[cfg(unix)]
+    fn parent_platform(&mut self, parent: &Path) -> Result<(), JournalError> {
+        let directory = File::open(parent).map_err(|_| JournalError::Io)?;
+        #[cfg(test)]
+        if self.fault == Some(DurabilityFault::Directory) { return Err(JournalError::Io); }
+        flush_handle(&directory)?;
+        #[cfg(test)]
+        { self.directory_flushes += 1; }
+        Ok(())
+    }
+    #[cfg(windows)]
+    fn parent_platform(&mut self, parent: &Path) -> Result<(), JournalError> {
+        crate::windows_journal_policy::require_ntfs_directory(parent)
+    }
+    #[cfg(not(any(unix, windows)))]
+    fn parent_platform(&mut self, _parent: &Path) -> Result<(), JournalError> {
+        Err(JournalError::Io)
+    }
+}
+
+/// Required parent policy; never map an unsupported-platform failure to success.
+fn sync_parent_dir(path: &Path) -> Result<(), JournalError> {
+    Durability::default().parent(path)
+}
+
+fn publish_rename(source: &Path, target: &Path) -> Result<(), JournalError> {
+    #[cfg(windows)]
+    { crate::windows_journal_policy::publish_no_replace(source, target) }
+    #[cfg(not(windows))]
+    { std::fs::rename(source, target).map_err(|_| JournalError::Io) }
 }
 
 /// Scans frames from offset zero, fully validating every complete record
@@ -503,6 +560,14 @@ fn create_sidecar(path: &Path) -> Result<File, JournalError> {
 }
 
 impl Journal {
+    #[cfg(test)]
+    pub(crate) fn inject_durability_fault(&mut self, fault: DurabilityFault) {
+        self.durability.fault = Some(fault);
+    }
+    #[cfg(test)]
+    pub(crate) fn has_pending_stage(&self) -> bool { self.staged.is_some() }
+    #[cfg(test)]
+    pub(crate) fn directory_flush_count(&self) -> usize { self.durability.directory_flushes }
     /// Opens or creates the journal, takes the exclusive lock, validates
     /// the committed prefix, and quarantines a torn final suffix.
     pub fn open(path: &Path, session_id: &str, epoch: Clock) -> Result<Self, JournalError> {
@@ -524,10 +589,10 @@ impl Journal {
         } else {
             let mut sidecar = create_sidecar(path)?;
             sidecar.write_all(&scan.suffix).map_err(|_| JournalError::Io)?;
-            sidecar.sync_all().map_err(|_| JournalError::Io)?;
+            flush_handle(&sidecar)?;
             sync_parent_dir(path)?;
             file.set_len(scan.prefix_len as u64).map_err(|_| JournalError::Io)?;
-            file.sync_all().map_err(|_| JournalError::Io)?;
+            flush_handle(&file)?;
             (
                 crate::journal_replay::RecoveryStatus::Interrupted,
                 scan.suffix,
@@ -535,6 +600,7 @@ impl Journal {
         };
         file.seek(SeekFrom::End(0)).map_err(|_| JournalError::Io)?;
         Ok(Journal {
+            durability: Durability::default(),
             file,
             path: path.to_path_buf(),
             session_id: session_id.to_string(),
@@ -621,14 +687,17 @@ impl Journal {
             return Err(JournalError::Pending);
         }
         if self.file.write_all(TRAILER).is_err() {
+            self.staged = Some(staged);
             self.poisoned = true;
             return Err(JournalError::Io);
         }
-        if self.file.sync_all().is_err() {
+        if self.durability.flush(&self.file).is_err() {
+            self.staged = Some(staged);
             self.poisoned = true;
             return Err(JournalError::Io);
         }
-        if sync_parent_dir(&self.path).is_err() {
+        if self.durability.parent(&self.path).is_err() {
+            self.staged = Some(staged);
             self.poisoned = true;
             return Err(JournalError::Io);
         }
@@ -729,6 +798,8 @@ impl Journal {
         if root_meta.file_type().is_symlink() || !root_meta.is_dir() {
             return Err(JournalError::Media);
         }
+        #[cfg(windows)]
+        crate::windows_journal_policy::require_ntfs_directory(media_root)?;
         let staged_path = media_root.join(staged_name);
         let staged_meta =
             std::fs::symlink_metadata(&staged_path).map_err(|_| JournalError::Media)?;
@@ -744,10 +815,7 @@ impl Journal {
         }
         let byte_len = Clock(bytes.len() as u64);
         let sha256 = sha256_hex(&bytes);
-        File::open(&staged_path)
-            .map_err(|_| JournalError::Io)?
-            .sync_all()
-            .map_err(|_| JournalError::Io)?;
+        self.durability.regular_file(&staged_path)?;
         let target_path = media_root.join(&published_name);
         if staged_name != published_name {
             match std::fs::symlink_metadata(&target_path) {
@@ -756,15 +824,9 @@ impl Journal {
                     if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(_) => return Err(JournalError::Io),
             }
-            std::fs::rename(&staged_path, &target_path).map_err(|_| JournalError::Io)?;
-            File::open(&target_path)
-                .map_err(|_| JournalError::Io)?
-                .sync_all()
-                .map_err(|_| JournalError::Io)?;
-            File::open(media_root)
-                .map_err(|_| JournalError::Io)?
-                .sync_all()
-                .map_err(|_| JournalError::Io)?;
+            publish_rename(&staged_path, &target_path)?;
+            self.durability.regular_file(&target_path)?;
+            self.durability.parent(&target_path)?;
         }
         let payload = serde_json::to_value(MediaPublishedPayload {
             byte_len,
@@ -866,11 +928,11 @@ impl Journal {
             self.poisoned = true;
             return Err(JournalError::Io);
         }
-        if self.file.sync_all().is_err() {
+        if self.durability.flush(&self.file).is_err() {
             self.poisoned = true;
             return Err(JournalError::Io);
         }
-        if sync_parent_dir(&self.path).is_err() {
+        if self.durability.parent(&self.path).is_err() {
             self.poisoned = true;
             return Err(JournalError::Io);
         }

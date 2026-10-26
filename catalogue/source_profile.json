@@ -74,6 +74,12 @@
       "symbol_prefix": "cafe_core::windows_graphics_capture::"
     },
     {
+      "id": "rust-journal-policy",
+      "language": "rust",
+      "path": "core/src/windows_journal_policy.rs",
+      "symbol_prefix": "cafe_core::windows_journal_policy::"
+    },
+    {
       "id": "rust-window-registry",
       "language": "rust",
       "path": "core/src/windows_window_registry.rs",
@@ -125,7 +131,9 @@
   "rust_roots": [
     {
       "cfg": {
-        "windows": false
+        "windows": false,
+        "unix": true,
+        "test": false
       },
       "crate": "cafe_core",
       "entry": "core/src/main.rs",
@@ -138,6 +146,7 @@
         "core/src/journal_replay.rs",
         "core/src/main.rs",
         "core/src/windows_graphics_capture.rs",
+        "core/src/windows_journal_policy.rs",
         "core/src/windows_window_registry.rs"
       ],
       "module_paths": {}

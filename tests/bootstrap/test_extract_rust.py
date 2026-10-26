@@ -12,7 +12,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 CAPSULE = 'core/src/capsule_registry.rs'
-FILES = sorted(['core/src/authority_journal.rs', CAPSULE, 'core/src/journal_replay.rs', 'core/src/main.rs', 'core/src/windows_window_registry.rs', 'core/src/capsule_pairing.rs', 'core/src/capture_health.rs', 'core/src/capture_frame_pool.rs', 'core/src/windows_graphics_capture.rs'])
+FILES = sorted(['core/src/authority_journal.rs', CAPSULE, 'core/src/journal_replay.rs', 'core/src/main.rs', 'core/src/windows_window_registry.rs', 'core/src/capsule_pairing.rs', 'core/src/capture_health.rs', 'core/src/capture_frame_pool.rs', 'core/src/windows_graphics_capture.rs', 'core/src/windows_journal_policy.rs'])
 # Independently transcribed from reviewed P05 declarations, before extractor execution.
 GOLD = [
     ('SCHEMA', 14), ('MAX_ENVELOPE_BYTES', 17), ('Clock', 25), ('Role', 102),
@@ -27,11 +27,11 @@ JOURNAL_GOLD = [
     ('AppendState', 73), ('Record', 81), ('Pending', 95), ('Pending::state', 101),
     ('Committed', 109), ('Committed::state', 116), ('Committed::sequence', 120),
     ('Committed::event_id', 124), ('Committed::record_digest', 128),
-    ('Journal', 172), ('canonical_bytes', 190), ('Journal::open', 508),
-    ('Journal::stage_control', 556), ('Journal::commit', 610),
-    ('Journal::append_control', 650), ('Journal::append_media_intent', 660),
-    ('Journal::publish_media', 701), ('Journal::records', 790),
-    ('Journal::recovery_status', 795), ('Journal::interrupted_bytes', 800),
+    ('Journal', 172), ('canonical_bytes', 191), ('Journal::open', 573),
+    ('Journal::stage_control', 622), ('Journal::commit', 676),
+    ('Journal::append_control', 719), ('Journal::append_media_intent', 729),
+    ('Journal::publish_media', 770), ('Journal::records', 852),
+    ('Journal::recovery_status', 857), ('Journal::interrupted_bytes', 862),
 ]
 REPLAY_GOLD = [('RecoveryStatus', 21), ('MediaState', 29), ('Recovery', 40), ('recover', 68)]
 WINDOW_GOLD = [('Rect',7),('WindowHandle',11),('WindowView',14),('FixtureWindow',22),('WindowError',29),('WindowRegistry',43),('WindowRegistry::new',46),('WindowRegistry::refresh_fixtures',47),('WindowRegistry::snapshots',85),('WindowRegistry::resolve',86),('WindowRegistry::invalidate_layout',94),('NativeAdapter',159),('NativeAdapter::new',165),('NativeAdapter::enumerate',169)]
@@ -40,7 +40,7 @@ HEALTH_GOLD = [('HealthPolicy',5),('BorderStatus',10),('CaptureState',13),('Capt
 POOL_GOLD = [('PoolLimits',18),('BorrowedFrame',28),('PoolError',39),('FramePool',51),('FramePool::new',59),('FramePool::copy_from',89),('FramePool::available',140),('FramePool::in_use',145),('FramePool::capacity',150),('OwnedFrame',170),('OwnedFrame::pixels',182),('OwnedFrame::width',186),('OwnedFrame::height',190),('OwnedFrame::source_stride',195),('OwnedFrame::packed_stride',200),('OwnedFrame::source_time',205)]
 CAPTURE_GOLD = [('NativeSupport',27),('CaptureConfig',36),('CaptureError',48)]
 CAPTURE_PORTABLE_GOLD = [('native_support',80),('NativeCapture',85),('NativeCapture::start',91),('NativeCapture::take_latest',101),('NativeCapture::poll_state',105),('NativeCapture::border_status',109),('NativeCapture::stop',113)]
-SOURCE_HASHES = {'core/src/authority_journal.rs': '64334f3b9dbccbd749e2384e78fa9b701bd95b424526e13fb2dd32d2a2660f50', 'core/src/capsule_registry.rs': '4e05d8fe4cb5abf357b30816ed2a1aca54299e1b264f7d0629acf2dfb987fd7d', 'core/src/journal_replay.rs': '16a92bb9817ae399055470bc762be738ea5997a6bc5e2130e2eea96d8ecbf720', 'core/src/main.rs': 'd4132ab647cf11bf183d0c2b05ee891dfa28a20809beba00cd1236aa81b56446', 'core/src/capsule_pairing.rs': 'e6055d47ba364809b8c22591dd47d23f5f74d8c1ba991831686c8d0eb7196835', 'core/src/windows_window_registry.rs': '84239abed2aa581d1d3b9559ea50c8ee5a0c259b5dd6241f708b71bf5af5da38', 'core/src/capture_health.rs': 'e8c64656ce7a26c86605eccf7f14581c9ce78b7a480858bac2e08636804a3058', 'core/src/capture_frame_pool.rs': '37471684096c063bf2aca5d3b6d7bd660521851176240bcebc029d7772a4d76d', 'core/src/windows_graphics_capture.rs': '39c92d83acb1cd6a815d17182af2a2e8497bb444ec6aea5260f0e16b6a76202e'}
+SOURCE_HASHES = {'core/src/authority_journal.rs': '6bee8dfcc7fbb537146d13bed0c5ce9d68b91e26fa243ca93c96ade7734f852c', 'core/src/capsule_registry.rs': '4e05d8fe4cb5abf357b30816ed2a1aca54299e1b264f7d0629acf2dfb987fd7d', 'core/src/journal_replay.rs': '16a92bb9817ae399055470bc762be738ea5997a6bc5e2130e2eea96d8ecbf720', 'core/src/main.rs': '0a2b0b727c28fd999848936819ea1cc4a3ead1aea178b1d24d067654ced36db7', 'core/src/capsule_pairing.rs': 'e6055d47ba364809b8c22591dd47d23f5f74d8c1ba991831686c8d0eb7196835', 'core/src/windows_window_registry.rs': '84239abed2aa581d1d3b9559ea50c8ee5a0c259b5dd6241f708b71bf5af5da38', 'core/src/capture_health.rs': 'e8c64656ce7a26c86605eccf7f14581c9ce78b7a480858bac2e08636804a3058', 'core/src/capture_frame_pool.rs': '37471684096c063bf2aca5d3b6d7bd660521851176240bcebc029d7772a4d76d', 'core/src/windows_graphics_capture.rs': '39c92d83acb1cd6a815d17182af2a2e8497bb444ec6aea5260f0e16b6a76202e', 'core/src/windows_journal_policy.rs': '3e6087d78cc62d14c1d2586aefe90a44de70cc386cd47f366c2b2d2fb8f80ad9'}
 SPEC = importlib.util.spec_from_file_location('cafe_rust_extractor', ROOT / 'tools/extract_rust.py')
 x = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = x
@@ -61,7 +61,8 @@ def expected_inventory():
     def rows(path, module, pairs):
         return [{'path': path, 'symbol': 'cafe_core::' + module + '::' + name,
                  'name': name.split('::')[-1], 'line': line, 'cfg': []} for name, line in pairs]
-    return {'core/src/authority_journal.rs': rows('core/src/authority_journal.rs', 'authority_journal', JOURNAL_GOLD),
+    return {'core/src/windows_journal_policy.rs': [],
+            'core/src/authority_journal.rs': rows('core/src/authority_journal.rs', 'authority_journal', JOURNAL_GOLD),
             CAPSULE: expected_gold(),
             'core/src/journal_replay.rs': rows('core/src/journal_replay.rs', 'journal_replay', REPLAY_GOLD),
             'core/src/main.rs': [],
@@ -89,10 +90,10 @@ class TestRustExtraction(unittest.TestCase):
 
     def test_handwritten_current_public_inventory(self):
         inventory, _source = q.load_inventory(ROOT, os.environ.get('CAFE_ROUTER_INVENTORY'))
-        report = x.extract(ROOT, FILES, inventory, {'windows':False})
+        report = x.extract(ROOT, FILES, inventory, {'windows':False,'unix':True,'test':False})
         self.assertEqual(report['schema'], 'cafe.rust-surface.v1')
         self.assertEqual(report['crate'], 'cafe_core')
-        self.assertEqual(report['cfg_profile'], {'windows':False})
+        self.assertEqual(report['cfg_profile'], {'windows':False,'unix':True,'test':False})
         self.assertEqual({v['path']: v['symbols'] for v in report['files']}, expected_inventory())
         self.assertEqual({v['path']: v['source_sha256'] for v in report['files']}, SOURCE_HASHES)
         for row in [row for file in report['files'] for row in file['symbols']]:
@@ -106,7 +107,7 @@ class TestRustExtraction(unittest.TestCase):
         before = p.read_text()
         self.assertEqual(before.count('pub fn decode_envelope('), 1)
         p.write_text(before.replace('pub fn decode_envelope(', 'fn decode_envelope(', 1))
-        report = x.extract(self.root, FILES, FILES, {'windows':False})
+        report = x.extract(self.root, FILES, FILES, {'windows':False,'unix':True,'test':False})
         with self.assertRaises(AssertionError):
             self.assertEqual(next(v for v in report['files'] if v['path'] == CAPSULE)['symbols'], expected_gold())
         self.assertNotEqual(next(v for v in report['files'] if v['path'] == CAPSULE)['source_sha256'], SOURCE_HASHES[CAPSULE])
@@ -265,7 +266,7 @@ pub fn real<'a>(value: &'a str) { let _ = 'x'; }
 
     def test_cli_determinism_and_source_hashes(self):
         env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
-        cfg = self.root / 'cfg.json'; cfg.write_text('{"windows":false}')
+        cfg = self.root / 'cfg.json'; cfg.write_text('{"windows":false,"unix":true,"test":false}')
         command = [sys.executable, '-B', 'tools/extract_rust.py', '--cfg-profile', str(cfg), '--files', *FILES]
         snapshot = os.environ.get('CAFE_ROUTER_INVENTORY')
         if snapshot:

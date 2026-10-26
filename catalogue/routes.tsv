@@ -17,6 +17,7 @@ rust-capsule-registry	core/src/capsule_registry.rs
 rust-capsule-registry-p2	core/src/capsule_registry.rs
 rust-capture-health	core/src/capture_health.rs
 rust-frame-pool	core/src/capture_frame_pool.rs
+rust-journal-policy	core/src/windows_journal_policy.rs
 rust-journal-replay	core/src/journal_replay.rs
 rust-main	core/src/main.rs
 rust-python-supervisor	core/src/python_connector_supervisor.rs

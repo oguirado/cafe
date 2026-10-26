@@ -18,3 +18,6 @@ mod capture_health;
 mod capture_frame_pool;
 #[allow(dead_code)]
 mod windows_graphics_capture;
+
+#[cfg(windows)]
+mod windows_journal_policy;

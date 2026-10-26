@@ -213,8 +213,33 @@ fn explicit_commit_promotes_only_after_durable_barrier() {
     let f = Fixture::new(); let mut journal = f.journal();
     let pending = journal.stage_control(BOOK[0].0, request(0)).unwrap(); assert_eq!(pending.state(), AppendState::Pending);
     let committed = journal.commit(pending).unwrap(); assert_eq!(committed.state(), AppendState::Committed);
-    assert_eq!(committed.sequence(), Clock(1)); assert_eq!(journal.records().len(), 1); drop(journal);
+    assert_eq!(committed.sequence(), Clock(1)); assert_eq!(journal.records().len(), 1);
+    #[cfg(unix)]
+    assert_eq!(journal.directory_flush_count(), 1, "Unix must execute directory fsync");
+    drop(journal);
     assert_eq!(recover(&f.log, &f.media, SESSION, Clock(7)).unwrap().snapshot, expected(1));
+    // Actual platform path plus instance-local failure injection; no cross-test globals.
+    let faults = [authority_journal::DurabilityFault::File, authority_journal::DurabilityFault::Parent];
+    for fault in faults {
+        let failed = Fixture::new(); let mut writer = failed.journal();
+        let pending = writer.stage_control(BOOK[0].0, request(0)).unwrap();
+        assert_eq!(pending.state(), AppendState::Pending);
+        writer.inject_durability_fault(fault);
+        assert!(matches!(writer.commit(pending), Err(JournalError::Io)));
+        assert!(writer.has_pending_stage()); assert!(writer.records().is_empty());
+        assert_eq!(writer.snapshot(), empty());
+        assert!(writer.append_control(BOOK[0].0, request(0)).is_err());
+    }
+    #[cfg(unix)]
+    {
+        let failed = Fixture::new(); let mut writer = failed.journal();
+        let pending = writer.stage_control(BOOK[0].0, request(0)).unwrap();
+        writer.inject_durability_fault(authority_journal::DurabilityFault::Directory);
+        assert!(matches!(writer.commit(pending), Err(JournalError::Io)));
+        assert!(writer.has_pending_stage()); assert!(writer.records().is_empty());
+        assert_eq!(writer.snapshot(), empty());
+        assert_eq!(writer.directory_flush_count(), 0);
+    }
 }
 
 #[test]
@@ -291,6 +316,7 @@ fn duplicate_events_and_rejected_controls_do_not_append() {
     assert!(journal.append_control("event-repeated-request", request(0)).is_err());
     assert_eq!(fs::read(&f.log).unwrap(), before); drop(journal);
     assert_eq!(recover(&f.log, &f.media, SESSION, Clock(7)).unwrap().snapshot, expected(1));
+
 }
 
 #[test]
@@ -320,3 +346,7 @@ fn publication_refuses_missing_intent_unsafe_names_and_overwrite() {
     assert!(journal.publish_media("event-overwrite", &f.media, "media-one", "clip.partial").is_err());
     assert_eq!(fs::read(f.media.join("clip.bin")).unwrap(), b"existing");
 }
+
+#[cfg(windows)]
+#[path = "../src/windows_journal_policy.rs"]
+mod windows_journal_policy;
