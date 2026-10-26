@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 import secrets
+import re
+import tomllib
 import shutil
 import subprocess
 import sys
@@ -55,6 +57,31 @@ class TestCleanExport(unittest.TestCase):
   data=json.loads(result.stdout);self.assertEqual(data['status'],'fail')
   self.assertIn('credential',{row['rule'] for row in data['findings']})
   self.assertNotIn('clean-clone',result.stdout);self.assertNotIn(token,result.stdout+result.stderr)
+
+
+ def test_git_inventory_cache_is_ignored_directory_and_inventory_stays_exact(self):
+  source=self.root/'node_modules/typescript';source.mkdir(parents=True)
+  (source/'package.json').write_text(json.dumps({'version':'5.9.3'}))
+  clone=Path(self.temp.name)/'git-fixture';clone.mkdir()
+  # Reproduce Git ignore semantics without creating any commit or requiring a source .git.
+  subprocess.run(['git','init','--quiet',str(clone)],check=True,capture_output=True)
+  (clone/'.gitignore').write_bytes((ROOT/'.gitignore').read_bytes())
+  (clone/'package-lock.json').write_bytes((ROOT/'package-lock.json').read_bytes())
+  names=ci.prepared_inventory(clone)
+  export.provision_node_modules(self.root,clone)
+  self.assertFalse((clone/'node_modules').is_symlink())
+  self.assertEqual(ci.prepared_inventory(clone),names)
+  self.assertEqual(subprocess.run(['git','check-ignore','-q','node_modules'],cwd=clone).returncode,0)
+ def test_metadata_exceptions_reject_appended_credentials(self):
+  patterns=tomllib.loads((ROOT/'.gitleaks.toml').read_text())['allowlist']['regexes']
+  lines=[(ROOT/'catalogue/router_sources.json').read_text().rstrip('\n'),next(v for v in (ROOT/'tests/bootstrap/test_extract_rust.py').read_text().splitlines() if v.startswith('SOURCE_HASHES = ')),next(v for v in (ROOT/'requirements-ci.txt').read_text().splitlines() if re.fullmatch(r'\s*--hash=sha256:[a-f0-9]{64}\s*\\?\s*',v))]
+  for line in lines:
+   for prefix in ['', '\n']:
+    with self.subTest(metadata_shape=True,prefix=bool(prefix)):self.assertTrue(any(re.fullmatch(p,prefix+line) for p in patterns))
+    token='gh'+'p_'+secrets.token_hex(18)
+    with self.subTest(appended_credential=True,prefix=bool(prefix)):self.assertFalse(any(re.fullmatch(p,prefix+line+' '+token) for p in patterns))
+  secret='secret_'+'key = "'+secrets.token_hex(32)+'"'
+  self.assertFalse(any(re.fullmatch(p,secret) for p in patterns))
 
 
 if __name__=='__main__':unittest.main()

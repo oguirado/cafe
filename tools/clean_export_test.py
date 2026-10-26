@@ -20,7 +20,12 @@ def provision_node_modules(source,destination):
     node=source/'node_modules'
     if not node.is_dir() or json.loads((node/'typescript/package.json').read_text()).get('version')!='5.9.3':raise ValueError('approved_node_modules_unavailable')
     if (destination/'package-lock.json').read_bytes()!=(source/'package-lock.json').read_bytes():raise ValueError('npm_lock_changed')
-    (destination/'node_modules').symlink_to(node.resolve(),target_is_directory=True)
+    if (destination/'.git').exists():
+        # A trailing-slash Git ignore rule ignores directories, not symlinks.
+        # A real clone must keep its prepared inventory unchanged after provisioning.
+        shutil.copytree(node,destination/'node_modules',symlinks=True)
+    else:
+        (destination/'node_modules').symlink_to(node.resolve(),target_is_directory=True)
 
 
 def run_profile(root,names):
