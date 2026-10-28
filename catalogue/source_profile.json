@@ -14,6 +14,18 @@
       "symbol_prefix": "cafe.channel_auth."
     },
     {
+      "id": "py-obs-auth",
+      "language": "python",
+      "path": "connectors/cafe/obs_auth.py",
+      "symbol_prefix": "cafe.obs_auth."
+    },
+    {
+      "id": "py-obs-bridge",
+      "language": "python",
+      "path": "connectors/cafe/obs_bridge.py",
+      "symbol_prefix": "cafe.obs_bridge."
+    },
+    {
       "id": "py-windows-auth",
       "language": "python",
       "path": "connectors/cafe/windows_auth.py",
@@ -56,6 +68,12 @@
       "symbol_prefix": "cafe_core::capture_health::"
     },
     {
+      "id": "rust-ffmpeg-recorder",
+      "language": "rust",
+      "path": "core/src/ffmpeg_recorder.rs",
+      "symbol_prefix": "cafe_core::ffmpeg_recorder::"
+    },
+    {
       "id": "rust-journal-replay",
       "language": "rust",
       "path": "core/src/journal_replay.rs",
@@ -72,6 +90,12 @@
       "language": "rust",
       "path": "core/src/python_connector_supervisor.rs",
       "symbol_prefix": "cafe_authority_fixture::python_connector_supervisor::"
+    },
+    {
+      "id": "rust-recorder-pacer",
+      "language": "rust",
+      "path": "core/src/recorder_pacer.rs",
+      "symbol_prefix": "cafe_core::recorder_pacer::"
     },
     {
       "id": "rust-windows-auth",
@@ -155,8 +179,10 @@
         "core/src/capsule_registry.rs",
         "core/src/capture_frame_pool.rs",
         "core/src/capture_health.rs",
+        "core/src/ffmpeg_recorder.rs",
         "core/src/journal_replay.rs",
         "core/src/main.rs",
+        "core/src/recorder_pacer.rs",
         "core/src/windows_graphics_capture.rs",
         "core/src/windows_journal_policy.rs",
         "core/src/windows_window_registry.rs"

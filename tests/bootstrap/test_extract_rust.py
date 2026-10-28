@@ -12,7 +12,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 CAPSULE = 'core/src/capsule_registry.rs'
-FILES = sorted(['core/src/authority_journal.rs', CAPSULE, 'core/src/journal_replay.rs', 'core/src/main.rs', 'core/src/windows_window_registry.rs', 'core/src/capsule_pairing.rs', 'core/src/capture_health.rs', 'core/src/capture_frame_pool.rs', 'core/src/windows_graphics_capture.rs', 'core/src/windows_journal_policy.rs'])
+FILES = sorted(['core/src/authority_journal.rs', 'core/src/capsule_pairing.rs', 'core/src/capsule_registry.rs', 'core/src/capture_frame_pool.rs', 'core/src/capture_health.rs', 'core/src/ffmpeg_recorder.rs', 'core/src/journal_replay.rs', 'core/src/main.rs', 'core/src/recorder_pacer.rs', 'core/src/windows_graphics_capture.rs', 'core/src/windows_journal_policy.rs', 'core/src/windows_window_registry.rs'])
 # Independently transcribed from reviewed P05 declarations, before extractor execution.
 GOLD = [
     ('SCHEMA', 14), ('MAX_ENVELOPE_BYTES', 17), ('Clock', 25), ('Role', 102),
@@ -40,7 +40,9 @@ HEALTH_GOLD = [('HealthPolicy',5),('BorderStatus',10),('CaptureState',13),('Capt
 POOL_GOLD = [('PoolLimits',18),('BorrowedFrame',28),('PoolError',39),('FramePool',51),('FramePool::new',59),('FramePool::copy_from',89),('FramePool::available',140),('FramePool::in_use',145),('FramePool::capacity',150),('OwnedFrame',170),('OwnedFrame::pixels',182),('OwnedFrame::width',186),('OwnedFrame::height',190),('OwnedFrame::source_stride',195),('OwnedFrame::packed_stride',200),('OwnedFrame::source_time',205)]
 CAPTURE_GOLD = [('NativeSupport',27),('CaptureConfig',36),('CaptureError',48)]
 CAPTURE_PORTABLE_GOLD = [('native_support',80),('NativeCapture',85),('NativeCapture::start',91),('NativeCapture::take_latest',101),('NativeCapture::poll_state',105),('NativeCapture::border_status',109),('NativeCapture::stop',113)]
-SOURCE_HASHES = {'core/src/authority_journal.rs': '0c365d7d412de55e2c02a57d6665157642d846c575bdda699e6802d03c6d7f3c', 'core/src/capsule_registry.rs': '4e05d8fe4cb5abf357b30816ed2a1aca54299e1b264f7d0629acf2dfb987fd7d', 'core/src/journal_replay.rs': '16a92bb9817ae399055470bc762be738ea5997a6bc5e2130e2eea96d8ecbf720', 'core/src/main.rs': '0a2b0b727c28fd999848936819ea1cc4a3ead1aea178b1d24d067654ced36db7', 'core/src/capsule_pairing.rs': 'e6055d47ba364809b8c22591dd47d23f5f74d8c1ba991831686c8d0eb7196835', 'core/src/windows_window_registry.rs': '84239abed2aa581d1d3b9559ea50c8ee5a0c259b5dd6241f708b71bf5af5da38', 'core/src/capture_health.rs': 'e8c64656ce7a26c86605eccf7f14581c9ce78b7a480858bac2e08636804a3058', 'core/src/capture_frame_pool.rs': '37471684096c063bf2aca5d3b6d7bd660521851176240bcebc029d7772a4d76d', 'core/src/windows_graphics_capture.rs': '39c92d83acb1cd6a815d17182af2a2e8497bb444ec6aea5260f0e16b6a76202e', 'core/src/windows_journal_policy.rs': '3e6087d78cc62d14c1d2586aefe90a44de70cc386cd47f366c2b2d2fb8f80ad9'}
+PACER_GOLD = [('PacerProfile', 18), ('PacerProfile::validate', 27), ('PacerError', 48), ('PacerCounters', 59), ('OutputFrame', 67), ('Pacer', 83), ('Pacer::new', 94), ('Pacer::offer', 108), ('Pacer::select', 141), ('Pacer::counters', 201)]
+RECORDER_GOLD = [('Encoder', 15), ('Encoder::from_name', 17), ('Encoder::name', 18), ('EncoderUse', 21), ('VideoProfile', 23), ('VideoProfile::validate', 29), ('VideoProfile::frame_bytes', 33), ('RecorderError', 37), ('RecordingState', 39), ('RecorderCounters', 41), ('RecordingPlan', 43), ('RecordingReceipt', 44), ('Preflight', 45), ('Preflight::encoder', 46), ('Preflight::profile', 46), ('preflight', 109), ('Recorder', 131), ('Recorder::start', 148), ('Recorder::state', 187), ('Recorder::counters', 192), ('Recorder::pacer_counters', 197), ('Recorder::pid', 202), ('Recorder::queue_len', 207), ('Recorder::admit', 212), ('Recorder::pace', 239), ('Recorder::pump_one', 263), ('Recorder::interrupt', 300), ('Recorder::stop', 306)]
+SOURCE_HASHES = {'core/src/authority_journal.rs': '0c365d7d412de55e2c02a57d6665157642d846c575bdda699e6802d03c6d7f3c', 'core/src/capsule_registry.rs': '4e05d8fe4cb5abf357b30816ed2a1aca54299e1b264f7d0629acf2dfb987fd7d', 'core/src/journal_replay.rs': '16a92bb9817ae399055470bc762be738ea5997a6bc5e2130e2eea96d8ecbf720', 'core/src/main.rs': '0835f3c242d6d7d53a4d81539c6be5f1ecd3bf7c286e2bb54ac24fe6d0e39bd9', 'core/src/capsule_pairing.rs': 'e6055d47ba364809b8c22591dd47d23f5f74d8c1ba991831686c8d0eb7196835', 'core/src/windows_window_registry.rs': '84239abed2aa581d1d3b9559ea50c8ee5a0c259b5dd6241f708b71bf5af5da38', 'core/src/capture_health.rs': 'e8c64656ce7a26c86605eccf7f14581c9ce78b7a480858bac2e08636804a3058', 'core/src/capture_frame_pool.rs': '37471684096c063bf2aca5d3b6d7bd660521851176240bcebc029d7772a4d76d', 'core/src/windows_graphics_capture.rs': '39c92d83acb1cd6a815d17182af2a2e8497bb444ec6aea5260f0e16b6a76202e', 'core/src/windows_journal_policy.rs': '3e6087d78cc62d14c1d2586aefe90a44de70cc386cd47f366c2b2d2fb8f80ad9', 'core/src/ffmpeg_recorder.rs': '2606037e41232cd77937e320912ba75204bc4e3a0fec04cef4ff932a5fa51f20', 'core/src/recorder_pacer.rs': 'f3158372396284eeb1d7db6f6b1365bc69500b8d0114dadbfdbb148ea06a752b'}
 SPEC = importlib.util.spec_from_file_location('cafe_rust_extractor', ROOT / 'tools/extract_rust.py')
 x = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = x
@@ -61,7 +63,9 @@ def expected_inventory():
     def rows(path, module, pairs):
         return [{'path': path, 'symbol': 'cafe_core::' + module + '::' + name,
                  'name': name.split('::')[-1], 'line': line, 'cfg': []} for name, line in pairs]
-    return {'core/src/windows_journal_policy.rs': [],
+    return {'core/src/recorder_pacer.rs': rows('core/src/recorder_pacer.rs','recorder_pacer',PACER_GOLD),
+            'core/src/ffmpeg_recorder.rs': rows('core/src/ffmpeg_recorder.rs','ffmpeg_recorder',RECORDER_GOLD),
+            'core/src/windows_journal_policy.rs': [],
             'core/src/authority_journal.rs': rows('core/src/authority_journal.rs', 'authority_journal', JOURNAL_GOLD),
             CAPSULE: expected_gold(),
             'core/src/journal_replay.rs': rows('core/src/journal_replay.rs', 'journal_replay', REPLAY_GOLD),

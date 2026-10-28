@@ -1,10 +1,10 @@
-# P04 runtime manifest: Python connectors + MCP broker declaration only. No build backend, no lock, no install.
+# Exact OBS transport; MVP MCP stdio uses only the Python standard library.
 [project]
 name = "cafe-connectors"
 dynamic = ["version"]
 requires-python = "==3.13.17"
 dependencies = [
-    "mcp==2.3.0",
+    "websockets==17.2",
 ]
 
 [project.scripts]
@@ -24,7 +24,7 @@ python_connector = { path = "connectors/connector_main.py", target = "connectors
 python_mcp_broker = { path = "connectors/mcp_broker.py", target = "connectors.mcp_broker:main", status = "planned_absent_until_implementation", compute_owner = "rust_authority_core" }
 
 [tool.cafe.dependency_citations]
-mcp = { version = "==2.3.0", citations = ["C18"] }
+websockets = { version = "==17.2", source = "operator decision 43; MVP sprint P15", sha256 = "6aa59f0ef92e796b2db6f5f26550c4713c0e4036899fadf02f55e2ed4db0b7ae" }
 
 [tool.cafe.runtime_baselines]
 cpython = { version = "3.13.17", distribution_build = "20261021", citations = ["C25"], kind = "private_packaged_interpreter" }
@@ -49,3 +49,6 @@ large_integers_js_encoding = "decimal_string"
 unknown_keys = "reject_before_admission"
 stale_revisions = "reject_before_admission"
 limits_status = "AUSENTE — no inventar"
+
+[tool.cafe.deferred_dependencies]
+mcp = { version = "==2.3.0", citations = ["C18"], status = "not installed; deferred post-MVP; sprint MCP uses stdlib only" }

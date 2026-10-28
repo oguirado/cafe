@@ -1,4 +1,4 @@
-# CI tokenizer tooling only; connectors remain standard-library fixtures.
+# Hash-pinned CI tooling and the sole approved OBS WebSocket transport.
 tiktoken==0.13.0 \
     --hash=sha256:059c8ecf554eb5b41e6e054ba467b871b03277d267dee7244380aca4359747d4 \
     --hash=sha256:115c4f26ffa11caac8b54eea35c2ad38c612c20a48d35dd15d70a02ac6f51f58 \
@@ -357,3 +357,7 @@ urllib3==2.6.3 \
 certifi==2026.1.4 \
     --hash=sha256:9943707519e4add1115f44c2bc244f782c0249876bf51b6599fee1ffbedd685c \
     --hash=sha256:ac726dd470482006e014ad384921ed6438c457018f4b3d204aea4281258b2120
+
+# Universal wheel deliberately shared by Linux and Windows; no build/dependencies.
+websockets @ https://files.pythonhosted.org/packages/8a/58/835cd51934d6780fa586f275b5d9901eead6d81569b4343b3767cdbaae4c/websockets-17.2-py3-none-any.whl \
+    --hash=sha256:6aa59f0ef92e796b2db6f5f26550c4713c0e4036899fadf02f55e2ed4db0b7ae

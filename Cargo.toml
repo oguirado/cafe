@@ -108,3 +108,7 @@ path = "core/tests/windows_capture.rs"
 [[bin]]
 name = "cafe-wgc-synthetic"
 path = "core/tests/wgc_synthetic.rs"
+
+[[test]]
+name = "recorder_lifecycle"
+path = "core/tests/recorder_lifecycle.rs"

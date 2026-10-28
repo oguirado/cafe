@@ -44,6 +44,11 @@ def run_stage(stage,root=ROOT):
             result=run([python,'-B','tools/run_integration_gate.py'],'integration_one_command')
             data=json.loads(result['stdout'])
             if data.get('status')!='pass' or not data.get('cleanup') or not isinstance(data.get('tests'),int) or data['tests']<=0:raise ValueError('integration_evidence_invalid')
+            if importlib.metadata.version('websockets')!='17.2':raise ValueError('wrong_obs_transport_version')
+            result=run([python,'-B','-m','unittest','discover','-s','tests/integration','-p','test_obs_bridge.py'],'obs_bridge_fake_server_tests')
+            text=result['stdout']+result['stderr']
+            if not re.search(r'(?m)^Ran [1-9][0-9]* tests? in ',text) or not re.search(r'(?m)^OK\s*$',text) or 'skipped=' in text:raise ValueError('empty_or_skipped_obs_tests')
+
         elif stage=='router':
             result=run([python,'-B','router/tools/build_index_v2.py','--nodes','catalogue/nodes.jsonl','--out','catalogue/router','--corpus','cafe','--check'],'router_byte_identical')
             if result['stdout'].strip()!='byte-identical':raise ValueError('router_check_evidence_invalid')

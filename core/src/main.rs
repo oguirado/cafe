@@ -21,3 +21,8 @@ mod windows_graphics_capture;
 
 #[cfg(windows)]
 mod windows_journal_policy;
+
+#[allow(dead_code)]
+mod recorder_pacer;
+#[allow(dead_code)]
+mod ffmpeg_recorder;

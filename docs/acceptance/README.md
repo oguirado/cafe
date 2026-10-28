@@ -89,3 +89,30 @@ separate pending checks.
 API references: [mandatory locks](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex),
 [system RNG](https://learn.microsoft.com/en-us/windows/win32/api/bcrypt/nf-bcrypt-bcryptgenrandom) and
 [pipe ACLs](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights).
+
+## Video recorder acceptance boundary
+
+The recorder has synthetic paced-frame, bounded-queue, complete-write and durable
+publication tests. The development FFV1/Matroska path actually encodes and decodes
+a temporary artifact before publication. Linux hardware preflight evidence is a
+development observation, not Windows or redistribution qualification. The host
+FFmpeg development tool is not distributed with the application.
+
+Production configuration permits audited hardware H.264 in Matroska only, with
+explicit blocking when preflight or the audit is absent. No software encoder is
+substituted. Native Windows verification remains pending: test the independently
+approved/audited FFmpeg binary, actual hardware encoder and real Discord pop-out
+capture/recording. No Windows binary download or distribution is approved here.
+
+## OBS automation acceptance boundary
+
+Loopback fake-server tests cover obs-websocket identification, password challenge,
+source/scene reconciliation, two capsule windows, idempotent retry and explicit
+failure after lost replies. Configuration readback is not proof of captured
+pixels. The password remains ephemeral, provider errors are closed and sanitized,
+and persisted status contains only password presence or absence. Only the exact
+approved WebSocket transport is used; the MVP MCP server uses stdlib only.
+
+Native Windows verification is pending: run real OBS with real window_capture
+sources for a Discord game pop-out and camera/call view, verify intended pixels,
+then repeat without duplicate sources. No native success is claimed by fixtures.

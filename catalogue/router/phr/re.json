@@ -1,1 +1,1 @@
-{"read frame":[7,10],"receive ticket":[7],"registry apply":[16],"registry decode apply":[16],"registry new":[16],"registry snapshot":[16]}
+{"read frame":[7,12],"receive ticket":[7],"recorder admit":[21],"recorder counters":[21],"recorder interrupt":[21],"recorder pace":[21],"recorder pacer counters":[21],"recorder pid":[21],"recorder pump":[21],"recorder queue len":[21],"recorder start":[21],"recorder state":[21],"recorder stop":[21],"registry apply":[18],"registry decode apply":[18],"registry new":[18],"registry snapshot":[18],"response data":[8]}

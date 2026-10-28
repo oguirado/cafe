@@ -7,6 +7,8 @@ js-backend-supervisor	src/main/backendSupervisor.js
 js-cafe-bridge	src/preload/cafeBridge.js
 py-authority-channel	connectors/cafe/authority_channel.py
 py-channel-auth	connectors/cafe/channel_auth.py
+py-obs-auth	connectors/cafe/obs_auth.py
+py-obs-bridge	connectors/cafe/obs_bridge.py
 py-windows-auth	connectors/cafe/windows_auth.py
 readme	docs/acceptance/README.md
 rust-authority-auth	core/src/authority_auth.rs
@@ -17,11 +19,14 @@ rust-capsule-pairing	core/src/capsule_pairing.rs
 rust-capsule-registry	core/src/capsule_registry.rs
 rust-capsule-registry-p2	core/src/capsule_registry.rs
 rust-capture-health	core/src/capture_health.rs
+rust-ffmpeg-recorder	core/src/ffmpeg_recorder.rs
+rust-ffmpeg-recorder-p2	core/src/ffmpeg_recorder.rs
 rust-frame-pool	core/src/capture_frame_pool.rs
 rust-journal-policy	core/src/windows_journal_policy.rs
 rust-journal-replay	core/src/journal_replay.rs
 rust-main	core/src/main.rs
 rust-python-supervisor	core/src/python_connector_supervisor.rs
+rust-recorder-pacer	core/src/recorder_pacer.rs
 rust-wgc-producer	core/src/windows_graphics_capture.rs
 rust-window-registry	core/src/windows_window_registry.rs
 rust-windows-auth	core/src/windows_auth.rs
