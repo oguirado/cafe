@@ -203,6 +203,13 @@
       "language": "Markdown + JSON + CI configuration",
       "role": "Reviewed day-zero policy and developer automation",
       "extractor": "not indexed"
+    },
+    {
+      "path": "ctl/",
+      "owner": "Repository tooling",
+      "language": "Python + Bash",
+      "role": "Admission and serial integration controls",
+      "extractor": "not indexed"
     }
   ]
 }

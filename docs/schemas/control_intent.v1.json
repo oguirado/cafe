@@ -1,0 +1,365 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cafe:control-intent:v1",
+  "title": "Confirmed authority control intent",
+  "description": "Frozen wire contract only, not proof of an implemented caller. request_id is the idempotency key; broker authenticates identity and only forwards. The authority validates unsigned clocks, revision, capability, confirmation and folder before effects. Confirmation tokens are never journaled or logged.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "kind",
+    "request_id",
+    "authority_epoch",
+    "expected_revision",
+    "body"
+  ],
+  "properties": {
+    "schema": {
+      "const": "cafe.control_intent.v1"
+    },
+    "kind": {
+      "const": "control_intent"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+    },
+    "authority_epoch": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "maxLength": 20,
+      "description": "Canonical decimal u64. Runtime validation also rejects values above the u64 maximum."
+    },
+    "expected_revision": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "maxLength": 20,
+      "description": "Canonical decimal u64. Runtime validation also rejects values above the u64 maximum."
+    },
+    "body": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "confirmation_token",
+            "folder"
+          ],
+          "properties": {
+            "op": {
+              "const": "set_folder"
+            },
+            "confirmation_token": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "Opaque short-lived authority-issued token. Validate binding to identity, operation, arguments, epoch and expiry at the authority; never persist the token."
+            },
+            "folder": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "description": "Operator-selected folder. The authority validates platform path confinement and authorization before any effect; no path is accepted merely because it matches this schema."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "confirmation_token",
+            "capsule_id"
+          ],
+          "properties": {
+            "op": {
+              "const": "start_recording"
+            },
+            "confirmation_token": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "Opaque short-lived authority-issued token. Validate binding to identity, operation, arguments, epoch and expiry at the authority; never persist the token."
+            },
+            "capsule_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 96,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "confirmation_token",
+            "capsule_id"
+          ],
+          "properties": {
+            "op": {
+              "const": "stop_recording"
+            },
+            "confirmation_token": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "Opaque short-lived authority-issued token. Validate binding to identity, operation, arguments, epoch and expiry at the authority; never persist the token."
+            },
+            "capsule_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 96,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "op",
+            "confirmation_token",
+            "capsule_id"
+          ],
+          "properties": {
+            "op": {
+              "const": "send_to_obs"
+            },
+            "confirmation_token": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "Opaque short-lived authority-issued token. Validate binding to identity, operation, arguments, epoch and expiry at the authority; never persist the token."
+            },
+            "capsule_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 96,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "result": {
+      "description": "Typed result envelope. A committed receipt follows durable journal acknowledgement; pending, blocked, rejected or interrupted never mean complete. No confirmation token, credential or host path appears in the result.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_id",
+            "state",
+            "revision",
+            "error",
+            "receipt"
+          ],
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 96,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "state": {
+              "const": "pending"
+            },
+            "revision": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,19})$",
+              "maxLength": 20,
+              "description": "Canonical decimal u64. Runtime validation also rejects values above the u64 maximum."
+            },
+            "error": {
+              "type": "null"
+            },
+            "receipt": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_id",
+            "state",
+            "revision",
+            "error",
+            "receipt"
+          ],
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 96,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "state": {
+              "const": "committed"
+            },
+            "revision": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,19})$",
+              "maxLength": 20,
+              "description": "Canonical decimal u64. Runtime validation also rejects values above the u64 maximum."
+            },
+            "error": {
+              "type": "null"
+            },
+            "receipt": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "schema",
+                "op",
+                "effect_id"
+              ],
+              "properties": {
+                "schema": {
+                  "const": "cafe.control_receipt.v1"
+                },
+                "op": {
+                  "enum": [
+                    "set_folder",
+                    "start_recording",
+                    "stop_recording",
+                    "send_to_obs"
+                  ]
+                },
+                "effect_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 96,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_id",
+            "state",
+            "revision",
+            "error",
+            "receipt"
+          ],
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 96,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "state": {
+              "const": "rejected"
+            },
+            "revision": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,19})$",
+              "maxLength": 20,
+              "description": "Canonical decimal u64. Runtime validation also rejects values above the u64 maximum."
+            },
+            "error": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 96,
+              "pattern": "^[a-z][a-z0-9_]*$"
+            },
+            "receipt": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_id",
+            "state",
+            "revision",
+            "error",
+            "receipt"
+          ],
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 96,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "state": {
+              "const": "interrupted"
+            },
+            "revision": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,19})$",
+              "maxLength": 20,
+              "description": "Canonical decimal u64. Runtime validation also rejects values above the u64 maximum."
+            },
+            "error": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 96,
+              "pattern": "^[a-z][a-z0-9_]*$"
+            },
+            "receipt": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_id",
+            "state",
+            "revision",
+            "error",
+            "receipt"
+          ],
+          "properties": {
+            "request_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 96,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "state": {
+              "const": "blocked"
+            },
+            "revision": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,19})$",
+              "maxLength": 20,
+              "description": "Canonical decimal u64. Runtime validation also rejects values above the u64 maximum."
+            },
+            "error": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 96,
+              "pattern": "^[a-z][a-z0-9_]*$"
+            },
+            "receipt": {
+              "type": "null"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
