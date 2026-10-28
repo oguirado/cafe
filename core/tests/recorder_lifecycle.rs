@@ -168,3 +168,27 @@ fn successful_child_exit_without_decodable_artifact_is_incomplete(){runtime().bl
 
 #[test]
 fn unavailable_hardware_encoder_is_blocked_without_substitution(){assert!(matches!(Recorder::test_encoder_absent(),Err(RecorderError::BlockedEncoder)));}
+
+mod confirmed_pipe_tests {
+
+    use crate::ffmpeg_recorder::{write_confirmed_chunks,RecorderError};
+    use std::{pin::Pin,task::{Context,Poll}};
+    struct BufferedWriter {flushes:usize,fail_at:usize}
+    impl tokio::io::AsyncWrite for BufferedWriter {
+        fn poll_write(self:Pin<&mut Self>,_:&mut Context<'_>,bytes:&[u8])->Poll<std::io::Result<usize>>{Poll::Ready(Ok(bytes.len().min(2)))}
+        fn poll_flush(mut self:Pin<&mut Self>,_:&mut Context<'_>)->Poll<std::io::Result<()>>{self.flushes+=1;if self.flushes==self.fail_at{Poll::Ready(Err(std::io::Error::other("synthetic flush failure")))}else{Poll::Ready(Ok(()))}}
+        fn poll_shutdown(self:Pin<&mut Self>,_:&mut Context<'_>)->Poll<std::io::Result<()>>{Poll::Ready(Ok(()))}
+    }
+    #[test]
+    fn buffered_acceptance_is_not_a_confirmed_frame(){
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async{
+            let mut writer=BufferedWriter{flushes:0,fail_at:1};let mut confirmed=0;
+            assert_eq!(write_confirmed_chunks(&mut writer,b"abcd",&mut confirmed).await,Err(RecorderError::WriteFailed));assert_eq!(confirmed,0);
+            let mut writer=BufferedWriter{flushes:0,fail_at:2};let mut confirmed=0;
+            assert_eq!(write_confirmed_chunks(&mut writer,b"abcd",&mut confirmed).await,Err(RecorderError::PartialFrame));assert_eq!(confirmed,2);
+            let mut writer=BufferedWriter{flushes:0,fail_at:usize::MAX};let mut confirmed=0;
+            assert_eq!(write_confirmed_chunks(&mut writer,b"abcd",&mut confirmed).await,Ok(()));assert_eq!(confirmed,4);assert_eq!(writer.flushes,2);
+        });
+    }
+
+}

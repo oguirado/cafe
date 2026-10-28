@@ -74,7 +74,7 @@ impl ChildSupervisor {
     async fn write_frame(&mut self,bytes:&[u8])->Result<(),RecorderError>{
         self.last_partial=0;let stdin=self.stdin.as_mut().ok_or(RecorderError::State)?;let mut offset=0;
         let outcome=tokio::time::timeout(self.write_timeout,async{
-            while offset<bytes.len(){match stdin.write(&bytes[offset..]).await{Ok(0)=>return Err(RecorderError::PartialFrame),Ok(n)=>offset+=n,Err(_)=>return Err(if offset==0{RecorderError::WriteFailed}else{RecorderError::PartialFrame})}}Ok(())
+            write_confirmed_chunks(stdin,bytes,&mut offset).await
         }).await;
         self.last_partial=offset;
         match outcome{Ok(result)=>result,Err(_)=>Err(RecorderError::WriteTimeout)}
@@ -393,3 +393,15 @@ impl Recorder {
 
 #[cfg(test)]
 impl Recorder {pub(crate) fn test_encoder_absent()->Result<(),RecorderError>{require_encoder(b"Encoders:\n V..... ffv1 Lossless video\n",Encoder::Nvenc)}}
+
+// A successful Tokio write may only enqueue a Windows blocking-pipe write.
+// Flush each chunk inside the same frame deadline before counting its bytes.
+pub(crate) async fn write_confirmed_chunks<W:tokio::io::AsyncWrite+Unpin>(writer:&mut W,bytes:&[u8],confirmed:&mut usize)->Result<(),RecorderError>{
+    while *confirmed<bytes.len(){
+        let count=writer.write(&bytes[*confirmed..]).await.map_err(|_|if *confirmed==0{RecorderError::WriteFailed}else{RecorderError::PartialFrame})?;
+        if count==0{return Err(RecorderError::PartialFrame);}
+        writer.flush().await.map_err(|_|if *confirmed==0{RecorderError::WriteFailed}else{RecorderError::PartialFrame})?;
+        *confirmed+=count;
+    }
+    Ok(())
+}

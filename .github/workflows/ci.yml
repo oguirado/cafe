@@ -61,6 +61,12 @@
           "run": "cargo fetch --locked"
         },
         {
+          "name": "Ubuntu development FFmpeg from the official archive",
+          "if": "${{ matrix.os == 'ubuntu-latest' }}",
+          "shell": "bash",
+          "run": "sudo apt-get update\nsudo apt-get install -y --no-install-recommends ffmpeg\napt-cache policy ffmpeg\nffmpeg -version"
+        },
+        {
           "id": "gate_rust",
           "name": "Gate rust",
           "run": "python -B tools/run_ci.py --stage rust"

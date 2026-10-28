@@ -1,9 +1,9 @@
 //! Windows-only TEST probe. NativeSupport alone never establishes capture success.
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 #[path = "../src/capsule_registry.rs"] mod capsule_registry;
 #[cfg(windows)]
 #[path = "../src/windows_window_registry.rs"] mod windows_window_registry;
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 #[path = "../src/capture_health.rs"] mod capture_health;
 #[cfg(windows)]
 #[path = "../src/capture_frame_pool.rs"] mod capture_frame_pool;
@@ -25,6 +25,40 @@ impl ProbeReport {
         Self { status, reason, profile: "synthetic_test", frames: 0,
             first_source_time: None, last_source_time: None }
     }
+}
+
+
+// A temporary frozen source is not success and is not yet a terminal native
+// failure. A later valid source may recover health before this TEST deadline.
+// Never extend the deadline or turn a one-frame observation into completion.
+#[cfg(any(windows, test))]
+#[derive(Debug, PartialEq, Eq)]
+enum FrameWait { Poll, Expired, Fail(&'static str) }
+
+#[cfg(any(windows, test))]
+fn frame_wait(state: capture_health::CaptureState, now: std::time::Instant,
+              deadline: std::time::Instant) -> FrameWait {
+    use capture_health::CaptureState;
+    if now >= deadline { return FrameWait::Expired; }
+    match state {
+        CaptureState::Waiting | CaptureState::Healthy | CaptureState::Backpressure |
+        CaptureState::Frozen => FrameWait::Poll,
+        CaptureState::Minimized => FrameWait::Fail("capture_minimized"),
+        CaptureState::Closed => FrameWait::Fail("capture_closed"),
+        CaptureState::DeviceLost => FrameWait::Fail("capture_device_lost"),
+        CaptureState::ResizeRequired => FrameWait::Fail("capture_resize_required"),
+        CaptureState::GenerationMismatch => FrameWait::Fail("capture_generation_mismatch"),
+        CaptureState::BorderUnavailable => FrameWait::Fail("capture_border_unavailable"),
+        CaptureState::SourceFailed => FrameWait::Fail("capture_source_failed"),
+        CaptureState::ClockRegression => FrameWait::Fail("capture_clock_regression"),
+    }
+}
+
+#[cfg(any(windows, test))]
+fn verified_capture(frames: u32, first: Option<u64>, last: Option<u64>,
+                    state: capture_health::CaptureState) -> bool {
+    frames >= 2 && state == capture_health::CaptureState::Healthy &&
+        matches!((first, last), (Some(first), Some(last)) if last > first)
 }
 
 fn main() {
@@ -141,9 +175,10 @@ async fn run_windows() -> (ProbeReport, i32) {
                         let mut previous: Option<Clock> = None;
                         while Instant::now() < deadline {
                             let state = capture.poll_state(&registry);
-                            if !matches!(state, CaptureState::Waiting | CaptureState::Healthy | CaptureState::Backpressure) {
-                                report.reason = "capture_state_rejected";
-                                break;
+                            match frame_wait(state, Instant::now(), deadline) {
+                                FrameWait::Poll => {}
+                                FrameWait::Expired => break,
+                                FrameWait::Fail(reason) => { report.reason = reason; break; }
                             }
                             if let Some(frame) = capture.take_latest() {
                                 if frame.width() != expected_width || frame.height() != expected_height {
@@ -165,11 +200,10 @@ async fn run_windows() -> (ProbeReport, i32) {
                                 previous = Some(source);
                                 // Drop the lease before the next callback; do not consume all pool slots.
                                 drop(frame);
-                                if report.frames >= 2 {
-                                    if capture.poll_state(&registry) != CaptureState::Healthy {
-                                        report.reason = "capture_not_healthy";
-                                        break;
-                                    }
+                                let health = capture.poll_state(&registry);
+                                if verified_capture(report.frames,
+                                    report.first_source_time.as_deref().and_then(|n| n.parse().ok()),
+                                    report.last_source_time.as_deref().and_then(|n| n.parse().ok()), health) {
                                     report.status = "pass";
                                     report.reason = "actual_owned_frames_verified";
                                     exit_code = 0;
@@ -216,4 +250,60 @@ fn known_center(frame: &capture_frame_pool::OwnedFrame) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod wait_tests {
+    use super::*;
+    use capture_health::{BorderStatus, CaptureHealth, CaptureState, HealthError, HealthPolicy};
+    use capsule_registry::Clock;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn frozen_wait_can_recover_without_claiming_completion() {
+        let origin = Instant::now();
+        let deadline = origin + Duration::from_secs(15);
+        let mut health = CaptureHealth::new(HealthPolicy { stall_budget: Clock(10) },
+            7, 2, 2, BorderStatus::Required).unwrap();
+        health.admit_frame(7, 2, 2, Clock(100), Clock(101)).unwrap();
+        assert_eq!(health.admit_frame(7, 2, 2, Clock(100), Clock(102)), Err(HealthError::Frozen));
+        let frozen = health.status(Clock(102));
+        assert_eq!(frame_wait(frozen, origin, deadline), FrameWait::Poll);
+        assert!(!verified_capture(1, Some(100), Some(100), frozen));
+        health.admit_frame(7, 2, 2, Clock(103), Clock(104)).unwrap();
+        assert!(verified_capture(2, Some(100), Some(103), health.status(Clock(104))));
+    }
+
+    #[test]
+    fn stalled_one_frame_expires_without_success_or_deadline_extension() {
+        let origin = Instant::now();
+        let deadline = origin + Duration::from_secs(15);
+        for now in [deadline, deadline + Duration::from_secs(1)] {
+            assert_eq!(frame_wait(CaptureState::Frozen, now, deadline), FrameWait::Expired);
+            assert!(!verified_capture(1, Some(100), Some(100), CaptureState::Frozen));
+        }
+    }
+
+    #[test]
+    fn no_state_or_clock_substitution_can_turn_one_frame_into_success() {
+        for state in [CaptureState::Waiting, CaptureState::Healthy,
+                      CaptureState::Backpressure, CaptureState::Frozen] {
+            assert!(!verified_capture(1, Some(100), Some(101), state));
+        }
+        for clocks in [(None, None), (Some(100), Some(100)), (Some(101), Some(100))] {
+            assert!(!verified_capture(2, clocks.0, clocks.1, CaptureState::Healthy));
+        }
+        assert!(!verified_capture(2, Some(100), Some(101), CaptureState::Frozen));
+    }
+
+    #[test]
+    fn terminal_native_states_fail_immediately_before_deadline() {
+        let now = Instant::now();
+        for state in [CaptureState::Minimized, CaptureState::Closed, CaptureState::DeviceLost,
+                      CaptureState::ResizeRequired, CaptureState::GenerationMismatch,
+                      CaptureState::BorderUnavailable, CaptureState::SourceFailed,
+                      CaptureState::ClockRegression] {
+            assert!(matches!(frame_wait(state, now, now + Duration::from_secs(15)), FrameWait::Fail(_)));
+        }
+    }
 }
