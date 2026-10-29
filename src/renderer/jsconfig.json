@@ -13,6 +13,7 @@
     "types": []
   },
   "files": [
-    "../../tests/security/rendererReplacement.js"
+    "../../tests/security/rendererReplacement.js",
+    "control.js"
   ]
 }

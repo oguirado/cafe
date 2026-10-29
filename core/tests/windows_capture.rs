@@ -222,3 +222,12 @@ fn linux_native_capture_is_explicitly_unsupported() {
     assert_eq!(windows_graphics_capture::native_support(),
                windows_graphics_capture::NativeSupport::Unsupported);
 }
+
+#[test]
+fn observed_dimensions_are_exact_and_resource_bounded_without_window_guessing() {
+    use windows_graphics_capture::ObservedCaptureConfig;
+    let budget=ObservedCaptureConfig{pool:limits(),health:HealthPolicy{stall_budget:Clock(10)},borderless:false,access_timeout_ms:1000};
+    let got=budget.resolve_size(3,2).unwrap();assert_eq!((got.width,got.height),(3,2));
+    for (w,h) in [(0,2),(2,0),(-1,2),(2,-1),(5,2),(2,5),(i32::MAX,i32::MAX)] {assert!(budget.resolve_size(w,h).is_err());}
+    assert!(ObservedCaptureConfig{pool:PoolLimits{max_frame_bytes:16,..limits()},..budget}.resolve_size(3,2).is_err());
+}

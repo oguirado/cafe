@@ -99,6 +99,8 @@ async function createDesktopShell(electronApi, options) {
   let currentWin = null;
   /** @type {(() => void) | null} */
   let unsubscribeBackend = null;
+  /** @type {object|null} */
+  let subscriptionFrame = null;
   /** @type {Backend | null} */
   let backend = null;
   let disposed = false;
@@ -117,14 +119,38 @@ async function createDesktopShell(electronApi, options) {
     return currentWin.webContents.mainFrame;
   };
 
-  const removeIpcHandlers = security.bindNativeIpc(ipcMain, getWindow, getBackend);
+  const removeIpcHandlers = security.bindNativeIpc(ipcMain, getWindow, getBackend, async (win) => {
+    const choice = await electronApi.dialog.showOpenDialog(win, {
+      title: 'Select audited FFmpeg executable', properties: ['openFile'],
+      filters: [{ name: 'FFmpeg executable', extensions: ['exe'] }],
+    });
+    if (choice.canceled || choice.filePaths.length !== 1) return null;
+    return require('./runtimeBackend').selectExternalFfmpeg(choice.filePaths[0]);
+  }, async (win) => {
+    const choice = await electronApi.dialog.showOpenDialog(win, {
+      title: 'Choose recording folder', properties: ['openDirectory', 'createDirectory'],
+    });
+    if (choice.canceled || choice.filePaths.length !== 1) return null;
+    return { folder: choice.filePaths[0] };
+  });
 
   const clearBackendSubscription = () => {
+    subscriptionFrame = null;
     if (unsubscribeBackend) {
       const stop = unsubscribeBackend;
       unsubscribeBackend = null;
       stop();
     }
+  };
+
+  /** @param {import('electron').BrowserWindow} win */
+  const bindBackendSnapshots = (win) => {
+    if (!backend || getWindow() !== win) return;
+    const frame = win.webContents.mainFrame;
+    if (unsubscribeBackend && subscriptionFrame === frame) return;
+    clearBackendSubscription();
+    unsubscribeBackend = security.subscribeBackend(getWindow, backend);
+    subscriptionFrame = frame;
   };
 
   const createAndShowWindow = async () => {
@@ -139,12 +165,13 @@ async function createDesktopShell(electronApi, options) {
       clearBackendSubscription();
       if (currentWin === win) currentWin = null;
     });
+    win.webContents.on('did-finish-load', () => {
+      try { bindBackendSnapshots(win); }
+      catch { security.publishSnapshot(win, security.unavailableSnapshot()); }
+    });
     await win.loadURL(security.BOOT_URL);
     if (disposed || currentWin !== win || win.isDestroyed()) return;
-    if (backend) {
-      clearBackendSubscription();
-      unsubscribeBackend = security.subscribeBackend(getWindow, backend);
-    }
+    if (backend) bindBackendSnapshots(win);
   };
 
   const dispose = () => {
@@ -189,7 +216,11 @@ exports.createDesktopShell = createDesktopShell;
 
 if (typeof process !== 'undefined' && process !== null && process.type === 'browser') {
   const browserApi = require('electron');
-  createDesktopShell(browserApi).then(
+  createDesktopShell(browserApi, { createBackend: (ctx) =>
+    require('./runtimeBackend').createPackagedBackend({ ...ctx,
+      resourcesPath: process.resourcesPath,
+      runtimeRoot: path.join(browserApi.app.getPath('userData'), 'authority'),
+    }) }).then(
     () => {},
     () => {
       browserApi.app.quit();

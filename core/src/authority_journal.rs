@@ -148,6 +148,73 @@ struct MediaPublishedPayload {
     sha256: String,
 }
 
+/// Closed operator-control journal facts. No confirmation token or folder plaintext.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ControlOperation { SetFolder, StartRecording, StopRecording, SendToObs }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ControlIntentRecord {
+    pub request_id: String,
+    pub identity_sha256: String,
+    pub operation: ControlOperation,
+    pub args_sha256: String,
+    pub capsule_id: Option<String>,
+    pub expected_revision: Clock,
+    pub effect_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ControlCompletion { Committed, Interrupted }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ControlResultRecord {
+    pub request_id: String,
+    pub effect_id: String,
+    pub state: ControlCompletion,
+}
+
+type ControlBook = BTreeMap<String, (ControlIntentRecord, Option<ControlResultRecord>)>;
+
+fn control_identifier(text: &str) -> bool {
+    !text.is_empty() && text.len() <= 96 && text.as_bytes()[0].is_ascii_alphanumeric()
+        && text.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.:-".contains(&b))
+}
+
+fn apply_control_fact(kind: &str, payload: &Value, sequence: Clock, book: &mut ControlBook, registry: &Registry) -> Result<(), JournalError> {
+    let object = payload.as_object().ok_or(JournalError::Corrupt)?;
+    match kind {
+        "confirmed_control_intent" => {
+            let expected = ["request_id", "identity_sha256", "operation", "args_sha256", "capsule_id", "expected_revision", "effect_id"];
+            if object.len() != expected.len() || expected.iter().any(|k| !object.contains_key(*k)) { return Err(JournalError::Corrupt); }
+            let intent: ControlIntentRecord = serde_json::from_value(payload.clone()).map_err(|_| JournalError::Corrupt)?;
+            if !control_identifier(&intent.request_id) || !control_identifier(&intent.effect_id)
+                || !is_lower_hex_64(&intent.identity_sha256) || !is_lower_hex_64(&intent.args_sha256)
+                || intent.effect_id != format!("ctl.{}", sha256_hex(intent.request_id.as_bytes()))
+                || intent.expected_revision.0.checked_add(1) != Some(sequence.0)
+                || book.contains_key(&intent.request_id) { return Err(JournalError::Corrupt); }
+            match (&intent.operation, &intent.capsule_id) {
+                (ControlOperation::SetFolder, None) => {},
+                (ControlOperation::StartRecording | ControlOperation::StopRecording | ControlOperation::SendToObs, Some(id)) if control_identifier(id) && registry.snapshot().capsules.contains_key(id) => {},
+                _ => return Err(JournalError::Corrupt),
+            }
+            book.insert(intent.request_id.clone(), (intent, None));
+        },
+        "confirmed_control_result" => {
+            if object.len() != 3 || ["request_id", "effect_id", "state"].iter().any(|k| !object.contains_key(*k)) { return Err(JournalError::Corrupt); }
+            let result: ControlResultRecord = serde_json::from_value(payload.clone()).map_err(|_| JournalError::Corrupt)?;
+            let Some((intent, prior)) = book.get_mut(&result.request_id) else { return Err(JournalError::Corrupt); };
+            if prior.is_some() || result.effect_id != intent.effect_id { return Err(JournalError::Corrupt); }
+            *prior = Some(result);
+        },
+        _ => return Err(JournalError::Corrupt),
+    }
+    Ok(())
+}
+
 /// In-memory staged frame awaiting its commit trailer.
 struct StagedControl {
     stage_id: u64,
@@ -361,6 +428,7 @@ fn scan_prefix(
     let mut event_ids = BTreeSet::new();
     let mut media_intents = BTreeMap::new();
     let mut media_published = BTreeSet::new();
+    let mut control_book = BTreeMap::new();
     let mut offset = 0usize;
     let mut expected_sequence: u64 = 1;
     let mut expected_prior = GENESIS_DIGEST.to_string();
@@ -432,6 +500,7 @@ fn scan_prefix(
             &mut event_ids,
             &mut media_intents,
             &mut media_published,
+            &mut control_book,
         )?;
         expected_prior = record.record_digest.clone();
         records.push(record);
@@ -453,6 +522,7 @@ fn validate_record(
     event_ids: &mut BTreeSet<String>,
     media_intents: &mut BTreeMap<String, String>,
     media_published: &mut BTreeSet<String>,
+    control_book: &mut ControlBook,
 ) -> Result<Record, JournalError> {
     let parsed: Value = serde_json::from_slice(body).map_err(|_| JournalError::Corrupt)?;
     let canonical = canonical_bytes(&parsed).map_err(|_| JournalError::Corrupt)?;
@@ -495,6 +565,9 @@ fn validate_record(
         return Err(JournalError::Corrupt);
     }
     match record.kind.as_str() {
+        "confirmed_control_intent" | "confirmed_control_result" => {
+            apply_control_fact(&record.kind, &record.payload, record.sequence, control_book, registry)?;
+        }
         "control" => {
             let envelope: Envelope = serde_json::from_value(record.payload.clone())
                 .map_err(|_| JournalError::Corrupt)?;
@@ -732,6 +805,41 @@ impl Journal {
     ) -> Result<Committed, JournalError> {
         let pending = self.stage_control(event_id, request)?;
         self.commit(pending)
+    }
+
+    pub(crate) fn authority_epoch(&self) -> Clock { self.epoch }
+
+    /// Appends a closed confirmed intent only after durable flush; no effect is dispatched here.
+    pub(crate) fn append_confirmed_intent(&mut self, intent: ControlIntentRecord) -> Result<Committed, JournalError> {
+        let event = format!("intent.{}", sha256_hex(intent.request_id.as_bytes()));
+        let payload = serde_json::to_value(intent).map_err(|_| JournalError::Invalid)?;
+        self.append_control_fact(&event, "confirmed_control_intent", payload)
+    }
+
+    /// Appends a closed outcome only after the corresponding durable intent.
+    pub(crate) fn append_confirmed_result(&mut self, result: ControlResultRecord) -> Result<Committed, JournalError> {
+        let event = format!("result.{}", sha256_hex(result.request_id.as_bytes()));
+        let payload = serde_json::to_value(result).map_err(|_| JournalError::Invalid)?;
+        self.append_control_fact(&event, "confirmed_control_result", payload)
+    }
+
+    fn append_control_fact(&mut self, event: &str, kind: &str, payload: Value) -> Result<Committed, JournalError> {
+        if self.poisoned { return Err(JournalError::Io); }
+        if self.staged.is_some() { return Err(JournalError::Pending); }
+        if self.event_ids.contains(event) { return Err(JournalError::Invalid); }
+        let mut book = BTreeMap::new();
+        for record in &self.records {
+            if matches!(record.kind.as_str(), "confirmed_control_intent" | "confirmed_control_result") {
+                apply_control_fact(&record.kind, &record.payload, record.sequence, &mut book, &self.registry)?;
+            }
+        }
+        apply_control_fact(kind, &payload, self.next_sequence()?, &mut book, &self.registry).map_err(|_| JournalError::Invalid)?;
+        let (record, body) = self.build_record(event, kind, payload)?;
+        self.write_committed_frame(&body)?;
+        self.event_ids.insert(event.to_owned());
+        let receipt = Committed { sequence: record.sequence, event_id: event.to_owned(), record_digest: record.record_digest.clone() };
+        self.records.push(record);
+        Ok(receipt)
     }
 
     /// Commits a typed media intent for a new media id.

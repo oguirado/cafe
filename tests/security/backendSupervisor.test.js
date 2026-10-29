@@ -35,8 +35,8 @@ async function until(predicate) {
  assert.fail('Expected observable state was not reached');
 }
 function intent(request_id='next',revision='0',padding='') {
- return {schema:'cafe.control.v1',kind:'intent',request_id,authority_epoch:EPOCH,expected_revision:revision,
- body:{op:'create_capsule',capsule_id:'guest',person_label:padding||'Guest',generation:'1'}};
+ return {schema:'cafe.operator.v1',kind:'operator_intent',request_id,authority_epoch:EPOCH,expected_revision:revision,
+ body:{op:'create_capsule',capsule_id:'guest',person_label:padding||'Guest'}};
 }
 function setup(t,mode='normal',limits={}) {
  const children=[];let frame={};
@@ -104,4 +104,11 @@ test('unsafe numeric clock and unknown envelope key are rejected before write',a
 test('preload never exposes raw transport and snapshots cannot mutate authority',async t=>{
  const s=setup(t);s.supervisor.start();await until(()=>s.supervisor.getStatus().availability==='available');const bridge=s.bridge();const snapshot=await bridge.getSnapshot();try{snapshot.state.recording=false;}catch{}assert.equal(s.supervisor.getStatus().state.recording,true);
  const seen=[];const unsubscribe=bridge.onSnapshot(v=>seen.push(v));await bridge.submitIntent(intent());await until(()=>seen.some(v=>v.revision==='1'));unsubscribe();assert.equal(bridge.invoke,undefined);assert.equal(bridge.send,undefined);
+});
+
+test('renderer cannot select an executable or supply its approval hash', async t => {
+ const s=setup(t);s.supervisor.start();await until(()=>s.supervisor.getStatus().availability==='available');
+ assert.throws(()=>s.supervisor.handle(s.caller(),'submitIntent',{...intent(),body:{op:'configure_ffmpeg',path:'untrusted',sha256:'a'.repeat(64)}}),/host file selection required/);
+ assert.throws(()=>s.supervisor.handle(s.caller(),'submitIntent',{...intent(),body:{op:'set_folder',folder:'untrusted'}}),/host file selection required/);
+ assert.equal(s.supervisor.getStatus().revision,'0');
 });

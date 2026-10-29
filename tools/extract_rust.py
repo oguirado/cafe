@@ -16,7 +16,7 @@ ENTRY = 'core/src/main.rs'
 CRATE = 'cafe_core'
 KINDS = {'fn', 'struct', 'enum', 'trait', 'type', 'const', 'mod'}
 ATTRS = {'serde', 'allow', 'deny', 'warn', 'forbid', 'doc', 'repr', 'inline',
-         'must_use', 'non_exhaustive', 'cold'}
+         'must_use', 'non_exhaustive', 'cold', 'test'}
 DERIVES = {'Clone', 'Copy', 'Debug', 'PartialEq', 'Eq', 'PartialOrd', 'Ord',
            'Serialize', 'Deserialize', 'Default', 'Hash'}
 IDENT = re.compile(r'[A-Za-z_][A-Za-z_0-9]*\Z')
@@ -232,6 +232,7 @@ class Parser:
             elif name == 'derive':
                 if len(body) < 3 or body[1].text != '(' or body[-1].text != ')' or any(t.text not in DERIVES | {','} for t in body[2:-1]):
                     self.error('unsupported_derive', i)
+            elif name == 'test' and len(body) != 1: self.error('unsupported_attribute', i)
             elif name not in ATTRS: self.error('unsupported_attribute', i)
             i = end + 1
         return i, cfg, active
@@ -423,10 +424,13 @@ def main(argv=None):
     parser.add_argument('--files', nargs='+', required=True)
     parser.add_argument('--inventory', help='explicit public inventory for no-Git verification copies')
     parser.add_argument('--cfg-profile', help='explicit JSON map; no host target inference')
+    parser.add_argument('--module-paths', help='explicit JSON module override map; no path inference')
     args = parser.parse_args(argv)
     try:
         profile = json.loads(Path(args.cfg_profile).read_text(encoding='utf-8')) if args.cfg_profile else None
-        report = extract(ROOT, args.files, public_inventory(ROOT, args.inventory), profile)
+        module_paths = json.loads(Path(args.module_paths).read_text(encoding='utf-8')) if args.module_paths else {}
+        if not isinstance(module_paths, dict): raise ExtractionError('invalid_explicit_module_paths')
+        report = extract(ROOT, args.files, public_inventory(ROOT, args.inventory), profile, module_paths=module_paths)
     except ExtractionError as error:
         print(json.dumps({'error': error.code, 'path': error.path, 'line': error.line}, sort_keys=True), file=sys.stderr)
         return 2

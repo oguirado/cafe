@@ -12,7 +12,8 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 CAPSULE = 'core/src/capsule_registry.rs'
-FILES = sorted(['core/src/authority_journal.rs', 'core/src/capsule_pairing.rs', 'core/src/capsule_registry.rs', 'core/src/capture_frame_pool.rs', 'core/src/capture_health.rs', 'core/src/ffmpeg_recorder.rs', 'core/src/journal_replay.rs', 'core/src/main.rs', 'core/src/recorder_pacer.rs', 'core/src/windows_graphics_capture.rs', 'core/src/windows_journal_policy.rs', 'core/src/windows_window_registry.rs'])
+FILES = ['core/src/authority_auth.rs', 'core/src/authority_journal.rs', 'core/src/capsule_pairing.rs', 'core/src/capsule_registry.rs', 'core/src/capture_frame_pool.rs', 'core/src/capture_health.rs', 'core/src/capture_pipeline.rs', 'core/src/control_intents.rs', 'core/src/ffmpeg_recorder.rs', 'core/src/journal_replay.rs', 'core/src/main.rs', 'core/src/operator_protocol.rs', 'core/src/recorder_pacer.rs', 'core/src/runtime_effects.rs', 'core/src/runtime_main.rs', 'core/src/runtime_recording.rs', 'core/src/runtime_storage.rs', 'core/src/runtime_windows_security.rs', 'core/src/windows_auth.rs', 'core/src/windows_graphics_capture.rs', 'core/src/windows_journal_policy.rs', 'core/src/windows_window_registry.rs']
+MODULE_PATHS = {'core/src/authority_auth.rs::windows_auth': 'core/src/windows_auth.rs'}
 # Independently transcribed from reviewed P05 declarations, before extractor execution.
 GOLD = [
     ('SCHEMA', 14), ('MAX_ENVELOPE_BYTES', 17), ('Clock', 25), ('Role', 102),
@@ -22,27 +23,17 @@ GOLD = [
     ('Registry::new', 385), ('Registry::snapshot', 397),
     ('Registry::decode_and_apply', 409), ('Registry::apply', 416),
 ]
-JOURNAL_GOLD = [
-    ('JOURNAL_SCHEMA', 29), ('MAX_RECORD_BYTES', 32), ('JournalError', 46),
-    ('AppendState', 73), ('Record', 81), ('Pending', 95), ('Pending::state', 101),
-    ('Committed', 109), ('Committed::state', 116), ('Committed::sequence', 120),
-    ('Committed::event_id', 124), ('Committed::record_digest', 128),
-    ('Journal', 172), ('canonical_bytes', 193), ('Journal::open', 575),
-    ('Journal::stage_control', 631), ('Journal::commit', 685),
-    ('Journal::append_control', 728), ('Journal::append_media_intent', 738),
-    ('Journal::publish_media', 779), ('Journal::records', 861),
-    ('Journal::recovery_status', 866), ('Journal::interrupted_bytes', 871),
-]
+JOURNAL_GOLD = [('JOURNAL_SCHEMA', 29), ('MAX_RECORD_BYTES', 32), ('JournalError', 46), ('AppendState', 73), ('Record', 81), ('Pending', 95), ('Pending::state', 101), ('Committed', 109), ('Committed::state', 116), ('Committed::sequence', 120), ('Committed::event_id', 124), ('Committed::record_digest', 128), ('Journal', 239), ('canonical_bytes', 260), ('Journal::open', 648), ('Journal::stage_control', 704), ('Journal::commit', 758), ('Journal::append_control', 801), ('Journal::append_media_intent', 846), ('Journal::publish_media', 887), ('Journal::records', 969), ('Journal::recovery_status', 974), ('Journal::interrupted_bytes', 979)]
 REPLAY_GOLD = [('RecoveryStatus', 21), ('MediaState', 29), ('Recovery', 40), ('recover', 68)]
 WINDOW_GOLD = [('Rect',7),('WindowHandle',11),('WindowView',14),('FixtureWindow',22),('WindowError',29),('WindowRegistry',43),('WindowRegistry::new',46),('WindowRegistry::refresh_fixtures',47),('WindowRegistry::snapshots',85),('WindowRegistry::resolve',86),('WindowRegistry::invalidate_layout',94),('NativeAdapter',159),('NativeAdapter::new',165),('NativeAdapter::enumerate',169)]
-PAIRING_GOLD = [('Crop',7),('PairRequest',16),('Binding',31),('PairingBook',43),('PairingBook::new',48),('PairingBook::pair',54),('PairingBook::bindings',63),('PairingBook::current',67),('PairingBook::pair_by_executable',80),('PairError',87)]
+PAIRING_GOLD = [('Crop', 7), ('PairRequest', 16), ('Binding', 31), ('PairingBook', 48), ('PairingBook::new', 53), ('PairingBook::pair', 59), ('PairingBook::bindings', 90), ('PairingBook::current', 94), ('PairingBook::pair_by_executable', 107), ('PairError', 114)]
 HEALTH_GOLD = [('HealthPolicy',5),('BorderStatus',10),('CaptureState',13),('CaptureEvent',19),('HealthError',25),('CaptureHealth',31),('CaptureHealth::new',44),('CaptureHealth::event',61),('CaptureHealth::admit_frame',84),('CaptureHealth::status',118)]
 POOL_GOLD = [('PoolLimits',18),('BorrowedFrame',28),('PoolError',39),('FramePool',51),('FramePool::new',59),('FramePool::copy_from',89),('FramePool::available',140),('FramePool::in_use',145),('FramePool::capacity',150),('OwnedFrame',170),('OwnedFrame::pixels',182),('OwnedFrame::width',186),('OwnedFrame::height',190),('OwnedFrame::source_stride',195),('OwnedFrame::packed_stride',200),('OwnedFrame::source_time',205)]
-CAPTURE_GOLD = [('NativeSupport',27),('CaptureConfig',36),('CaptureError',48)]
-CAPTURE_PORTABLE_GOLD = [('native_support',80),('NativeCapture',85),('NativeCapture::start',91),('NativeCapture::take_latest',101),('NativeCapture::poll_state',105),('NativeCapture::border_status',109),('NativeCapture::stop',113)]
+CAPTURE_GOLD = [('NativeSupport', 27), ('CaptureConfig', 36), ('ObservedCaptureConfig', 48), ('ObservedCaptureConfig::resolve_size', 56), ('CaptureError', 68)]
+CAPTURE_PORTABLE_GOLD = [('native_support', 100), ('NativeCapture', 105), ('NativeCapture::start_observed', 111), ('NativeCapture::start', 114), ('NativeCapture::take_latest', 124), ('NativeCapture::poll_state', 128), ('NativeCapture::border_status', 132), ('NativeCapture::stop', 136)]
 PACER_GOLD = [('PacerProfile', 18), ('PacerProfile::validate', 27), ('PacerError', 48), ('PacerCounters', 59), ('OutputFrame', 67), ('Pacer', 83), ('Pacer::new', 94), ('Pacer::offer', 108), ('Pacer::select', 141), ('Pacer::counters', 201)]
 RECORDER_GOLD = [('Encoder', 15), ('Encoder::from_name', 17), ('Encoder::name', 18), ('EncoderUse', 21), ('VideoProfile', 23), ('VideoProfile::validate', 29), ('VideoProfile::frame_bytes', 33), ('RecorderError', 37), ('RecordingState', 39), ('RecorderCounters', 41), ('RecordingPlan', 43), ('RecordingReceipt', 44), ('Preflight', 45), ('Preflight::encoder', 46), ('Preflight::profile', 46), ('preflight', 109), ('Recorder', 131), ('Recorder::start', 148), ('Recorder::state', 187), ('Recorder::counters', 192), ('Recorder::pacer_counters', 197), ('Recorder::pid', 202), ('Recorder::queue_len', 207), ('Recorder::admit', 212), ('Recorder::pace', 239), ('Recorder::pump_one', 263), ('Recorder::interrupt', 300), ('Recorder::stop', 306)]
-SOURCE_HASHES = {'core/src/authority_journal.rs': '0c365d7d412de55e2c02a57d6665157642d846c575bdda699e6802d03c6d7f3c', 'core/src/capsule_registry.rs': '4e05d8fe4cb5abf357b30816ed2a1aca54299e1b264f7d0629acf2dfb987fd7d', 'core/src/journal_replay.rs': '16a92bb9817ae399055470bc762be738ea5997a6bc5e2130e2eea96d8ecbf720', 'core/src/main.rs': '0835f3c242d6d7d53a4d81539c6be5f1ecd3bf7c286e2bb54ac24fe6d0e39bd9', 'core/src/capsule_pairing.rs': 'e6055d47ba364809b8c22591dd47d23f5f74d8c1ba991831686c8d0eb7196835', 'core/src/windows_window_registry.rs': '84239abed2aa581d1d3b9559ea50c8ee5a0c259b5dd6241f708b71bf5af5da38', 'core/src/capture_health.rs': 'e8c64656ce7a26c86605eccf7f14581c9ce78b7a480858bac2e08636804a3058', 'core/src/capture_frame_pool.rs': '37471684096c063bf2aca5d3b6d7bd660521851176240bcebc029d7772a4d76d', 'core/src/windows_graphics_capture.rs': '39c92d83acb1cd6a815d17182af2a2e8497bb444ec6aea5260f0e16b6a76202e', 'core/src/windows_journal_policy.rs': '3e6087d78cc62d14c1d2586aefe90a44de70cc386cd47f366c2b2d2fb8f80ad9', 'core/src/ffmpeg_recorder.rs': '7a9f3e4a79dc0e2c7a77009b1be1fdcd0a3deb3e2e7ccd0d8022c8007fa3667a', 'core/src/recorder_pacer.rs': 'f3158372396284eeb1d7db6f6b1365bc69500b8d0114dadbfdbb148ea06a752b'}
+SOURCE_HASHES = {'core/src/authority_auth.rs': '48a6c281b455f1c4715bfe07bd465dbcbdc37533e3d9a686b1cdb792a4570801', 'core/src/authority_journal.rs': '550437d2bf5e4a1649540c11044f8155fe3afa729df98265858d1ae8b7b50679', 'core/src/capsule_pairing.rs': '15531f43311579e8804688afe361831c89b23e120204b982d27d26021324cff4', 'core/src/capsule_registry.rs': '4e05d8fe4cb5abf357b30816ed2a1aca54299e1b264f7d0629acf2dfb987fd7d', 'core/src/capture_frame_pool.rs': '37471684096c063bf2aca5d3b6d7bd660521851176240bcebc029d7772a4d76d', 'core/src/capture_health.rs': 'e8c64656ce7a26c86605eccf7f14581c9ce78b7a480858bac2e08636804a3058', 'core/src/capture_pipeline.rs': '2774ac72639828d5feb8997590034d5888d366903e34fa374a93443e09e992bb', 'core/src/control_intents.rs': '17b6973fa07840d8eb23f326085c623ed459fa989fc0bd03f423a278fca3d20e', 'core/src/ffmpeg_recorder.rs': '7a9f3e4a79dc0e2c7a77009b1be1fdcd0a3deb3e2e7ccd0d8022c8007fa3667a', 'core/src/journal_replay.rs': '16a92bb9817ae399055470bc762be738ea5997a6bc5e2130e2eea96d8ecbf720', 'core/src/main.rs': 'd0bae3f75da5b6a36d976233804d4f19d0f7005475b214794aec42c35ea09f08', 'core/src/operator_protocol.rs': 'b55e1e0484af43c92f3a09bb42992e9581122f577c44dc615c08d5e7bb3c47ac', 'core/src/recorder_pacer.rs': 'f3158372396284eeb1d7db6f6b1365bc69500b8d0114dadbfdbb148ea06a752b', 'core/src/runtime_effects.rs': '013751d3f8a587c32cd2d3bf2f9ddb606508c6019a8364795497493075bf34a4', 'core/src/runtime_main.rs': '6080dde95631e6703a980480080f0304a90b2c3cd1bb3a2e105e37c260062bee', 'core/src/runtime_recording.rs': '4a8643056fe729e853d002d2636ee88d23b90436f62343abb4d4349e9dea6d2c', 'core/src/runtime_storage.rs': '8207b31c1a1849fe4dc6251988b31cf77f98a90aca6670f3fe8ba4e9be13c169', 'core/src/runtime_windows_security.rs': '63e4402df9e1ef76cac4e901e3b6b9142cecb7ad8a82b732b18b5b0a58f59c21', 'core/src/windows_auth.rs': '780df01806bb8dab45ec2139e103ee488c639f97afcf418ebbf75c4e3dc209b7', 'core/src/windows_graphics_capture.rs': '4b13ac75de3eff98290a0fd683ac3b86cfbb83a88ef0f4b769e83265befb586a', 'core/src/windows_journal_policy.rs': '3e6087d78cc62d14c1d2586aefe90a44de70cc386cd47f366c2b2d2fb8f80ad9', 'core/src/windows_window_registry.rs': '84239abed2aa581d1d3b9559ea50c8ee5a0c259b5dd6241f708b71bf5af5da38'}
 SPEC = importlib.util.spec_from_file_location('cafe_rust_extractor', ROOT / 'tools/extract_rust.py')
 x = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = x
@@ -58,12 +49,18 @@ def expected_gold():
              'name': name.split('::')[-1], 'line': line, 'cfg': []} for name, line in GOLD]
 
 
+AUTH_GOLD = [('MAX_LINE',11),('read_frame',52),('write_frame',80),('make_frame',85),('validate_authority_frame',91),('validate_connector_frame',99),('lease_frame',103),('hmac_sha256',110),('BrokerAuthority',222),('BrokerAuthority::status',301)]
+PIPELINE_GOLD = [('FrameSource',19),('FrameSource::take_latest',21),('FrameSource::state',23),('FrameSource::stop',25),('NativeSource',29),('NativeSource::new',34),('Tick',55),('PipelineError',63),('CapturePipeline',70),('CapturePipeline::new',78),('CapturePipeline::tick',94),('CapturePipeline::stop',155),('CapturePipeline::abort',181),('CapturePipeline::recorder_state',191),('CapturePipeline::recorder_counters',196)]
+
 def expected_inventory():
     # All rows originate in manually transcribed tuples, never parsed source output.
     def rows(path, module, pairs):
         return [{'path': path, 'symbol': 'cafe_core::' + module + '::' + name,
                  'name': name.split('::')[-1], 'line': line, 'cfg': []} for name, line in pairs]
-    return {'core/src/recorder_pacer.rs': rows('core/src/recorder_pacer.rs','recorder_pacer',PACER_GOLD),
+    return {**{path:[] for path in FILES},
+            'core/src/authority_auth.rs': sorted(rows('core/src/authority_auth.rs','authority_auth',AUTH_GOLD)+[dict(row,cfg=['any(unix,windows)']) for row in rows('core/src/authority_auth.rs','authority_auth',[('BrokerAuthority::start',225)])],key=lambda row:(row['line'],row['symbol'])),
+            'core/src/capture_pipeline.rs': rows('core/src/capture_pipeline.rs','capture_pipeline',PIPELINE_GOLD),
+            'core/src/recorder_pacer.rs': rows('core/src/recorder_pacer.rs','recorder_pacer',PACER_GOLD),
             'core/src/ffmpeg_recorder.rs': rows('core/src/ffmpeg_recorder.rs','ffmpeg_recorder',RECORDER_GOLD),
             'core/src/windows_journal_policy.rs': [],
             'core/src/authority_journal.rs': rows('core/src/authority_journal.rs', 'authority_journal', JOURNAL_GOLD),
@@ -92,12 +89,24 @@ class TestRustExtraction(unittest.TestCase):
         self.source(text)
         return x.extract(self.root, self.inventory, self.inventory, profile)['files'][0]['symbols']
 
+    def test_builtin_test_attribute_in_inactive_test_module_preserves_source_surface(self):
+        source='#[cfg(test)]\nmod tests { #[test] fn check() {} }\npub fn live() {}\n'
+        rows=self.extract(source, {'windows':False,'unix':True,'test':False,'target_os':'linux'})
+        self.assertEqual(rows, [{'path':self.inventory[0], 'symbol':'cafe_core::live', 'name':'live', 'line':3, 'cfg':[]}])
+
+    def test_unknown_or_parameterized_test_attribute_still_abstains(self):
+        for attribute in ['custom_codegen', 'test(extra)']:
+            source=f'#[cfg(test)]\nmod tests {{ #[{attribute}] fn check() {{}} }}\npub fn live() {{}}\n'
+            with self.subTest(attribute=attribute),self.assertRaises(x.ExtractionError) as error:
+                self.extract(source, {'windows':False,'unix':True,'test':False,'target_os':'linux'})
+            self.assertEqual(error.exception.code,'unsupported_attribute')
+
     def test_handwritten_current_public_inventory(self):
         inventory, _source = q.load_inventory(ROOT, os.environ.get('CAFE_ROUTER_INVENTORY'))
-        report = x.extract(ROOT, FILES, inventory, {'windows':False,'unix':True,'test':False})
+        report = x.extract(ROOT, FILES, inventory, {'windows':False,'unix':True,'test':False,'target_os':'linux'}, module_paths=MODULE_PATHS)
         self.assertEqual(report['schema'], 'cafe.rust-surface.v1')
         self.assertEqual(report['crate'], 'cafe_core')
-        self.assertEqual(report['cfg_profile'], {'windows':False,'unix':True,'test':False})
+        self.assertEqual(report['cfg_profile'], {'windows':False,'unix':True,'test':False,'target_os':'linux'})
         self.assertEqual({v['path']: v['symbols'] for v in report['files']}, expected_inventory())
         self.assertEqual({v['path']: v['source_sha256'] for v in report['files']}, SOURCE_HASHES)
         for row in [row for file in report['files'] for row in file['symbols']]:
@@ -111,7 +120,7 @@ class TestRustExtraction(unittest.TestCase):
         before = p.read_text()
         self.assertEqual(before.count('pub fn decode_envelope('), 1)
         p.write_text(before.replace('pub fn decode_envelope(', 'fn decode_envelope(', 1))
-        report = x.extract(self.root, FILES, FILES, {'windows':False,'unix':True,'test':False})
+        report = x.extract(self.root, FILES, FILES, {'windows':False,'unix':True,'test':False,'target_os':'linux'}, module_paths=MODULE_PATHS)
         with self.assertRaises(AssertionError):
             self.assertEqual(next(v for v in report['files'] if v['path'] == CAPSULE)['symbols'], expected_gold())
         self.assertNotEqual(next(v for v in report['files'] if v['path'] == CAPSULE)['source_sha256'], SOURCE_HASHES[CAPSULE])
@@ -298,10 +307,25 @@ impl Dispatch<'_> { pub fn complete(&self) {} }
             with self.subTest(profile=profile), self.assertRaises(x.ExtractionError): self.extract(text, profile)
         with self.assertRaises(x.ExtractionError): self.extract('#[cfg(windows)] pub extern "system" fn hidden() {}', {'windows': False})
 
+    def test_cli_missing_and_malformed_module_maps_abstain(self):
+        cfg=self.root/'cfg.json';cfg.write_text(json.dumps({'windows':False,'unix':True,'test':False,'target_os':'linux'}))
+        mapping=self.root/'modules.json'
+        base=[sys.executable,'-B','tools/extract_rust.py','--cfg-profile',str(cfg),'--files',*FILES]
+        if os.environ.get('CAFE_ROUTER_INVENTORY'):base+=['--inventory',os.environ['CAFE_ROUTER_INVENTORY']]
+        for value in ['missing','null','[]','{"core/src/authority_auth.rs::windows_auth":"../escape.rs"}']:
+            command=list(base)
+            if value!='missing':mapping.write_text(value);command+=['--module-paths',str(mapping)]
+            with self.subTest(value=value):
+                result=subprocess.run(command,cwd=ROOT,capture_output=True)
+                self.assertEqual(result.returncode,2)
+                self.assertEqual(result.stdout,b'')
+                self.assertIn('error',json.loads(result.stderr))
+
     def test_cli_determinism_and_source_hashes(self):
         env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
-        cfg = self.root / 'cfg.json'; cfg.write_text('{"windows":false,"unix":true,"test":false}')
-        command = [sys.executable, '-B', 'tools/extract_rust.py', '--cfg-profile', str(cfg), '--files', *FILES]
+        cfg = self.root / 'cfg.json'; cfg.write_text('{"windows":false,"unix":true,"test":false,"target_os":"linux"}')
+        mapping = self.root / 'modules.json'; mapping.write_text(json.dumps(MODULE_PATHS))
+        command = [sys.executable, '-B', 'tools/extract_rust.py', '--cfg-profile', str(cfg), '--module-paths', str(mapping), '--files', *FILES]
         snapshot = os.environ.get('CAFE_ROUTER_INVENTORY')
         if snapshot:
             command += ['--inventory', snapshot]

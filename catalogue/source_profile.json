@@ -92,6 +92,18 @@
       "symbol_prefix": "cafe_core::capture_health::"
     },
     {
+      "path": "core/src/capture_pipeline.rs",
+      "id": "rust-capture-pipeline",
+      "language": "rust",
+      "symbol_prefix": "cafe_core::capture_pipeline::"
+    },
+    {
+      "path": "core/src/control_intents.rs",
+      "id": "rust-control-intents",
+      "language": "rust",
+      "symbol_prefix": "cafe_core::control_intents::"
+    },
+    {
       "id": "rust-ffmpeg-recorder",
       "language": "rust",
       "path": "core/src/ffmpeg_recorder.rs",
@@ -110,6 +122,12 @@
       "symbol_prefix": "cafe_core::"
     },
     {
+      "path": "core/src/operator_protocol.rs",
+      "id": "rust-operator-protocol",
+      "language": "rust",
+      "symbol_prefix": "cafe_core::operator_protocol::"
+    },
+    {
       "id": "rust-python-supervisor",
       "language": "rust",
       "path": "core/src/python_connector_supervisor.rs",
@@ -120,6 +138,36 @@
       "language": "rust",
       "path": "core/src/recorder_pacer.rs",
       "symbol_prefix": "cafe_core::recorder_pacer::"
+    },
+    {
+      "path": "core/src/runtime_effects.rs",
+      "id": "rust-runtime-effects",
+      "language": "rust",
+      "symbol_prefix": "cafe_core::runtime_effects::"
+    },
+    {
+      "path": "core/src/runtime_main.rs",
+      "id": "rust-runtime-main",
+      "language": "rust",
+      "symbol_prefix": "cafe_core::runtime_main::"
+    },
+    {
+      "path": "core/src/runtime_recording.rs",
+      "id": "rust-runtime-recording",
+      "language": "rust",
+      "symbol_prefix": "cafe_core::runtime_recording::"
+    },
+    {
+      "path": "core/src/runtime_storage.rs",
+      "id": "rust-runtime-storage",
+      "language": "rust",
+      "symbol_prefix": "cafe_core::runtime_storage::"
+    },
+    {
+      "path": "core/src/runtime_windows_security.rs",
+      "id": "rust-runtime-win-acl",
+      "language": "rust",
+      "symbol_prefix": "cafe_core::runtime_windows_security::"
     },
     {
       "id": "rust-windows-auth",
@@ -194,6 +242,12 @@
       "symbol_prefix": "cafe_shell::main::rendererAssets::"
     },
     {
+      "path": "src/main/runtimeBackend.js",
+      "id": "js-runtime-backend",
+      "language": "js",
+      "symbol_prefix": "cafe_shell::main::runtimeBackend::"
+    },
+    {
       "id": "js-shell-security",
       "language": "js",
       "path": "src/main/shellSecurity.js",
@@ -218,6 +272,12 @@
       "symbol_prefix": "cafe_shell::preload::preloadSecurity::"
     },
     {
+      "path": "src/renderer/control.js",
+      "id": "js-renderer-control",
+      "language": "js",
+      "symbol_prefix": "cafe_shell::renderer::control::"
+    },
+    {
       "id": "backend-book",
       "language": "markdown",
       "path": "subjects/backend/page.md",
@@ -229,31 +289,45 @@
       "cfg": {
         "windows": false,
         "unix": true,
-        "test": false
+        "test": false,
+        "target_os": "linux"
       },
       "crate": "cafe_core",
       "entry": "core/src/main.rs",
       "files": [
+        "core/src/authority_auth.rs",
         "core/src/authority_journal.rs",
         "core/src/capsule_pairing.rs",
         "core/src/capsule_registry.rs",
         "core/src/capture_frame_pool.rs",
         "core/src/capture_health.rs",
+        "core/src/capture_pipeline.rs",
+        "core/src/control_intents.rs",
         "core/src/ffmpeg_recorder.rs",
         "core/src/journal_replay.rs",
         "core/src/main.rs",
+        "core/src/operator_protocol.rs",
         "core/src/recorder_pacer.rs",
+        "core/src/runtime_effects.rs",
+        "core/src/runtime_main.rs",
+        "core/src/runtime_recording.rs",
+        "core/src/runtime_storage.rs",
+        "core/src/runtime_windows_security.rs",
+        "core/src/windows_auth.rs",
         "core/src/windows_graphics_capture.rs",
         "core/src/windows_journal_policy.rs",
         "core/src/windows_window_registry.rs"
       ],
-      "module_paths": {}
+      "module_paths": {
+        "core/src/authority_auth.rs::windows_auth": "core/src/windows_auth.rs"
+      }
     },
     {
       "cfg": {
         "unix": true,
         "windows": false,
-        "test": false
+        "test": false,
+        "target_os": "linux"
       },
       "crate": "cafe_authority_fixture",
       "entry": "core/tests/authority_fixture.rs",

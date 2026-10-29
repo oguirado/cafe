@@ -42,6 +42,26 @@ pub struct CaptureConfig {
     pub access_timeout_ms: u64,
 }
 
+/// Observed-size startup. Only resource/health budgets are caller-supplied.
+/// Dimensions come from the identity-checked native item, never window bounds.
+#[derive(Clone, Copy, Debug)]
+pub struct ObservedCaptureConfig {
+    pub pool: PoolLimits,
+    pub health: HealthPolicy,
+    pub borderless: bool,
+    pub access_timeout_ms: u64,
+}
+impl ObservedCaptureConfig {
+    /// Reject nonpositive/oversized observed sizes before native allocation.
+    pub fn resolve_size(self,width:i32,height:i32)->Result<CaptureConfig,CaptureError> {
+        let width=u32::try_from(width).map_err(|_|CaptureError::Geometry)?;
+        let height=u32::try_from(height).map_err(|_|CaptureError::Geometry)?;
+        let bytes=(width as usize).checked_mul(height as usize).and_then(|n|n.checked_mul(4)).ok_or(CaptureError::Geometry)?;
+        if width==0 || height==0 || width>self.pool.max_width || height>self.pool.max_height || bytes>self.pool.max_frame_bytes || self.pool.slots==0 || self.health.stall_budget.0==0 || self.access_timeout_ms==0 {return Err(CaptureError::Geometry);}
+        Ok(CaptureConfig{width,height,pool:self.pool,health:self.health,borderless:self.borderless,access_timeout_ms:self.access_timeout_ms})
+    }
+}
+
 /// Typed capture failure. Sanitized codes only; no native identifiers,
 /// pointers, or OS-localized strings.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,6 +108,9 @@ pub struct NativeCapture {
 
 #[cfg(not(windows))]
 impl NativeCapture {
+    pub async fn start_observed(_registry:&WindowRegistry,_adapter:&mut NativeAdapter,_handle:WindowHandle,_generation:Clock,_config:ObservedCaptureConfig)->Result<Self,CaptureError> {
+        Err(CaptureError::Unsupported)
+    }
     pub async fn start(
         _registry: &WindowRegistry,
         _adapter: &mut NativeAdapter,
@@ -542,6 +565,17 @@ pub struct NativeCapture {
 
 #[cfg(windows)]
 impl NativeCapture {
+    /// Sample checked native geometry; existing start obtains its own fresh
+    /// identity permit and checks the size again. A race rejects, never guesses.
+    pub async fn start_observed(registry:&WindowRegistry,adapter:&mut NativeAdapter,handle:WindowHandle,generation:Clock,config:ObservedCaptureConfig)->Result<Self,CaptureError> {
+        let observed={
+            let _apartment=ApartmentGuard::initialize()?;
+            let permit=registry.capture_permit(&handle,generation,adapter)?;
+            let size=permit.item().Size().map_err(|_|CaptureError::Device)?;
+            config.resolve_size(size.Width,size.Height)?
+        };
+        Self::start(registry,adapter,handle,generation,observed).await
+    }
     pub async fn start(
         registry: &WindowRegistry,
         adapter: &mut NativeAdapter,

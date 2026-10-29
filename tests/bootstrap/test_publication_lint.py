@@ -22,6 +22,13 @@ def policy(value):
 
 
 class TestPublicationLint(unittest.TestCase):
+    def test_reviewed_runtime_words_do_not_create_filename_exceptions(self):
+        for name in ['core/src/capture_pipeline.rs','core/src/control_intents.rs','core/src/operator_protocol.rs','core/src/runtime_effects.rs','core/src/runtime_recording.rs','src/main/runtimeBackend.js']:
+            self.assertTrue(P.filename_ok(name),name)
+        for name in ['core/src/captura.py','runtime/unreviewedforeignword.py','core/src/registro_ventanas.rs']:
+            self.assertFalse(P.filename_ok(name),name)
+
+
     def test_home_posix_windows_and_unc_are_rejected(self):
         for value in ['/'+ 'home' +'/someone/file', '/'+ 'Users' +'/someone/file', 'C:'+chr(92)+'Users'+chr(92)+'someone',chr(92)*2+'host'+chr(92)+'share']:
             with self.subTest(kind='constructed home or UNC'):

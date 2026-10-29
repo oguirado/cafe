@@ -49,7 +49,7 @@
 /**
  * Minimal structural child handle returned by the injected spawn.
  * @typedef {object} ChildAdapter
- * @property {number|undefined} pid
+ * @property {number} [pid]
  * @property {EventSource} stdout
  * @property {EventSource} stderr
  * @property {StdinAdapter} stdin
@@ -79,8 +79,8 @@
  * @property {(chunk: Uint8Array) => void} [onStderr] Optional stderr observer.
  */
 
-const CONTROL_SCHEMA = 'cafe.control.v1';
-const INTENT_KIND = 'intent';
+const CONTROL_SCHEMA = 'cafe.operator.v1';
+const INTENT_KIND = 'operator_intent';
 const DEFAULT_COMMAND = 'cafe-core';
 const DEFAULT_MAX_LINE_BYTES = 4096;
 const DEFAULT_MAX_QUEUE_BYTES = 16384;
@@ -367,9 +367,10 @@ function createBackendSupervisor(options) {
   /**
    * Admits one closed intent envelope into the bounded stdin queue.
    * @param {unknown} payload
+   * @param {boolean} [hostSelection] Host-owned picker capability, never IPC data.
    * @returns {QueuedReceipt}
    */
-  function submitIntent(payload) {
+  function submitIntent(payload, hostSelection = false) {
     if (availability !== 'available' || authorityEpoch === null || revision === null) {
       throw new Error('backend unavailable: submitIntent requires a fresh snapshot');
     }
@@ -400,6 +401,9 @@ function createBackendSupervisor(options) {
     }
     if (envelope.expected_revision !== revision) {
       throw new Error('stale intent: expected_revision mismatch');
+    }
+    if (isPlainObject(envelope.body) && ['configure_ffmpeg', 'set_folder'].includes(String(/** @type {Record<string, unknown>} */ (envelope.body).op)) && !hostSelection) {
+      throw new Error('host file selection required');
     }
     if (!isPlainObject(envelope.body)) {
       throw new Error('invalid intent: body must be a plain object');
@@ -516,7 +520,8 @@ function createBackendSupervisor(options) {
    * @returns {void}
    */
   function dispose() {
-    if (child !== null && childAlive) {
+    if (child !== null && childAlive && pid !== null && Number.isSafeInteger(pid) &&
+        pid > 1 && pid !== process.pid && child.pid === pid) {
       childAlive = false;
       try {
         child.kill();
@@ -798,7 +803,8 @@ function createBackendSupervisor(options) {
     setUnavailable('backend child closed');
   }
 
-  return { start, getStatus, handle, subscribe, dispose };
+  return { start, getStatus, handle, subscribe, dispose,
+    submitHostSelection: (/** @type {unknown} */ payload) => submitIntent(payload, true) };
 }
 
 module.exports = { createBackendSupervisor };

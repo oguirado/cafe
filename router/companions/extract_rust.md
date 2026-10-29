@@ -433,3 +433,19 @@ no reachability, and no host inference. It makes no full parser,
 compiler, typechecking, or macro-expansion claim. Declarations outside
 the allowlist refuse rather than degrade. Findings outside the closed
 review list are deferred, not marked as failures.
+
+### Appendix — Bounded Rust extraction update
+
+This is bounded lexical extraction, not a full Rust semantic parser.
+
+The parent added exact builtin `#[test]` recognition for inline `#[cfg(test)]` modules. Only bare `#[test]` is accepted; `#[test(args)]` and unknown code-generation attributes still explicitly abstain, even inside inactive modules.
+
+No change to `macro_rules`, public-glob, or unknown-`cfg` abstentions, nor to public visibility rules; `pub(crate)` remains excluded from the external public surface.
+
+The CLI now accepts `--module-paths` with an explicit JSON object mapping `source_path::module` to a repo-relative target, using existing API validation. There is no inferred mapping and no scanning; malformed or non-object JSON fails. API support already existed; only CLI plumbing is new.
+
+Production main now imports more modules. Tests were updated from manually inspected numbered Rust declarations and explicit whole-source closure; golden entries are never generated from extractor output.
+
+The source profile explicitly declares `target_os=linux` for the offline source view in all shared compiled contexts; this is not native Windows execution evidence.
+
+Rebuild with the complete existing command: `python3 -B tools/build_cafe_nodes.py`. Run schema, byte-identical index and CI gates after rebuilding.

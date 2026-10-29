@@ -13,7 +13,7 @@ struct Allocation(*mut core::ffi::c_void);
 impl Drop for Allocation {fn drop(&mut self){unsafe{let _=LocalFree(Some(HLOCAL(self.0)));}}}
 struct Token(HANDLE);
 impl Drop for Token {fn drop(&mut self){unsafe{let _=CloseHandle(self.0);}}}
-fn owner_sid()->Result<String,String>{
+pub(crate) fn owner_sid()->Result<String,String>{
     let mut handle=HANDLE::default();
     // SAFETY: valid owned output handle; RAII closes every successful open.
     unsafe{OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&mut handle)}.map_err(|_|"rendezvous_owner_failed")?;

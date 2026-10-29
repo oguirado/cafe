@@ -177,20 +177,26 @@ test('unbound production adapter is visibly unavailable, never fixture success',
 });
 
 test('real owned child survives renderer reload with unchanged authority count and revokes old frame', async () => {
-  const f = nativeFixture(); const children = [], owned = new Set(); let starts = 0;
-  const script = "process.stdout.write(JSON.stringify({kind:'snapshot',authority_epoch:'9007199254740993',revision:'0',state:{recording:true}})+'\\n');process.stdin.resume();setInterval(()=>{},1000)";
+  const f = nativeFixture(); const children = [], owned = new Set(); let starts = 0, subscriptions = 0, disposals = 0;
+  const script = "process.stdout.write(JSON.stringify({kind:'snapshot',authority_epoch:'9007199254740993',revision:'0',state:{recording:true}})+'\\n');process.stdin.on('data',()=>process.stdout.write(JSON.stringify({kind:'snapshot',authority_epoch:'9007199254740993',revision:'1',state:{recording:true}})+'\\n'));setInterval(()=>{},1000)";
   const shell = await createDesktopShell(f.electron, { createBackend: (bindings) => {
     const backend = createBackendSupervisor({ ...bindings, command: process.execPath, args: ['-e', script], spawn: (command, args, options) => {
       starts++; const child = spawn(command, args, options); children.push(child); owned.add(child); return security.ownedChildAdapter(child, owned);
-    } }); return backend;
+    } }); return { ...backend, subscribe(caller, listener) { subscriptions++; const off=backend.subscribe(caller,listener); let active=true; return ()=>{ assert.equal(active,true); active=false; disposals++; off(); }; } };
   } });
   try {
     const win = shell.getWindow(); const old = win.webContents.mainFrame; const read = f.handlers.get('cafe:getSnapshot');
     await until(() => read(eventFor(win.webContents)).availability === 'available');
+    assert.equal(subscriptions,1); assert.equal(disposals,0);
     const first = read(eventFor(win.webContents)); assert.equal(first.authority_epoch, '9007199254740993'); assert.equal(first.pid, null);
     win.webContents.mainFrame = { url: security.BOOT_URL, detached: false, parent: null }; win.webContents.emit('did-finish-load');
+    assert.equal(subscriptions,2); assert.equal(disposals,1);
+    win.webContents.emit('did-finish-load'); assert.equal(subscriptions,2); assert.equal(disposals,1);
     assert.throws(() => read(eventFor(win.webContents, old)), /DENIED/);
     assert.equal(read(eventFor(win.webContents)).state.recording, true); assert.equal(starts, 1); assert.equal(children.length, 1);
+    f.handlers.get('cafe:submitIntent')(eventFor(win.webContents), {schema:'cafe.operator.v1',kind:'operator_intent',request_id:'reload-stream',authority_epoch:'9007199254740993',expected_revision:'0',body:{op:'snapshot'}});
+    await until(() => win.webContents.sent.some(message=>message.channel==='cafe:snapshot'&&message.value.revision==='1'));
+    assert.equal(starts,1);
     assert.ok(children[0].pid > 1 && children[0].pid !== process.pid);
   } finally {
     shell.dispose();
@@ -198,6 +204,7 @@ test('real owned child survives renderer reload with unchanged authority count a
       if (child.exitCode === null && child.signalCode === null) await Promise.race([once(child, 'exit'), delay(3000).then(() => { throw Error('owned child not reaped'); })]);
     }
   }
+  assert.equal(disposals,2);
 });
 
 test('signal adapter never calls kill for self, sentinel or unknown child', () => {
@@ -214,8 +221,16 @@ test('signal adapter never calls kill for self, sentinel or unknown child', () =
 
 test('actual Electron browser entry starts the secure shell without an external caller', async () => {
   const f = nativeFixture(); const source = fs.readFileSync(path.resolve(__dirname, '../../src/main/index.js'), 'utf8');
-  const entry = { exports: {} };
+  const entry = { exports: {} }; let factoryCalls = 0;
+  f.electron.app.getPath = () => path.resolve(__dirname, 'synthetic-user-data');
   const imports = (name) => {
+    if (name === './runtimeBackend') return { createPackagedBackend: (ctx) => {
+      factoryCalls++; assert.equal(ctx.authorizedOrigin, 'cafe://app');
+      assert.equal(ctx.resourcesPath, 'synthetic-resources');
+      assert.equal(ctx.runtimeRoot, path.join(f.electron.app.getPath(), 'authority'));
+      return { start: () => {}, dispose: () => {}, subscribe: () => () => {} };
+    } };
+
     if (name === 'electron') return f.electron;
     if (name === './shellSecurity') return security;
     if (name === './rendererAssets') return require('../../src/main/rendererAssets');
@@ -224,8 +239,8 @@ test('actual Electron browser entry starts the secure shell without an external 
   };
   imports.main = entry;
   vm.runInNewContext(source, { module: entry, exports: entry.exports, require: imports,
-    process: { type: 'browser', versions: { electron: '44.9.2' }, exitCode: 0 } }, { timeout: 1000 });
-  try { await until(() => f.windows.length === 1); assert.equal(f.windows[0].loaded, security.BOOT_URL); }
+    process: { type: 'browser', resourcesPath: 'synthetic-resources', versions: { electron: '44.9.2' }, exitCode: 0 } }, { timeout: 1000 });
+  try { await until(() => f.windows.length === 1); assert.equal(f.windows[0].loaded, security.BOOT_URL); assert.equal(factoryCalls, 1); }
   finally { f.electron.app.emit('before-quit'); }
 });
 
@@ -236,4 +251,42 @@ test('failed authority startup removes privileged handlers and propagates only a
     dispose() { disposed++; },
   }) }), (error) => error.message === 'SHELL_BOOT_REJECTED');
   assert.equal(disposed, 1); assert.equal(f.handlers.size, 0);
+});
+
+// Host file selection never trusts a path/hash from the renderer.
+test('native executable selection admits only exact dialog requests and rechecks the frame', async () => {
+  const f = nativeFixture(); const win = new f.electron.BrowserWindow({});
+  let selections = 0; const submissions = [];
+  const backend = { getStatus: snapshot, submitHostSelection: value => { submissions.push(value); return { queued: true }; },
+    handle: () => { throw Error('raw host selection denied'); } };
+  const request = { schema: 'cafe.operator.v1', kind: 'operator_intent', request_id: 'host-select',
+    authority_epoch: snapshot().authority_epoch, expected_revision: snapshot().revision, body: { op: 'choose_ffmpeg' } };
+  let release;const picked = new Promise(resolve => { release = resolve; });
+  security.bindNativeIpc(f.electron.ipcMain, () => win, () => backend, async () => { selections++; return picked; });
+  const invoke = f.handlers.get('cafe:submitIntent');
+  assert.throws(() => invoke(eventFor(win.webContents), { ...request, body: { op: 'choose_ffmpeg', path: 'untrusted' } }));
+  assert.equal(selections, 0);
+  const event = eventFor(win.webContents); const pending = invoke(event, request);
+  assert.equal(selections, 1);
+  win.webContents.mainFrame = { ...win.webContents.mainFrame };
+  release({ path: 'native-dialog-only', sha256: 'a'.repeat(64) });
+  await assert.rejects(pending, /IPC_REQUEST_REJECTED/);assert.equal(submissions.length, 0);
+});
+test('native executable choice replaces the body and reaches only the host capability', async () => {
+  const f = nativeFixture(); const win = new f.electron.BrowserWindow({});const submissions = [];
+  const backend = { getStatus: snapshot, submitHostSelection: value => { submissions.push(value);return { queued: true }; },handle: () => { throw Error('not expected'); } };
+  security.bindNativeIpc(f.electron.ipcMain, () => win, () => backend, async () => ({ path: 'native-dialog-only', sha256: 'b'.repeat(64) }));
+  const request = { schema: 'cafe.operator.v1', kind: 'operator_intent', request_id: 'host-select', authority_epoch: snapshot().authority_epoch, expected_revision: snapshot().revision, body: { op: 'choose_ffmpeg' } };
+  assert.deepEqual(await f.handlers.get('cafe:submitIntent')(eventFor(win.webContents), request), { queued: true });
+  assert.deepEqual(submissions[0].body, { op: 'configure_ffmpeg', path: 'native-dialog-only', sha256: 'b'.repeat(64) });
+});
+
+test('native folder choice is closed and never accepts a renderer path', async () => {
+  const f = nativeFixture(); const win = new f.electron.BrowserWindow({});const submitted=[];let choices=0;
+  const backend={getStatus:snapshot,submitHostSelection:value=>{submitted.push(value);return {queued:true};},handle:()=>{throw Error('raw path denied');}};
+  security.bindNativeIpc(f.electron.ipcMain,()=>win,()=>backend,undefined,async()=>{choices++;return {folder:'native-directory-only'};});
+  const request={schema:'cafe.operator.v1',kind:'operator_intent',request_id:'choose-folder',authority_epoch:snapshot().authority_epoch,expected_revision:snapshot().revision,body:{op:'choose_folder'}};
+  const invoke=f.handlers.get('cafe:submitIntent');
+  assert.throws(()=>invoke(eventFor(win.webContents),{...request,body:{op:'choose_folder',folder:'renderer-value'}}));assert.equal(choices,0);
+  assert.deepEqual(await invoke(eventFor(win.webContents),request),{queued:true});assert.equal(choices,1);assert.deepEqual(submitted[0].body,{op:'set_folder',folder:'native-directory-only'});
 });

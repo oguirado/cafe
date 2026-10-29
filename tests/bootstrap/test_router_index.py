@@ -60,7 +60,7 @@ class TestRouterIndex(unittest.TestCase):
             ('cafe_core::capsule_registry::decode_envelope', 'core/src/capsule_registry.rs', 293, 'decode_envelope'),
             ('cafe_shell::preload::cafeBridge::createCafeBridge::getSnapshot', 'src/preload/cafeBridge.js', 201, 'getSnapshot'),
             ('cafe.authority_channel.serve_connector', 'connectors/cafe/authority_channel.py', 27, 'serve_connector'),
-            ('cafe_authority_fixture::authority_auth::hmac_sha256', 'core/src/authority_auth.rs', 64, 'hmac_sha256')]
+            ('cafe_authority_fixture::authority_auth::hmac_sha256', 'core/src/authority_auth.rs', 110, 'hmac_sha256')]
         for key, path, line, name in expected:
             with self.subTest(key=key):
                 result = R.resolve(ROOT, key, inventory())
@@ -162,7 +162,7 @@ class TestRouterIndex(unittest.TestCase):
     def test_shared_authentication_roots_preserve_admitted_fixture_namespace(self):
         before = B.compose(self.root, self.inventory)[C.SYMBOLS]
         source = self.root / 'core/src/main.rs'
-        source.write_text(source.read_text() + '\nmod authority_auth;\nmod python_connector_supervisor;\n')
+        source.write_text(source.read_text() + ('\nmod authority_auth;\n' if '\nmod authority_auth;' not in source.read_text() else '') + '\nmod python_connector_supervisor;\n')
         profile = C.load(self.root, C.PROFILE)
         main = next(row for row in profile['rust_roots'] if row['crate'] == 'cafe_core')
         main['files'] = sorted(set(main['files']) | {'core/src/authority_auth.rs',

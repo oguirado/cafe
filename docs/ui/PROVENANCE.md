@@ -127,10 +127,23 @@ time; it does not create a browser process global. Authored JavaScript and
 script-setup JSDoc are checked without authored TypeScript. Copied component
 bodies are not rewritten to satisfy the checker.
 
-The workspace remains a presentation shell: product controls are disabled with
-Runtime unavailable. Its local theme switch has no authority effect. A real
-renderer smoke gate captures both themes; this is not a native Windows or
-recording/OBS/Twitch acceptance claim. Native packaged Windows verification is
-pending the operator's PC run.
+The control renderer submits named intents through the existing three-method
+frozen preload. Capsule creation and a native directory selection have been
+exercised against the actual Rust authority on Linux, including a renderer
+reload with the same authority process. Queued requests are never displayed as
+committed effects. Capture on Linux is explicitly unsupported; recording needs
+native Windows capture and a preflighted approved hardware encoder. OBS and
+chat controls remain unavailable until their runtime owners are connected.
+
+The local smoke command requires an actual built authority binary and an
+approved Electron installation:
+Run `tools/smoke_design.js` with Node, supplying the Electron executable,
+authority executable and screenshot directory through its three named options.
+The tool rejects missing or reordered options.
+It launches the real shell and authority, injects only the native directory
+picker result as test input, creates synthetic capsules, checks reload
+continuity, and captures light and dark themes. This is a Linux integration
+check, not a Windows PE or native recording acceptance claim. Native packaged
+Windows verification remains pending the operator's PC run.
 
 Authored entry and wrapper: [main.js](../../ui/src/main.js), [App.vue](../../ui/src/App.vue), [cafe.css](../../ui/src/cafe.css). The SFC body is outside the current code-extractor profile and is not claimed as indexed. The privileged renderer resource loader is covered by the explicit JavaScript source profile.

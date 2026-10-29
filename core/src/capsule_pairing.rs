@@ -40,6 +40,11 @@ pub struct Binding {
     pub feed_generation: Clock,
 }
 
+/// Immutable, single-use pairing candidate; only this module creates it.
+/// Main must durably admit envelope before committing its binding.
+pub(crate) struct PairProposal { envelope:Envelope, binding:Binding }
+impl PairProposal {pub(crate) fn envelope(&self)->&Envelope{&self.envelope}}
+
 pub struct PairingBook {
     bindings: BTreeMap<String, Binding>,
 }
@@ -58,6 +63,28 @@ impl PairingBook {
         request: PairRequest,
     ) -> Result<Binding, PairError> {
         checked_pair(authority, windows, request, &mut self.bindings)
+    }
+
+    pub(crate) fn propose(&self,before:&crate::capsule_registry::Snapshot,windows:&WindowRegistry,request:PairRequest)->Result<PairProposal,PairError> {
+        if request.authority_epoch!=before.authority_epoch || request.expected_revision!=before.revision {return Err(PairError::AuthorityRejected("stale_pair_proposal".into()));}
+        let capsule=before.capsules.get(&request.capsule_id).ok_or(PairError::UnknownCapsule)?;
+        if capsule.person_label!=request.person_label{return Err(PairError::WrongPerson);}
+        if self.bindings.contains_key(&request.feed_id) || capsule.feeds.values().any(|feed|feed.role==request.role){return Err(PairError::AlreadyPaired);}
+        let view=windows.resolve(&request.window,request.window_generation)?;checked_crop(request.crop,&view,request.layout_revision)?;
+        let generation=Clock(before.highest_generation.0.checked_add(1).ok_or(PairError::GenerationExhausted)?);
+        let binding=Binding{capsule_id:request.capsule_id.clone(),person_label:request.person_label,feed_id:request.feed_id.clone(),role:request.role,window:request.window,window_generation:request.window_generation,layout_revision:request.layout_revision,crop:request.crop,feed_generation:generation};
+        let envelope=Envelope{schema:SCHEMA.into(),kind:"intent".into(),request_id:request.request_id,authority_epoch:request.authority_epoch,expected_revision:request.expected_revision,body:Command::AddFeed{capsule_id:request.capsule_id,feed_id:request.feed_id,role:request.role,generation}};
+        Ok(PairProposal{envelope,binding})
+    }
+    pub(crate) fn commit_proposed(&mut self,proposal:PairProposal,committed:&crate::capsule_registry::Snapshot,windows:&WindowRegistry)->Result<Binding,PairError> {
+        if committed.authority_epoch!=proposal.envelope.authority_epoch || proposal.envelope.expected_revision.0.checked_add(1)!=Some(committed.revision.0){return Err(PairError::AuthorityRejected("pair_not_committed".into()));}
+        let binding=proposal.binding;
+        if self.bindings.contains_key(&binding.feed_id){return Err(PairError::AlreadyPaired);}
+        let capsule=committed.capsules.get(&binding.capsule_id).ok_or(PairError::UnknownCapsule)?;
+        let feed=capsule.feeds.get(&binding.feed_id).ok_or(PairError::FeedUnavailable)?;
+        if capsule.person_label!=binding.person_label || feed.role!=binding.role || feed.generation!=binding.feed_generation{return Err(PairError::FeedUnavailable);}
+        let view=windows.resolve(&binding.window,binding.window_generation)?;checked_crop(binding.crop,&view,binding.layout_revision)?;
+        self.bindings.insert(binding.feed_id.clone(),binding.clone());Ok(binding)
     }
 
     pub fn bindings(&self) -> Vec<Binding> {

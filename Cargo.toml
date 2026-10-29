@@ -118,3 +118,15 @@ version = "0.1.0"
 trial_artifact_version = "0.1.0-rc.1"
 source = "operator SemVer decision"
 tag_policy = "explicit operator approval and green demo-commit CI required"
+
+[[test]]
+name = "control_intents"
+path = "core/tests/control_intents.rs"
+
+[[test]]
+name = "capture_pipeline"
+path = "core/tests/capture_pipeline.rs"
+
+[[test]]
+name = "runtime_effects"
+path = "core/tests/runtime_effects.rs"

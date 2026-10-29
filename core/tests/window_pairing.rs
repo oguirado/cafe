@@ -64,3 +64,16 @@ fn invalid_fixture_batch_is_atomic() { let(_,mut w,_,q)=setup();assert_eq!(w.ref
 fn native_windows_verification_is_pending() {
     panic!("windows_verification: pending; replace this guard only after native Discord discovery, title/close/recreate, recycled-slot, ambiguity, crop/resize and permission scenarios are executed and evidenced");
 }
+
+#[test]
+fn immutable_pair_proposal_has_no_authority_or_binding_effect_until_admitted(){
+ let (mut registry,windows,mut book,request)=setup();let proposal=book.propose(&registry.snapshot(),&windows,request).unwrap();unchanged(&registry,&book);
+ assert_eq!(proposal.envelope().expected_revision,Clock(2));
+ assert_eq!(registry.apply(proposal.envelope().clone()).state,Outcome::Admitted);
+ let binding=book.commit_proposed(proposal,&registry.snapshot(),&windows).unwrap();assert_eq!(binding.feed_generation,Clock(3));assert_eq!(book.bindings().len(),1);
+}
+#[test]
+fn uncommitted_and_wrong_epoch_pair_candidates_never_install_a_binding(){
+ let (registry,windows,mut book,request)=setup();let proposal=book.propose(&registry.snapshot(),&windows,request.clone()).unwrap();assert!(book.commit_proposed(proposal,&registry.snapshot(),&windows).is_err());unchanged(&registry,&book);
+ let mut wrong=request;wrong.authority_epoch=Clock(8);assert!(book.propose(&registry.snapshot(),&windows,wrong).is_err());unchanged(&registry,&book);
+}

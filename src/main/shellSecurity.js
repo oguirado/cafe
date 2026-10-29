@@ -165,8 +165,10 @@ function publicSnapshot(value) {
  * @param {import('electron').IpcMain} ipcMain
  * @param {() => import('electron').BrowserWindow|null} getWindow
  * @param {() => Backend|null} getBackend
+ * @param {(window:import('electron').BrowserWindow)=>Promise<{path:string,sha256:string}|null>} [chooseFfmpeg]
+ * @param {(window:import('electron').BrowserWindow)=>Promise<{folder:string}|null>} [chooseFolder]
  */
-function bindNativeIpc(ipcMain, getWindow, getBackend) {
+function bindNativeIpc(ipcMain, getWindow, getBackend, chooseFfmpeg, chooseFolder) {
   ipcMain.handle('cafe:getSnapshot', (event, ...args) => {
     const win = getWindow();
     if (!win || args.length !== 0) throw new Error('IPC_REQUEST_REJECTED');
@@ -184,7 +186,28 @@ function bindNativeIpc(ipcMain, getWindow, getBackend) {
     const caller = admitCaller(event, win.webContents);
     const backend = getBackend();
     if (!backend) throw new Error('AUTHORITY_UNAVAILABLE');
-    try { return backend.handle(caller, 'submitIntent', args[0]); }
+    const payload = args[0];
+    if (typeof payload === 'object' && payload !== null && !Array.isArray(payload) &&
+        typeof payload.body === 'object' && payload.body !== null && ['choose_ffmpeg', 'choose_folder'].includes(payload.body.op)) {
+      // Native choice carries the path/hash; renderer may request a dialog only.
+      const picker = payload.body.op === 'choose_ffmpeg' ? chooseFfmpeg : chooseFolder;
+      const keys = Object.keys(payload).sort().join(',');
+      const status = backend.getStatus();
+      if (!picker || keys !== 'authority_epoch,body,expected_revision,kind,request_id,schema' ||
+          Object.keys(payload.body).join(',') !== 'op' || payload.schema !== 'cafe.operator.v1' ||
+          payload.kind !== 'operator_intent' || typeof payload.request_id !== 'string' ||
+          !/^[A-Za-z0-9_-]{1,96}$/.test(payload.request_id) || status.availability !== 'available' ||
+          payload.authority_epoch !== status.authority_epoch || payload.expected_revision !== status.revision) throw new Error('IPC_REQUEST_REJECTED');
+      return picker(win).then(selected => {
+        // Selection may outlive the current frame or authority revision.
+        const active = getWindow();
+        if (!active || active !== win) throw new Error('IPC_REQUEST_REJECTED');
+        admitCaller(event, active.webContents);
+        if (!selected) return { queued: false, cancelled: true };
+        return backend.submitHostSelection({ ...payload, body: { op: payload.body.op === 'choose_ffmpeg' ? 'configure_ffmpeg' : 'set_folder', ...selected } });
+      }).catch(() => { throw new Error('IPC_REQUEST_REJECTED'); });
+    }
+    try { return backend.handle(caller, 'submitIntent', payload); }
     catch { throw new Error('IPC_REQUEST_REJECTED'); }
   });
   return () => { for (const channel of INVOKE_CHANNELS) ipcMain.removeHandler(channel); };
