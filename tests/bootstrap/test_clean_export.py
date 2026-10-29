@@ -61,12 +61,15 @@ class TestCleanExport(unittest.TestCase):
 
  def test_git_inventory_cache_is_ignored_directory_and_inventory_stays_exact(self):
   source=self.root/'node_modules/typescript';source.mkdir(parents=True)
-  (source/'package.json').write_text(json.dumps({'version':'5.9.3'}))
+  (source/'package.json').write_text(json.dumps({'name':'typescript','version':'5.9.3'}))
   clone=Path(self.temp.name)/'git-fixture';clone.mkdir()
   # Reproduce Git ignore semantics without creating any commit or requiring a source .git.
   subprocess.run(['git','init','--quiet',str(clone)],check=True,capture_output=True)
   (clone/'.gitignore').write_bytes((ROOT/'.gitignore').read_bytes())
-  (clone/'package-lock.json').write_bytes((ROOT/'package-lock.json').read_bytes())
+  legacy={'name':'legacy-checker-fixture','lockfileVersion':3,'packages':{'':{'name':'legacy-checker-fixture','dependencies':{'typescript':'5.9.3'}},'node_modules/typescript':{'version':'5.9.3'}}}
+  (self.root/'package.json').write_text(json.dumps({'name':'legacy-checker-fixture','dependencies':{'typescript':'5.9.3'}}))
+  (self.root/'package-lock.json').write_text(json.dumps(legacy))
+  (clone/'package-lock.json').write_bytes((self.root/'package-lock.json').read_bytes())
   names=ci.prepared_inventory(clone)
   export.provision_node_modules(self.root,clone)
   self.assertFalse((clone/'node_modules').is_symlink())

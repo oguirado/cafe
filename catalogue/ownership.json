@@ -210,6 +210,20 @@
       "language": "Python + Bash",
       "role": "Admission and serial integration controls",
       "extractor": "not indexed"
+    },
+    {
+      "path": "ui/",
+      "owner": "Cafe presentation shell",
+      "language": "JavaScript + Vue SFC + CSS",
+      "role": "Copied shell layers, authored wrapper and vendored design tokens; SFC bodies not indexed",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "NOTICE",
+      "owner": "Repository tooling and public policy",
+      "language": "Text",
+      "role": "Upstream attribution notices",
+      "extractor": "not indexed"
     }
   ]
 }

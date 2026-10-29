@@ -130,6 +130,36 @@ pub fn real<'a>(value: &'a str) { let _ = 'x'; }
         self.assertEqual(rows, [{'path': self.inventory[0], 'symbol': 'cafe_core::real',
                                 'name': 'real', 'line': 8, 'cfg': []}])
 
+    def test_bounded_single_generic_and_lifetime_impls(self):
+        text = """pub trait Source { fn take(&self); }
+pub struct Pipe<S> { source: S }
+impl<S: Source> Pipe<S> { pub fn tick(&self) {} }
+struct Visitor;
+impl<'de> serde::de::Visitor<'de> for Visitor { fn visit(&self) {} }
+pub struct Dispatch<'a> { value: &'a str }
+impl Dispatch<'_> { pub fn complete(&self) {} }
+"""
+        self.assertEqual([(row['symbol'], row['line']) for row in self.extract(text)], [
+            ('cafe_core::Source', 1), ('cafe_core::Source::take', 1),
+            ('cafe_core::Pipe', 2), ('cafe_core::Pipe::tick', 3),
+            ('cafe_core::Dispatch', 6), ('cafe_core::Dispatch::complete', 7)])
+
+    def test_private_trait_members_are_not_public_inventory(self):
+        rows = self.extract('trait Private { fn hidden(&self); } pub trait Visible { type Item; const LIMIT: u32; fn show(&self); }')
+        self.assertEqual([row['symbol'] for row in rows], ['cafe_core::Visible', 'cafe_core::Visible::Item', 'cafe_core::Visible::LIMIT', 'cafe_core::Visible::show'])
+
+    def test_unmodelled_generic_owners_abstain(self):
+        for text in [
+            'pub struct X<T>(T); impl X<u32> { pub fn same() {} }',
+            'pub struct X<T>(T); impl<T,U> X<T> { pub fn same() {} }',
+            'pub struct X<T>(T); impl<T> X<T> where T: Copy { pub fn same() {} }',
+            'pub struct X<T>(T); impl<const N: usize> X<N> { pub fn same() {} }',
+            'pub struct X<T>(T); impl<T: Bound<Item=T>> X<T> { pub fn same() {} }',
+            'impl module::X { pub fn same() {} }',
+        ]:
+            with self.subTest(text=text), self.assertRaises(x.ExtractionError):
+                self.extract(text)
+
     def test_macro_generated_public_surface_abstains(self):
         for text in ['macro_rules! expose { () => { pub fn hidden() {} } } expose!();',
                      'fn private() { macro_rules! expose { () => { pub struct Hidden; } } }',
@@ -221,7 +251,7 @@ pub fn real<'a>(value: &'a str) { let _ = 'x'; }
         rows = self.extract(text)
         self.assertEqual([(v['symbol'], v['line']) for v in rows], [
             ('cafe_core::outer', 1), ('cafe_core::outer::Thing', 2),
-            ('cafe_core::outer::Choice', 3), ('cafe_core::outer::Interface', 4),
+            ('cafe_core::outer::Choice', 3), ('cafe_core::outer::Interface', 4), ('cafe_core::outer::Interface::implicit', 4),
             ('cafe_core::outer::Alias', 5), ('cafe_core::outer::VALUE', 6),
             ('cafe_core::outer::Thing::new', 7)])
 
@@ -254,7 +284,7 @@ pub fn real<'a>(value: &'a str) { let _ = 'x'; }
 
     def test_unsupported_and_malformed_syntax_refuses(self):
         for text in ['#[path="elsewhere.rs"] mod child;', '#[expand] pub struct Hidden;',
-                     '#[derive(Custom)] pub struct Hidden;', 'impl<T> Generic<T> { pub fn f() {} }',
+                     '#[derive(Custom)] pub struct Hidden;', 'impl<const N: usize> Generic<N> { pub fn f() {} }',
                      'pub fn broken() {', '/* unterminated', 'pub const S: &str = "unterminated',
                      'pub static VALUE: u8 = 1;', 'pub union U { x: u8 }']:
             with self.subTest(text=text), self.assertRaises(x.ExtractionError):

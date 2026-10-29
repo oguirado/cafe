@@ -37,8 +37,37 @@ def read_profile(root, inventory):
     return profile
 
 
+
+def canonical_rust_report(path, contexts, declared_prefix):
+    """Use the declared physical definition owner; other roots are witnesses only."""
+    normalized, candidates = [], []
+    for crate, cfg, report in contexts:
+        prefix = crate + '::'
+        module = report.get('module')
+        if report.get('path') != path or not isinstance(module, str) or not (module == crate or module.startswith(prefix)):
+            raise C.ContractError('invalid_compiled_source_namespace')
+        surface = []
+        for symbol in report['symbols']:
+            full = symbol.get('symbol')
+            if not isinstance(full, str) or not full.startswith(prefix):
+                raise C.ContractError('invalid_compiled_symbol_namespace')
+            # Only the known compiled crate prefix is removed. Module tails and
+            # every other record field (including cfg, name and line) survive.
+            surface.append(dict(symbol, symbol=full[len(prefix):]))
+        physical = dict(report, module='' if module == crate else module[len(prefix):],
+                        symbols=sorted(surface, key=lambda row: C.canonical(row)))
+        normalized.append((cfg, physical))
+        if module + '::' == declared_prefix and all(row['symbol'].startswith(declared_prefix) for row in report['symbols']):
+            candidates.append(report)
+    if any(context != normalized[0] for context in normalized[1:]):
+        raise C.ContractError('compiled_source_context_mismatch')
+    if len(candidates) != 1:
+        raise C.ContractError('missing_or_ambiguous_canonical_source_owner')
+    return candidates[0]
+
+
 def extraction_reports(root, profile, inventory):
-    reports = {}
+    reports, rust_contexts = {}, {}
     rust = C.tool(root, 'tools/extract_rust.py')
     import tomllib
     manifest = tomllib.loads(C.raw(root, 'Cargo.toml').decode())
@@ -48,9 +77,13 @@ def extraction_reports(root, profile, inventory):
             raise C.ContractError('rust_root_not_declared_by_cargo')
         result = rust.extract(root, item['files'], inventory, item['cfg'], entry=item['entry'], crate=item['crate'], module_paths=item['module_paths'], include_modules=True)
         for file in result['files']:
-            if file['path'] in reports:
-                raise C.ContractError('multiple_source_namespace_owners')
-            reports[file['path']] = file
+            rust_contexts.setdefault(file['path'], []).append((item['crate'], item['cfg'], file))
+    declared = {row['path']: row['symbol_prefix'] for row in profile['files'] if row['language'] == 'rust'}
+    for path, contexts in rust_contexts.items():
+        if path not in declared:
+            raise C.ContractError('undeclared_compiled_source')
+        reports[path] = (contexts[0][2] if len(contexts) == 1 else
+                         canonical_rust_report(path, contexts, declared[path]))
     for language, tool in [('js', 'tools/extract_js.py'), ('python', 'tools/extract_py.py')]:
         paths = sorted(row['path'] for row in profile['files'] if row['language'] == language)
         if paths:
@@ -169,7 +202,6 @@ def write_products(root, products):
         finally:
             if temp is not None:
                 temp.unlink(missing_ok=True)
-
 
 
 def build(root, inventory, check=False):

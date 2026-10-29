@@ -3,12 +3,16 @@
   "private": true,
   "main": "src/main/index.js",
   "scripts": {
-    "check": "tsc --checkJs --noEmit -p src/main/jsconfig.json && tsc --checkJs --noEmit -p src/preload/jsconfig.json && tsc --checkJs --noEmit -p src/renderer/jsconfig.json"
+    "check": "tsc --checkJs --noEmit -p src/main/jsconfig.json && tsc --checkJs --noEmit -p src/preload/jsconfig.json && tsc --checkJs --noEmit -p src/renderer/jsconfig.json && node tools/check_renderer.js",
+    "build:preload": "node tools/build_preload.js",
+    "test:shell": "node --test tests/security/backendSupervisor.test.js tests/security/electronShell.test.js",
+    "test:fuses": "node --test tests/security/shellFuses.test.js",
+    "build:renderer": "node tools/build_renderer.js"
   },
   "cafe": {
     "unit": "P07",
     "declaration_status": "manifest_declared_only",
-    "approval_install_lock_status": "typescript approved and installed; Electron and builder pending",
+    "approval_install_lock_status": "G4 operator-approved exact shell/UI/tooling pins; excluded terminal and TypeScript-source tools",
     "route_sources": [
       "SW-0070",
       "PL04",
@@ -32,7 +36,8 @@
         "citations": [
           "C25"
         ],
-        "scope": "devDependencies"
+        "scope": "devDependencies",
+        "source": "operator G4 approval and explicit release-age exception"
       },
       "electron-builder": {
         "version": "26.18.0",
@@ -81,12 +86,14 @@
         "kind": "electron_bundled_runtime"
       },
       "cpython": {
-        "version": "3.13.17",
-        "distribution_build": "20261021",
-        "citations": [
-          "C25"
-        ],
-        "kind": "private_packaged_interpreter"
+        "version": "3.13.16",
+        "distribution_build": "20261013",
+        "kind": "private_packaged_interpreter",
+        "architecture": "x86_64",
+        "source": "operator approved runtime override; supersedes architecture C25 CPython pin",
+        "archive": "cpython-3.13.16+20261013-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+        "archive_size": 21987516,
+        "archive_sha256": "7aba3985d4cee1c7cacb963ca6aa08a5d3e695d7f9609d9fabc56f22ddcf5a06"
       },
       "ffmpeg": {
         "version": "8.1.3",
@@ -144,11 +151,10 @@
       }
     },
     "build_blockers": {
-      "product_release_version": "AUSENTE \u2014 no inventar",
       "rust_compiler": "AUSENTE \u2014 no inventar",
       "rust_edition": "AUSENTE \u2014 no inventar",
       "python_build_backend": "AUSENTE \u2014 no inventar",
-      "vue_ui_package": "AUSENTE \u2014 no inventar",
+      "vue_ui_package": "resolved by exact operator-approved Vue pin",
       "python_obs_library": "AUSENTE \u2014 no inventar",
       "python_twitch_library": "AUSENTE \u2014 no inventar",
       "rust_vault_crate": "AUSENTE \u2014 no inventar"
@@ -174,7 +180,7 @@
       },
       "electron_renderer": {
         "manifest": "package.json",
-        "path": "src/renderer/index.js",
+        "path": "ui/src/main.js",
         "role": "electron_renderer"
       },
       "electron_shared_contracts": {
@@ -256,13 +262,6 @@
       }
     },
     "pending_npm_approval": {
-      "electron": {
-        "version": "44.9.2",
-        "citations": [
-          "C25"
-        ],
-        "status": "pending; not installed in P07"
-      },
       "electron-builder": {
         "version": "26.18.0",
         "citations": [
@@ -280,9 +279,39 @@
       "max_line_bytes": 4096,
       "max_queue_bytes": 16384,
       "large_integers": "canonical u64 decimal strings"
+    },
+    "shell_bootstrap": {
+      "status": "implemented; packaged Windows native verification pending",
+      "renderer": "presentation shell available; live product binding pending",
+      "fuse_tool": "official @electron/fuses2.1.3 operator-approved",
+      "rust_production_caller": "pending_sprint_integration"
+    },
+    "release": {
+      "version": "0.1.0",
+      "trial_artifact_version": "0.1.0-rc.1",
+      "source": "operator SemVer decision",
+      "tag_policy": "explicit operator approval and green demo-commit CI required"
     }
   },
   "dependencies": {
-    "typescript": "5.9.3"
-  }
+    "typescript": "5.9.3",
+    "vue": "3.5.43",
+    "dockview-core": "8.4.1",
+    "dockview-vue": "8.4.1",
+    "openvue": "1.0.0",
+    "@openvue/icons": "1.0.0",
+    "@openvue/themes": "1.0.0"
+  },
+  "devDependencies": {
+    "electron": "44.9.2",
+    "vite": "8.3.4",
+    "@vitejs/plugin-vue": "6.0.9",
+    "@electron/packager": "20.3.0",
+    "@electron/asar": "4.3.1",
+    "@electron/fuses": "2.1.3"
+  },
+  "author": {
+    "name": "oguirado"
+  },
+  "version": "0.1.0"
 }

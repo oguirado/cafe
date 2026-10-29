@@ -13,6 +13,18 @@ from ci_support import ROOT,command,executable,prepared_inventory,source_environ
 STAGES=('rust','python','node','checkjs','integration','router','publication','claims')
 
 
+
+def node_test_evidence(text):
+    counts={}
+    for label in ['tests','pass','fail','cancelled','skipped']:
+        matches=re.findall(r'(?m)^(?:#|ℹ)\s+'+label+r'\s+([0-9]+)\s*$',text)
+        if len(matches)!=1:raise ValueError('node_evidence_absent_or_ambiguous')
+        counts[label]=int(matches[0])
+    if counts['tests']<=0 or counts['pass']!=counts['tests'] or any(counts[label] for label in ['fail','cancelled','skipped']):
+        raise ValueError('empty_failed_or_skipped_node_tests')
+    return counts
+
+
 def _chat_mcp_e2e(root, python, run):
     """Real producer child, durable files, then no-site MCP stdio child."""
     import asyncio
@@ -178,8 +190,13 @@ def run_stage(stage,root=ROOT):
         elif stage=='node':
             node=executable('node');version=run([node,'--version'],'node_tool_version')
             if version['stdout'].strip()!='v24.14.0':raise ValueError('wrong_node_tool_version')
-            result=run([node,'--test','tests/security/backendSupervisor.test.js'],'node_security_tests')
-            if not re.search(r'(?:#|ℹ)\s+tests\s+[1-9][0-9]*\b',result['stdout']):raise ValueError('empty_node_test_selection')
+            selected=sorted(name for name in names if name.startswith('tests/security/') and name.endswith('.test.js'))
+            required={'tests/security/backendSupervisor.test.js','tests/security/electronShell.test.js','tests/security/shellFuses.test.js'}
+            if not selected or not required.issubset(selected):raise ValueError('security_test_inventory_incomplete')
+            run([executable('npm'),'run','build:preload'],'sandbox_preload_build')
+            for name in selected:
+                result=run([node,'--test',name],name)
+                result['test_counts']=node_test_evidence(result['stdout'])
         elif stage=='checkjs':run([executable('npm'),'run','check'],'javascript_jsdoc_check')
         elif stage=='integration':
             result=run([python,'-B','tools/run_integration_gate.py'],'integration_one_command')

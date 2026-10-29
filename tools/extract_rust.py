@@ -141,6 +141,54 @@ def cfg_value(ts, profile, path):
     return result
 
 
+def impl_owner(header, path, line):
+    """Only one generic type/lifetime and an optional plain trait bound.
+    No specialization, where clauses, const generics, defaults or multiple
+    parameters are inferred. Trait paths may be qualified; owners may not.
+    """
+    def refuse():
+        raise ExtractionError('unsupported_impl', path, line)
+    def shape(part, parameter, qualified):
+        if not part or part[0].kind != 'ident': refuse()
+        owner = part[0]; i = 1
+        while i + 2 < len(part) and part[i].text == ':' and part[i+1].text == ':' and part[i+2].kind == 'ident':
+            if not qualified: refuse()
+            i += 3
+        if i == len(part): return owner
+        if part[i].text != '<' or part[-1].text != '>': refuse()
+        argument = tuple(token.text for token in part[i+1:-1])
+        concrete_trait_argument = qualified and len(argument) == 1 and part[i+1].kind == 'ident'
+        if argument != parameter and argument != ("'", '_') and not concrete_trait_argument: refuse()
+        return owner
+    if not header or any(token.text == 'where' for token in header): refuse()
+    parameter = None
+    if header[0].text == '<':
+        close = next((i for i, token in enumerate(header[1:], 1) if token.text == '>'), None)
+        if close is None: refuse()
+        prefix = header[1:close]
+        if not prefix or any(token.text in ('<', '>', ',', '=', 'const') for token in prefix): refuse()
+        if prefix[0].text == "'":
+            if len(prefix) != 2 or prefix[1].kind != 'ident': refuse()
+            parameter = ("'", prefix[1].text)
+        else:
+            if prefix[0].kind != 'ident': refuse()
+            parameter = (prefix[0].text,)
+            if len(prefix) > 1:
+                if len(prefix) < 3 or prefix[1].text != ':': refuse()
+                # A plain bound has no argument list or additional bounds.
+                if any(token.text in ('<', '>', '+', "'") for token in prefix[2:]): refuse()
+                shape(prefix[2:], None, True)
+        header = header[close+1:]
+    separators = [i for i, token in enumerate(header) if token.text == 'for']
+    if len(separators) > 1: refuse()
+    if separators:
+        split = separators[0]
+        shape(header[:split], parameter, True)
+        owner = shape(header[split+1:], parameter, False)
+        return owner, True
+    return shape(header, parameter, False), False
+
+
 class Parser:
     def __init__(self, path, text, profile, module_paths=None):
         self.path, self.profile = path, profile
@@ -233,10 +281,8 @@ class Parser:
             if kind == 'impl':
                 stop, after = self.end_item(i+1); header = self.ts[i+1:stop]
                 if self.ts[stop].text != '{': self.error('unsupported_impl', i)
-                trait = any(t.text == 'for' for t in header)
-                tail = header[next(n for n,t in enumerate(header) if t.text == 'for')+1:] if trait else header
-                if len(tail) != 1 or tail[0].kind != 'ident': self.error('unsupported_impl', i)
-                owner = module + (tail[0].text,)
+                owner_token, trait = impl_owner(header, self.path, self.ts[i].line)
+                owner = module + (owner_token.text,)
                 yield from self.items(stop+1, after-1, owner, directory, emit, cfg, enabled, 'trait_impl' if trait else 'impl')
                 i = after; continue
             if kind == 'static' and not public:
@@ -249,7 +295,7 @@ class Parser:
             if i + 1 >= end or self.ts[i+1].kind != 'ident': self.error('unsupported_item_name', i)
             name = self.ts[i+1].text; name_token = self.ts[i+1]
             if public and context == 'trait_impl': self.error('unsupported_public_trait_impl', i)
-            if public and enabled:
+            if (public or context == 'public_trait') and enabled:
                 emit(self.path, module + (name,), name, name_token.line, list(cfg))
             stop, after = self.end_item(i+2)
             if kind == 'mod':
@@ -266,7 +312,7 @@ class Parser:
                 else:
                     yield from self.items(stop+1, after-1, module+(name,), directory/name, emit, cfg, enabled)
             elif kind == 'trait' and self.ts[stop].text == '{':
-                yield from self.items(stop+1, after-1, module+(name,), directory, emit, cfg, enabled, 'trait')
+                yield from self.items(stop+1, after-1, module+(name,), directory, emit, cfg, enabled, 'public_trait' if public else 'trait')
             # const/type initializers can contain balanced blocks, then require semicolon.
             elif kind in ['const', 'type'] and self.ts[stop].text == '{':
                 if after >= end or self.ts[after].text != ';': self.error('unsupported_initializer', stop)
@@ -343,7 +389,7 @@ def read_inline_inventory(root):
         names = json.loads(value)
         if not isinstance(names, list) or not names or any(not isinstance(p, str) for p in names) or names != sorted(set(names)):
             raise ValueError('invalid_prepared_inventory')
-        root = Path(root).resolve(strict=True)
+        root = Path(root).resolve()
         for name in names:
             parts = name.split('/')
             if not name or name.startswith('/') or '\\' in name or ':' in name or '\0' in name or any(p in ['', '.', '..'] for p in parts) or parts[0] in ['.git', 'local', 'node_modules', 'target', '_scratch', '_target']:

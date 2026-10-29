@@ -1,0 +1,25 @@
+{
+  "schema": "cafe.design-layers.v1",
+  "layers": [
+    {
+      "path": "ui/src/kit/shell/TopBar.vue",
+      "sha256": "16662100e455ed0a7e1ba4268503baaa33ecee391eb22e2109d659d99ed79a95",
+      "source": "capsule-ui-kit@bf31bc201987206d16dbd88d93102f9d5ce026f9:packages/capsule-ui-kit/src/shell/TopBar.vue"
+    },
+    {
+      "path": "ui/src/kit/shell/StatusBar.vue",
+      "sha256": "ee71c7a63f37ce4e4be7529f3d895031f200dbf60e4347fc6d6c94173d8f0252",
+      "source": "capsule-ui-kit@bf31bc201987206d16dbd88d93102f9d5ce026f9:packages/capsule-ui-kit/src/shell/StatusBar.vue"
+    },
+    {
+      "path": "ui/src/kit/ui/UiButton.vue",
+      "sha256": "27237b171c651a0fb0dcee41e379bd82556905f8c4406090f62d8a9ccbcebbc8",
+      "source": "capsule-ui-kit@bf31bc201987206d16dbd88d93102f9d5ce026f9:packages/capsule-ui-kit/src/ui/UiButton.vue"
+    },
+    {
+      "path": "ui/src/kit/ui/UiTextInput.vue",
+      "sha256": "3cd0a10c264d171b15a64a71d9ce21e1dbb86c619a82ee07ea85bf940c6707cf",
+      "source": "capsule-ui-kit@bf31bc201987206d16dbd88d93102f9d5ce026f9:packages/capsule-ui-kit/src/ui/UiTextInput.vue"
+    }
+  ]
+}

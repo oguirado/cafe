@@ -2,7 +2,7 @@
 [project]
 name = "cafe-connectors"
 dynamic = ["version"]
-requires-python = "==3.13.17"
+requires-python = "==3.13.16"
 dependencies = [
     "websockets==17.2",
 ]
@@ -27,12 +27,11 @@ python_mcp_broker = { path = "connectors/mcp_broker.py", target = "connectors.mc
 websockets = { version = "==17.2", source = "operator decision 43; MVP sprint P15", sha256 = "6aa59f0ef92e796b2db6f5f26550c4713c0e4036899fadf02f55e2ed4db0b7ae" }
 
 [tool.cafe.runtime_baselines]
-cpython = { version = "3.13.17", distribution_build = "20261021", citations = ["C25"], kind = "private_packaged_interpreter" }
+cpython = { version = "3.13.16", distribution_build = "20261013", kind = "private_packaged_interpreter", architecture = "x86_64", source = "operator approved runtime override; supersedes architecture C25 CPython pin", archive = "cpython-3.13.16+20261013-x86_64-pc-windows-msvc-install_only_stripped.tar.gz", archive_size = 21987516, archive_sha256 = "7aba3985d4cee1c7cacb963ca6aa08a5d3e695d7f9609d9fabc56f22ddcf5a06" }
 obs_studio = { version = "32.2.2", protocol = "obs-websocket v5", citations = ["C09", "C10"], kind = "external_runtime_baseline" }
 codex_cli = { version = "0.164.0", citations = ["C19"], kind = "cited_registration_baseline" }
 
 [tool.cafe.build_blockers]
-product_release_version = "AUSENTE — no inventar"
 python_build_backend = "AUSENTE — no inventar"
 python_obs_library = "AUSENTE — no inventar"
 python_twitch_library = "AUSENTE — no inventar"

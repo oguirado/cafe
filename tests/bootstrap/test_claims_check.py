@@ -44,6 +44,15 @@ class TestClaims(unittest.TestCase):
  def test_changed_inherited_document_is_checked(self):
   name='docs/architecture/ARCHITECTURE.v0.1.md';(self.root/name).write_text('Implemented `tools/missing.py`.\n')
   result=self.inspect();self.assertEqual(result['status'],'fail');self.assertIn(name,result['checked_documents'])
+ def test_pinned_vendor_reference_deferral_requires_exact_bytes(self):
+  name='ui/src/design/vendor/open-design-openai/USAGE.md'
+  result=self.inspect()
+  self.assertIn(name,[row['path'] for row in result['deferred']])
+  (self.root/name).write_text('Run `tools/missing_vendor_command.py`.\n')
+  result=self.inspect()
+  self.assertEqual(result['status'],'fail')
+  self.assertIn(name,result['checked_documents'])
+  self.assertTrue(any(row['path']==name for row in result['findings']))
  def test_local_link_escape_or_missing_path_fails(self):
   for text in ['[missing](missing.md)','[escape](../../outside.md)','Run tools/does_not_exist.py now.','The flag --invented-flag is supported.']:
    with self.subTest(text=text):

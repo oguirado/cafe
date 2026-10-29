@@ -170,16 +170,52 @@
       "symbol_prefix": ""
     },
     {
+      "id": "provenance",
+      "language": "markdown",
+      "path": "docs/ui/PROVENANCE.md",
+      "symbol_prefix": ""
+    },
+    {
       "id": "js-backend-supervisor",
       "language": "js",
       "path": "src/main/backendSupervisor.js",
       "symbol_prefix": "cafe_shell::main::backendSupervisor::"
     },
     {
+      "id": "js-shell-main",
+      "language": "js",
+      "path": "src/main/index.js",
+      "symbol_prefix": "cafe_shell::main::index::"
+    },
+    {
+      "path": "src/main/rendererAssets.js",
+      "id": "js-renderer-assets",
+      "language": "js",
+      "symbol_prefix": "cafe_shell::main::rendererAssets::"
+    },
+    {
+      "id": "js-shell-security",
+      "language": "js",
+      "path": "src/main/shellSecurity.js",
+      "symbol_prefix": "cafe_shell::main::shellSecurity::"
+    },
+    {
       "id": "js-cafe-bridge",
       "language": "js",
       "path": "src/preload/cafeBridge.js",
       "symbol_prefix": "cafe_shell::preload::cafeBridge::"
+    },
+    {
+      "id": "js-shell-preload",
+      "language": "js",
+      "path": "src/preload/index.js",
+      "symbol_prefix": "cafe_shell::preload::index::"
+    },
+    {
+      "id": "js-preload-security",
+      "language": "js",
+      "path": "src/preload/preloadSecurity.js",
+      "symbol_prefix": "cafe_shell::preload::preloadSecurity::"
     },
     {
       "id": "backend-book",

@@ -65,6 +65,11 @@
       "path": "subjects/backend/page.md",
       "sha256": "4d0f2ebce151d044aa1c17860bf63054dacd9509df4639fe847227e3b4cbbab6",
       "scope": "inherited normative, upstream companion or sealed design; not a new implementation claim"
+    },
+    {
+      "path": "ui/src/design/vendor/open-design-openai/USAGE.md",
+      "sha256": "750a19cee7b38ba68469980cf8050d6d773a48998dcde60328bed361614f2ca6",
+      "scope": "byte-exact pinned upstream reference; omitted upstream assets are not Cafe implementation claims"
     }
   ]
 }

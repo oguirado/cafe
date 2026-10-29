@@ -1,6 +1,7 @@
 # P05 pure authority; only operator-approved serialization dependencies are enabled.
 [package]
 name = "cafe-core"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
 publish = false
@@ -62,7 +63,6 @@ source = "operator P05 decision"
 ffmpeg = { version = "8.1.3", citations = ["C22", "C25"], kind = "external_audited_executable", rust_binding_required = false }
 
 [package.metadata.cafe.build_blockers]
-product_release_version = "AUSENTE — no inventar"
 rust_vault_crate = "AUSENTE — no inventar"
 
 [package.metadata.cafe.control_profile_ref]
@@ -112,3 +112,9 @@ path = "core/tests/wgc_synthetic.rs"
 [[test]]
 name = "recorder_lifecycle"
 path = "core/tests/recorder_lifecycle.rs"
+
+[package.metadata.cafe.release]
+version = "0.1.0"
+trial_artifact_version = "0.1.0-rc.1"
+source = "operator SemVer decision"
+tag_policy = "explicit operator approval and green demo-commit CI required"

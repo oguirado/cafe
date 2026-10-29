@@ -1,0 +1,14 @@
+Café third-party notice
+
+This distribution includes a small reference subset from nexu-io/open-design,
+commit f1a0b60c6cd1c9f5c735ae5645e47244b468e71c, design-systems/openai.
+The OpenDesign material is distributed under the Apache License, Version 2.0.
+Its full license and per-file provenance are retained in
+ui/src/design/vendor/open-design-openai/LICENSE and PROVENANCE.md.
+
+The subset is an independent curated design reference inspired by OpenAI.
+It does not identify Café as an OpenAI product or imply affiliation,
+sponsorship, endorsement, or rights to OpenAI trademarks or proprietary fonts.
+No font binaries, logos or preview/component assets accompany this subset.
+Café application font overrides belong in ui/src/design/tokens.cafe.css.
+The existing Café project LICENSE is preserved; this notice does not replace it.

@@ -5,14 +5,14 @@
 
 This companion documents the R8 exact nodes/index/resolver surface:
 compose the output of the existing Rust, JavaScript, and Python extractors
-plus the actual HTML anchors and Markdown headings in `docs/subjects`,
+plus the actual HTML anchors and Markdown headings in `docs/` and `subjects/`,
 validate `catalogue/nodes.jsonl` directly against `ctx.node.v2` with the
 existing kit validator, build the unchanged kit index, and resolve exact
 coordinates with `tools/resolve_cafe.py`.
 
 Status is explicitly **available, uncalibrated**. There are no fitted Cafe
 parameters: `catalogue/calibration.json` carries status `uncalibrated` with
-null params, and `catalogue/router/params.json` is absent. That absence is
+null params, and the generated artifact `params.json` under `catalogue/router/` is absent. That absence is
 the honest uncalibrated state, not a gap to fill with foreign numbers. No
 papers calibration is copied, and no foreign params are ever passed to the
 kit. Actual calibration is not implemented until post-demo; even if every
@@ -31,6 +31,7 @@ route, resolve the exact coordinate and verify it before touching source.
 - [Overview](#router-index-overview)
 - [Scope and non-goals](#router-index-scope)
 - [Source profile and inventory](#router-index-source-profile)
+- [Canonical compiled-source contexts and witnesses](#router-index-canonical-source-contexts)
 - [Compose and node validation](#router-index-compose)
 - [IDs, anchors, and byte widths](#router-index-ids-anchors-widths)
 - [Sixteen-anchor sharding](#router-index-sharding)
@@ -59,20 +60,16 @@ does not compile, and does not run live services or read runtime objects.
 Kit tools and schema are never modified. If the kit rejects composed nodes,
 the correct action is to STOP and report to the operator; there is no
 workaround and no rewrite of nodes to please the kit. Vendor traces, R1
-traces, and the private gate hash are preserved. The first-push private
-deny-list literal in `router/tools/gates_v2.py:16` is BLOCKED: never
-inspect, reproduce, or edit it. There are no commits, no push, no installs,
-no downloads, and no new packages.
+traces, and the private gate hash are preserved. Accepted W0/F0 and the
+full current prepared export have private-policy count 0; private literals
+remain external hashed policy and are never inlined here. There are no
+commits, no push, no installs, no downloads, and no new packages.
 
 Separate build targets per role apply, with owned-PID signal guards. Actual
 mutants used by the gate do not touch signal targets; any mutation touching
 them would require an isolated PID namespace. Every worker or judge command
 that executes `node` or `npm` prepends the approved Node 24 binary directory,
-supplied externally as `NODE24_BIN`, FIRST on `PATH`:
-
-```sh
-PATH="$NODE24_BIN:$PATH"
-```
+supplied externally as `NODE24_BIN`, FIRST on `PATH`.
 
 Rust, Node, and bootstrap gates run offline with the approved cache, under
 bounded memory and time. No gate-owned temporary directories remain after the gate. Test
@@ -88,7 +85,7 @@ the builder may consume:
 - product Rust under `core/` and `src/`,
 - JavaScript `src/` process roots,
 - Python connectors under `connectors/`,
-- Markdown under `docs/subjects`,
+- Markdown under `docs/` and `subjects/`,
 - the actual Rust fixture entry.
 
 Coverage is compared against the versioned prepared inventory. The builder
@@ -107,12 +104,97 @@ Source-file coverage is complete for the profile. An extra eligible file
 without a semantic-id profile entry FAILS. Metadata, tools, and test
 sources outside extractor ownership are not product API inventory.
 
+<a id="router-index-canonical-source-contexts"></a>
+## Canonical compiled-source contexts and witnesses
+
+One physical file keeps one existing explicit `source_profile`
+`symbol_prefix` canonical namespace. Multiple compiled Rust roots may
+include and report witnesses for the same physical file; that sharing is
+allowed and is not a duplicate-ownership violation. Any older absolute
+reading that one physical file may appear in only one Rust root is
+corrected here and no longer applies. Every non-owner compiled root is a
+witness only: its context is normalized and compared against the canonical
+owner, then discarded as an identity. There are no aliases, no new schema
+fields, no clipped keys, and no arbitrary or order-dependent winners.
+
+Single-root behavior is unchanged: a path reported by exactly one root
+uses that root report directly. A path reported by more than one root is
+resolved by `canonical_rust_report(path, contexts, declared_prefix)`,
+where each context is `(crate, cfg, report)` with `crate` the normalized
+Cargo binary name, `cfg` the target-config dict, and `report` the
+extractor file report (`path`, `source_sha256`, `module`, `symbols`).
+
+Normalization is strict and strips ONLY the known compiled crate prefix
+(`crate` plus the double-colon separator):
+
+1. For each context, require `report.get('path') == path`, `module` a
+   string, and `module == crate` or `module` starting with the crate
+   prefix; otherwise abstain with
+   `invalid_compiled_source_namespace`.
+2. For each symbol record, require `symbol` a string starting with the
+   same crate prefix; otherwise abstain with
+   `invalid_compiled_symbol_namespace`. Unknown compiled crate prefixes
+   are never stripped.
+3. Strip only that crate prefix from `module` (yielding an empty string
+   when `module == crate`) and from each symbol string. Module tails and
+   every other record field (`path`, `name`, `line`, `cfg`, symbol tail)
+   are preserved; inputs are copied, never mutated.
+4. Sort the normalized surface records by canonical record order and pair
+   each normalized physical report with its `cfg`.
+
+Witness equality: all `(cfg, physical)` tuples for the path must be
+identical (`source_sha256`, `cfg` profile, module tail, and every
+normalized public symbol record). Owner selection then requires exactly
+one candidate report whose `module` plus separator equals the declared
+`symbol_prefix` and whose every symbol retains that prefix. Selection
+examines all contexts and is order-independent: reversed root order
+returns the same unmodified canonical report with its original unstripped
+symbols. Empty public surfaces still require exact `source_sha256`,
+`cfg`, and module identity plus a unique declared owner.
+
+The documented contract explicitly rejects these four cases:
+
+1. Differing hash: two roots report a different `source_sha256` for the
+   same physical file, public or private zero-surface. Abstain with
+   `compiled_source_context_mismatch`.
+2. Differing cfg/public surface: two roots differ in root `cfg`, symbol
+   `cfg`, `line`, `name`, symbol tail, module tail, or symbol count
+   (populated versus empty). Abstain with
+   `compiled_source_context_mismatch`.
+3. Missing canonical prefix: the declared prefix is missing, clipped,
+   empty, or parent-crate-only relative to the compiled module, so no
+   report qualifies. Abstain with
+   `missing_or_ambiguous_canonical_source_owner`.
+4. Duplicate canonical owner: two contexts both match the declared
+   prefix, even if all bytes and symbols match. Abstain with
+   `missing_or_ambiguous_canonical_source_owner`.
+
+Related abstentions stay explicit: undeclared compiled sources abstain,
+and compose-time prefix checks (`row['symbol_prefix']` equals
+`file['module']` plus separator, exact prefix slicing for local anchors)
+continue to refuse clipped or mismatched namespaces. Prior symbol
+identity is retained: actual temporary imports of `authentication` and
+`supervisor` into both existing roots preserve the complete previously
+admitted `symbols.jsonl` bytes, and `enforce_admitted_symbols` still
+verifies admitted records are a subset of current records, refusing with
+`public_symbol_removed_requires_review` on any removal.
+
+Schemas and the stock kit are unchanged: source profile
+`cafe.source-profile.v1`, nodes `ctx.node.v2`, symbols
+`{path, symbol, name, line}`, coordinates
+`{id, anchor, path, name, line, symbol, source_sha256}`, routes
+`id` TAB `path`, receipt `cafe.router-sources.v1`, build envelope
+`cafe.nodes-build.v1`, and the exit-2 error envelope. The stock kit index
+command and its `--check` form stay byte-identical, and the router stays
+available but uncalibrated. Unrelated resolver and calibration rules
+elsewhere in this companion are intact and unchanged.
+
 <a id="router-index-compose"></a>
 ## Compose and node validation
 
 The builder composes the output of the existing Rust, JavaScript, and
 Python extractors plus the actual HTML anchors and Markdown headings found
-in `docs/subjects`. Source bytes are hashed with SHA-256 over the raw bytes
+in `docs/` and `subjects/`. Source bytes are hashed with SHA-256 over the raw bytes
 before any decode, so original byte identity is preserved.
 
 `catalogue/nodes.jsonl` is validated DIRECTLY against `ctx.node.v2` with
@@ -290,7 +372,7 @@ before changing anything.
 
 There are no fitted Cafe parameters in R8, and no papers calibration is
 copied. `catalogue/calibration.json` carries status `uncalibrated` with
-null params, and `catalogue/router/params.json` is absent. Any claim of a
+null params, and the generated artifact `params.json` under `catalogue/router/` is absent. Any claim of a
 calibrated router without params and evidence FAILS. Actual calibration is
 not implemented until post-demo; even if all structural legs pass, the
 router is NEVER qualified here. The protocol keeps its closed fields
@@ -302,8 +384,8 @@ uncalibrated warning.
 ## Qualifier
 
 The `resolver_index` qualifier is implemented with a real non-empty
-`test_router_index.py` AND a real `build_index_v2 --check`. When every
-implemented leg passes, the global verdict is `router available
+`tests/bootstrap/test_router_index.py` AND a real `python3 -B router/tools/build_index_v2.py --nodes catalogue/nodes.jsonl --out catalogue/router --corpus cafe --check`.
+When every implemented leg passes, the global verdict is `router available
 (uncalibrated)`, with state and availability `available_uncalibrated`,
 `calibrated` false, and never qualified. `--require-qualified` always exits
 nonzero until calibration is implemented and proven.

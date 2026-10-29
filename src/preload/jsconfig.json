@@ -10,9 +10,14 @@
       "ES2022",
       "DOM"
     ],
-    "types": []
+    "types": [
+      "node"
+    ],
+    "skipLibCheck": true
   },
   "files": [
-    "cafeBridge.js"
+    "cafeBridge.js",
+    "preloadSecurity.js",
+    "index.js"
   ]
 }

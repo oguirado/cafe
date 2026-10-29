@@ -1,0 +1,159 @@
+/* Cafe application layout and skin.
+ *
+ * All tokens come from the parent-owned adapter
+ * (ui/src/design/tokens.cafe.css) and its vendored roles. This file defines
+ * no custom properties: every value below references a mapped variable or
+ * uses layout keywords, percentages and grid composition.
+ */
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: var(--leading-body);
+}
+
+#app {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+}
+
+.cafe-app {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.cafe-main {
+  flex: 1;
+  width: 100%;
+  max-width: var(--container-max);
+  margin: 0 auto;
+  padding: var(--space-8) var(--container-gutter-desktop);
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-6);
+  align-content: start;
+  box-sizing: border-box;
+}
+
+.cafe-panel {
+  background: var(--surface);
+  border: var(--cafe-structure-semantic-border-width) solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+}
+
+.cafe-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  line-height: var(--leading-tight);
+  font-weight: var(--cafe-structure-semantic-typography-font-weight-semibold);
+  color: var(--fg);
+}
+
+.cafe-heading {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  line-height: var(--leading-tight);
+  font-weight: var(--cafe-structure-semantic-typography-font-weight-semibold);
+  color: var(--fg);
+}
+
+.cafe-status {
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-sm);
+  font-weight: var(--cafe-structure-semantic-typography-font-weight-medium);
+  color: var(--fg);
+}
+
+.cafe-text {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+  color: var(--muted);
+}
+
+.cafe-reason {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.cafe-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+  margin-top: var(--space-4);
+}
+
+.cafe-label {
+  display: block;
+  width: 100%;
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.cafe-button {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: var(--cafe-structure-semantic-typography-font-weight-medium);
+  line-height: var(--leading-body);
+  color: var(--accent-on);
+  background: var(--accent);
+  border: var(--cafe-structure-semantic-border-width) solid var(--accent);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+}
+
+.cafe-button:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.cafe-button:focus-visible {
+  outline: var(--cafe-structure-semantic-focus-ring-width) solid var(--focus-ring);
+  outline-offset: var(--space-1);
+}
+
+.cafe-button:disabled {
+  background: var(--surface-warm);
+  border-color: var(--border);
+  color: var(--meta);
+  cursor: not-allowed;
+}
+
+.cafe-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+  color: var(--fg);
+  background: var(--surface-warm);
+  border: var(--cafe-structure-semantic-border-width) solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+}
+
+.cafe-input:disabled {
+  color: var(--meta);
+  cursor: not-allowed;
+}

@@ -159,6 +159,24 @@ class TestRouterIndex(unittest.TestCase):
         new='connectors/cafe/new_api.py';(self.root/new).write_text('def new_api(): pass\n')
         with self.assertRaisesRegex(C.ContractError,'source_profile_coverage_incomplete'):B.compose(self.root,self.inventory+[new])
 
+    def test_shared_authentication_roots_preserve_admitted_fixture_namespace(self):
+        before = B.compose(self.root, self.inventory)[C.SYMBOLS]
+        source = self.root / 'core/src/main.rs'
+        source.write_text(source.read_text() + '\nmod authority_auth;\nmod python_connector_supervisor;\n')
+        profile = C.load(self.root, C.PROFILE)
+        main = next(row for row in profile['rust_roots'] if row['crate'] == 'cafe_core')
+        main['files'] = sorted(set(main['files']) | {'core/src/authority_auth.rs',
+            'core/src/windows_auth.rs', 'core/src/python_connector_supervisor.rs'})
+        main['module_paths']['core/src/authority_auth.rs::windows_auth'] = 'core/src/windows_auth.rs'
+        (self.root / C.PROFILE).write_bytes(C.canonical(profile))
+        after = B.compose(self.root, self.inventory)
+        self.assertEqual(after[C.SYMBOLS], before)
+        symbols = [C.decode(line) for line in before.splitlines()]
+        authentication = [row for row in symbols if row['path'] == 'core/src/authority_auth.rs']
+        self.assertTrue(authentication)
+        self.assertTrue(all(row['symbol'].startswith('cafe_authority_fixture::authority_auth::') for row in authentication))
+        self.assertEqual(B.compose(self.root, self.inventory), after)
+
     def test_rust_optional_root_default_refuses_path_override(self):
         rust=C.tool(self.root,'tools/extract_rust.py');profile=C.load(self.root,C.PROFILE)['rust_roots'][1]
         with self.assertRaises(rust.ExtractionError):rust.extract(self.root,profile['files'],self.inventory,profile['cfg'])
@@ -181,6 +199,108 @@ class TestRouterIndex(unittest.TestCase):
         self.assertEqual(report['verdict'],'router available (uncalibrated)');self.assertEqual(report['state'],'available_uncalibrated');self.assertFalse(report['calibrated']);self.assertEqual(report['legs']['resolver_index']['availability'],'available_uncalibrated');self.assertEqual(q.exit_code(legs),0);self.assertNotEqual(q.exit_code(legs,True),0)
         report['verdict']='qualified'
         with self.assertRaises(ValueError):q.validate_report(report,legs)
+
+
+class TestCompiledSourceContexts(unittest.TestCase):
+    """Handwritten physical-surface oracles, independent of emitted index bytes."""
+    PATH = 'core/src/shared.rs'
+
+    def report(self, crate, *, public=True):
+        module = crate + '::shared'
+        return {'path': self.PATH, 'source_sha256': 'a' * 64, 'module': module,
+                'symbols': [{'path': self.PATH, 'symbol': module + '::visible',
+                             'name': 'visible', 'line': 1, 'cfg': []}] if public else []}
+
+    def contexts(self, public=True):
+        return [(crate, {'unix': True, 'windows': False}, self.report(crate, public=public))
+                for crate in ('cafe_core', 'cafe_authority_fixture')]
+
+    def choose(self, contexts, prefix='cafe_authority_fixture::shared::'):
+        return B.canonical_rust_report(self.PATH, contexts, prefix)
+
+    def test_explicit_owner_is_order_independent_and_preserves_original_symbols(self):
+        contexts = self.contexts()
+        for reports in (contexts, list(reversed(contexts))):
+            selected = self.choose(reports)
+            self.assertEqual(selected, contexts[1][2])
+            self.assertEqual(selected['symbols'], [{'path': self.PATH,
+                'symbol': 'cafe_authority_fixture::shared::visible', 'name': 'visible', 'line': 1, 'cfg': []}])
+
+    def test_private_zero_surface_still_requires_exact_declared_owner(self):
+        contexts = self.contexts(public=False)
+        self.assertEqual(self.choose(contexts), contexts[1][2])
+        contexts[0][2]['source_sha256'] = 'b' * 64
+        with self.assertRaisesRegex(C.ContractError, 'compiled_source_context_mismatch'):
+            self.choose(contexts)
+
+    def test_hash_change_between_roots_abstains(self):
+        contexts = self.contexts(); contexts[0][2]['source_sha256'] = 'b' * 64
+        with self.assertRaisesRegex(C.ContractError, 'compiled_source_context_mismatch'):
+            self.choose(contexts)
+
+    def test_cfg_or_physical_surface_difference_abstains(self):
+        for field, value in [('cfg', ['unix']), ('line', 2), ('name', 'other'),
+                             ('symbol', 'cafe_core::shared::other')]:
+            contexts = self.contexts(); contexts[0][2]['symbols'][0][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(C.ContractError, 'compiled_source_context_mismatch'):
+                self.choose(contexts)
+        contexts = self.contexts(public=False); contexts[0][1]['windows'] = True
+        with self.assertRaisesRegex(C.ContractError, 'compiled_source_context_mismatch'):
+            self.choose(contexts)
+        contexts = self.contexts(); contexts[0][2]['symbols'] = []
+        with self.assertRaisesRegex(C.ContractError, 'compiled_source_context_mismatch'):
+            self.choose(contexts)
+
+    def test_missing_clipped_or_alternate_module_prefix_abstains(self):
+        for prefix in ('missing::shared::', 'cafe_authority_fixture::share', '', 'cafe_authority_fixture::'):
+            with self.subTest(prefix=prefix), self.assertRaisesRegex(C.ContractError, 'missing_or_ambiguous_canonical_source_owner'):
+                self.choose(self.contexts(), prefix)
+        contexts = self.contexts()
+        contexts[0][2]['module'] = 'cafe_core::alternate'
+        contexts[0][2]['symbols'][0]['symbol'] = 'cafe_core::alternate::visible'
+        with self.assertRaisesRegex(C.ContractError, 'compiled_source_context_mismatch'):
+            self.choose(contexts)
+
+    def test_duplicate_canonical_owner_is_ambiguous_even_if_bytes_match(self):
+        contexts = self.contexts(); contexts.append(contexts[1])
+        with self.assertRaisesRegex(C.ContractError, 'missing_or_ambiguous_canonical_source_owner'):
+            self.choose(contexts)
+
+    def test_unknown_compiled_crate_is_not_stripped(self):
+        contexts = self.contexts(); contexts[0][2]['symbols'][0]['symbol'] = 'unknown::shared::visible'
+        with self.assertRaisesRegex(C.ContractError, 'invalid_compiled_symbol_namespace'):
+            self.choose(contexts)
+
+    def test_real_two_roots_share_one_physical_public_and_private_file(self):
+        with tempfile.TemporaryDirectory(prefix='cafe-source-context-') as temporary:
+            root = Path(temporary)
+            for directory in ('core/src', 'core/tests', 'tools'):
+                (root / directory).mkdir(parents=True)
+            shutil.copyfile(ROOT / 'tools/extract_rust.py', root / 'tools/extract_rust.py')
+            (root / 'Cargo.toml').write_text('[[bin]]\nname="cafe-core"\npath="core/src/main.rs"\n[[bin]]\nname="cafe-authority-fixture"\npath="core/tests/fixture.rs"\n')
+            (root / 'core/src/main.rs').write_text('mod shared;\n')
+            (root / 'core/tests/fixture.rs').write_text('#[path="../src/shared.rs"] mod shared;\n')
+            paths = ['core/src/main.rs', self.PATH, 'core/tests/fixture.rs']
+            profile = {'files': [
+                {'language': 'rust', 'path': path, 'symbol_prefix': prefix} for path, prefix in [
+                    ('core/src/main.rs', 'cafe_core::'), (self.PATH, 'cafe_authority_fixture::shared::'),
+                    ('core/tests/fixture.rs', 'cafe_authority_fixture::')]], 'rust_roots': [
+                {'entry': 'core/src/main.rs', 'crate': 'cafe_core', 'files': sorted(paths[:2]),
+                 'cfg': {'unix': True}, 'module_paths': {}},
+                {'entry': 'core/tests/fixture.rs', 'crate': 'cafe_authority_fixture', 'files': sorted(paths[1:]),
+                 'cfg': {'unix': True}, 'module_paths': {'core/tests/fixture.rs::shared': self.PATH}}]}
+            for public in (True, False):
+                (root / self.PATH).write_text(('pub ' if public else '') + 'fn visible() {}\n')
+                reports = B.extraction_reports(root, profile, paths)
+                selected = reports[self.PATH]
+                self.assertEqual(set(reports), set(paths))
+                self.assertEqual(selected['source_sha256'], C.sha((root / self.PATH).read_bytes()))
+                self.assertEqual(selected['module'], 'cafe_authority_fixture::shared')
+                expected = [{'path': self.PATH, 'symbol': 'cafe_authority_fixture::shared::visible',
+                             'name': 'visible', 'line': 1, 'cfg': []}] if public else []
+                self.assertEqual(selected['symbols'], expected)
+                profile['rust_roots'].reverse()
+                self.assertEqual(B.extraction_reports(root, profile, paths), reports)
 
 
 if __name__=='__main__':unittest.main()

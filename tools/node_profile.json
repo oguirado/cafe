@@ -1,0 +1,25 @@
+{
+  "dependencies": {
+    "@openvue/icons": "1.0.0",
+    "@openvue/themes": "1.0.0",
+    "dockview-core": "8.4.1",
+    "dockview-vue": "8.4.1",
+    "openvue": "1.0.0",
+    "typescript": "5.9.3",
+    "vue": "3.5.43"
+  },
+  "devDependencies": {
+    "@electron/asar": "4.3.1",
+    "@electron/fuses": "2.1.3",
+    "@electron/packager": "20.3.0",
+    "@vitejs/plugin-vue": "6.0.9",
+    "electron": "44.9.2",
+    "vite": "8.3.4"
+  },
+  "fuses_integrity": "sha512-LoKJUXNiJ4JM8IIrUltSHI+8pkogaGj5wmJx81jE/Wk3g2w1/kfMbTEKNoY5kitGE8hiC12h32R/1SlywFtxXg==",
+  "lock_sha256": "9b4ffb0524a89e3da3adea973c360af067aaec9059e2dfeb700d418433ebb2fe",
+  "locked_packages": 125,
+  "name": "cafe-shell",
+  "review": "Exact operator-approved direct pins plus official-registry audited transitive closure. No terminal or authored-TypeScript tool dependencies.",
+  "schema": "cafe.node-profile.v1"
+}

@@ -1,0 +1,107 @@
+/* Café semantic adapter. Vendor token names and original components stay intact. */
+@import "./vendor/open-design-openai/tokens.css";
+
+/* System typography only: no font assets, font faces or web font requests. */
+:root {
+  color-scheme: dark;
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* Capsule UI Kit packages/capsule-ui-kit/src/design/theme.css:752; structural value, not a new brand color. */
+  --cafe-structure-component-app-shell-palette-width: 32rem;
+  /* Capsule UI Kit packages/capsule-ui-kit/src/design/theme.css:756; structural value, not a new brand color. */
+  --cafe-structure-component-app-shell-space-hairline: 1px;
+  /* Capsule UI Kit packages/capsule-ui-kit/src/design/theme.css:751; structural value, not a new brand color. */
+  --cafe-structure-component-app-shell-status-height: 1.75rem;
+  /* Capsule UI Kit packages/capsule-ui-kit/src/design/theme.css:750; structural value, not a new brand color. */
+  --cafe-structure-component-app-shell-topbar-height: 3rem;
+  /* Capsule UI Kit packages/capsule-ui-kit/src/design/theme.css:227; structural value, not a new brand color. */
+  --cafe-structure-primitive-z-index-panel: 10;
+  /* Capsule UI Kit packages/capsule-ui-kit/src/design/theme.css:277; structural value, not a new brand color. */
+  --cafe-structure-semantic-border-width: 1px;
+  /* Capsule UI Kit packages/capsule-ui-kit/src/design/theme.css:281; structural value, not a new brand color. */
+  --cafe-structure-semantic-focus-ring-width: 2px;
+  /* Capsule UI Kit packages/capsule-ui-kit/src/design/theme.css:212; structural value, not a new brand color. */
+  --cafe-structure-semantic-typography-font-weight-medium: 500;
+  /* Capsule UI Kit packages/capsule-ui-kit/src/design/theme.css:211; structural value, not a new brand color. */
+  --cafe-structure-semantic-typography-font-weight-regular: 400;
+  /* Capsule UI Kit packages/capsule-ui-kit/src/design/theme.css:213; structural value, not a new brand color. */
+  --cafe-structure-semantic-typography-font-weight-semibold: 600;
+  /* Capsule UI Kit packages/capsule-ui-kit/src/design/theme.css:213; structural value, not a new brand color. */
+  --cafe-structure-semantic-typography-roles-headline-sm-font-weight: 600;
+  /* Capsule UI Kit shell/TopBar.vue:245; structural value, not a new brand color. */
+  --cafe-structure-topbar-search-width: calc(var(--cuk-primitive-space-16) * 10);
+  --cuk-component-app-shell-palette-width: var(--cafe-structure-component-app-shell-palette-width);
+  --cuk-component-app-shell-space-hairline: var(--cafe-structure-component-app-shell-space-hairline);
+  --cuk-component-app-shell-status-height: var(--cafe-structure-component-app-shell-status-height);
+  --cuk-component-app-shell-topbar-height: var(--cafe-structure-component-app-shell-topbar-height);
+  --cuk-component-dialog-host-surface: var(--surface);
+  --cuk-primitive-color-emerald-400: var(--success);
+  --cuk-primitive-color-s1-on-primary: var(--accent-on);
+  --cuk-primitive-color-s1-primary: var(--accent);
+  --cuk-primitive-space-1: var(--space-1);
+  --cuk-primitive-space-12: var(--space-12);
+  --cuk-primitive-space-16: var(--space-16);
+  --cuk-primitive-space-2: var(--space-2);
+  --cuk-primitive-space-3: var(--space-3);
+  --cuk-primitive-space-4: var(--space-4);
+  --cuk-primitive-space-5: var(--space-5);
+  --cuk-primitive-space-6: var(--space-6);
+  --cuk-primitive-space-8: var(--space-8);
+  --cuk-primitive-z-index-panel: var(--cafe-structure-primitive-z-index-panel);
+  --cuk-semantic-border-subtle: var(--border-soft);
+  --cuk-semantic-border-width: var(--cafe-structure-semantic-border-width);
+  --cuk-semantic-focus-ring-width: var(--cafe-structure-semantic-focus-ring-width);
+  --cuk-semantic-radius-pill: var(--radius-pill);
+  --cuk-semantic-radius-sm: var(--radius-sm);
+  --cuk-semantic-radius-xs: var(--radius-sm);
+  --cuk-semantic-spacing-md: var(--space-3);
+  --cuk-semantic-spacing-sm: var(--space-2);
+  --cuk-semantic-spacing-xl: var(--space-6);
+  --cuk-semantic-spacing-xs: var(--space-1);
+  --cuk-semantic-surface-canvas: var(--bg);
+  --cuk-semantic-surface-elevated: var(--surface);
+  --cuk-semantic-surface-interactive: var(--surface-warm);
+  --cuk-semantic-surface-panel: var(--surface);
+  --cuk-semantic-surface-sunken: var(--surface-warm);
+  --cuk-semantic-text-accent: var(--accent);
+  --cuk-semantic-text-disabled: var(--meta);
+  --cuk-semantic-text-muted: var(--muted);
+  --cuk-semantic-text-primary: var(--fg);
+  --cuk-semantic-typography-font-family-mono: var(--font-mono);
+  --cuk-semantic-typography-font-family-sans: var(--font-body);
+  --cuk-semantic-typography-font-size-lg: var(--text-lg);
+  --cuk-semantic-typography-font-size-s1: var(--text-sm);
+  --cuk-semantic-typography-font-size-s1_10: var(--text-xs);
+  --cuk-semantic-typography-font-size-s1_14: var(--text-sm);
+  --cuk-semantic-typography-font-size-xs: var(--text-xs);
+  --cuk-semantic-typography-font-weight-medium: var(--cafe-structure-semantic-typography-font-weight-medium);
+  --cuk-semantic-typography-font-weight-regular: var(--cafe-structure-semantic-typography-font-weight-regular);
+  --cuk-semantic-typography-font-weight-semibold: var(--cafe-structure-semantic-typography-font-weight-semibold);
+  --cuk-semantic-typography-roles-body-sm-font-size: var(--text-sm);
+  --cuk-semantic-typography-roles-body-sm-line-height: var(--leading-body);
+  --cuk-semantic-typography-roles-headline-sm-font-size: var(--text-xl);
+  --cuk-semantic-typography-roles-headline-sm-font-weight: var(--cafe-structure-semantic-typography-roles-headline-sm-font-weight);
+  --cuk-semantic-typography-roles-headline-sm-line-height: var(--leading-tight);
+  --s1-topbar-search-width: var(--cafe-structure-topbar-search-width);
+}
+
+/* Dark role values from upstream system/kit.dark.html:67-76. */
+:root:not([data-cafe-theme="light"]) {
+  --bg: #0f1115;
+  --surface: #171a21;
+  --surface-warm: #0f1115;
+  --fg: #f8fafc;
+  --fg-2: #f8fafc;
+  --muted: #a7adba;
+  --meta: #a7adba;
+  --border: #2a2f3a;
+  --border-soft: #2a2f3a;
+  --accent-on: #0b0b0b;
+}
+
+/* Light role values come from tokens.css and system/kit.html:67-76. */
+:root[data-cafe-theme="light"] {
+  color-scheme: light;
+}
+

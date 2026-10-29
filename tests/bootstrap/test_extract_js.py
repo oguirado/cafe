@@ -299,3 +299,32 @@ fsGuard.readFileSync=function(path,...args){
 
 
 if __name__=='__main__':unittest.main()
+
+
+# G4 extension: hand transcribed public exports/facades from numbered candidate source.
+G4_GOLD = {'src/main/index.js': [('Backend', 'typedef::Backend', 9), ('DesktopShellOptions', 'typedef::DesktopShellOptions', 13), ('DesktopShellController', 'DesktopShellController', 187), ('createDesktopShell', 'createDesktopShell', 188)], 'src/main/shellSecurity.js': [('show', 'browserOptions::show', 20), ('webPreferences', 'browserOptions::webPreferences', 21), ('availability', 'unavailableSnapshot::availability', 106), ('pid', 'unavailableSnapshot::pid', 106), ('reason', 'unavailableSnapshot::reason', 107), ('authority_epoch', 'unavailableSnapshot::authority_epoch', 107), ('revision', 'unavailableSnapshot::revision', 108), ('state', 'unavailableSnapshot::state', 108), ('stderrBytes', 'unavailableSnapshot::stderrBytes', 108), ('pid', 'ownedChildAdapter::pid', 129), ('stdout', 'ownedChildAdapter::stdout', 129), ('stderr', 'ownedChildAdapter::stderr', 129), ('stdin', 'ownedChildAdapter::stdin', 129), ('on', 'ownedChildAdapter::on', 130), ('kill', 'ownedChildAdapter::kill', 122), ('Backend', 'typedef::Backend', 134), ('availability', 'publicSnapshot::availability', 158), ('pid', 'publicSnapshot::pid', 158), ('reason', 'publicSnapshot::reason', 159), ('authority_epoch', 'publicSnapshot::authority_epoch', 160), ('revision', 'publicSnapshot::revision', 160), ('state', 'publicSnapshot::state', 160), ('stderrBytes', 'publicSnapshot::stderrBytes', 160), ('BOOT_URL', 'BOOT_URL', 224), ('CSP', 'CSP', 225), ('INVOKE_CHANNELS', 'INVOKE_CHANNELS', 226), ('SNAPSHOT_CHANNEL', 'SNAPSHOT_CHANNEL', 227), ('isBootstrapUrl', 'isBootstrapUrl', 228), ('browserOptions', 'browserOptions', 229), ('admitCaller', 'admitCaller', 230), ('admitInvokeChannel', 'admitInvokeChannel', 231), ('hardenSession', 'hardenSession', 232), ('hardenWindow', 'hardenWindow', 233), ('installBootstrapProtocol', 'installBootstrapProtocol', 234), ('unavailableSnapshot', 'unavailableSnapshot', 235), ('ownedChildAdapter', 'ownedChildAdapter', 236), ('publicSnapshot', 'publicSnapshot', 238), ('bindNativeIpc', 'bindNativeIpc', 239), ('publishSnapshot', 'publishSnapshot', 240), ('assertSafeLaunch', 'assertSafeLaunch', 242), ('subscribeBackend', 'subscribeBackend', 243), ('bootRejected', 'bootRejected', 247)], 'src/preload/index.js': [('installPreload', 'installPreload', 19)], 'src/preload/preloadSecurity.js': [('invoke', 'closedTransport::invoke', 12), ('subscribe', 'closedTransport::subscribe', 19), ('closedTransport', 'closedTransport', 39), ('exposeClosedBridge', 'exposeClosedBridge', 40)]}
+G4_SOURCE_HASHES = {'src/main/index.js': '9b7e52629dc8a206e8b0cc731e7040b9e71f2ffcb71d52ba0c561007da559238', 'src/main/shellSecurity.js': 'dc6f2685526f531eb30969c8e0a10b791de3df33ed47910c748e904ad0d664c8', 'src/preload/index.js': 'de9d0ae6e243e0cad251c8d0f1bf8f86359e3bb7009639fdd0ad3c9349154855', 'src/preload/preloadSecurity.js': '79deb36d57c105ebb15ddcc982911902cea691fd22e97bf4f6e17fd477267342'}
+
+def g4_expected():
+    result={}
+    for path,pairs in G4_GOLD.items():
+        prefix='cafe_shell::'+path.split('/')[1]+'::'+Path(path).stem+'::'
+        result[path]=sorted([{'path':path,'symbol':prefix+suffix,'name':name,'line':line,'process':path.split('/')[1]} for name,suffix,line in pairs],key=lambda row:(row['line'],row['symbol']))
+    return result
+
+class TestG4HandwrittenJavaScriptSurface(unittest.TestCase):
+    def test_named_controller_and_closed_security_surface_match_manual_gold(self):
+        inventory,_=q.load_inventory(ROOT,os.environ.get('CAFE_ROUTER_INVENTORY'))
+        report=x.extract(ROOT,sorted(G4_GOLD),inventory)
+        self.assertEqual({row['path']:row['symbols'] for row in report['files']},g4_expected())
+        self.assertEqual(sum(len(row['symbols']) for row in report['files']),51)
+        self.assertEqual({row['path']:row['source_sha256'] for row in report['files']},G4_SOURCE_HASHES)
+    def test_removed_named_controller_export_breaks_manual_inventory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            for name in G4_GOLD:
+                target=root/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes((ROOT/name).read_bytes())
+            main=root/'src/main/index.js';text=main.read_text();needle='exports.DesktopShellController = DesktopShellController;'
+            self.assertEqual(text.count(needle),1);main.write_text(text.replace(needle,'void DesktopShellController;'))
+            report=x.extract(root,sorted(G4_GOLD),sorted(G4_GOLD))
+            with self.assertRaises(AssertionError):self.assertEqual({row['path']:row['symbols'] for row in report['files']},g4_expected())

@@ -81,6 +81,15 @@
           "run": "python -B tools/run_ci.py --stage python"
         },
         {
+          "name": "Verified official Electron Windows archive for real fuse regressions",
+          "shell": "bash",
+          "run": "set -euo pipefail\nfixture=\"$RUNNER_TEMP/cafe-electron-fixture\"\nmkdir -p \"$fixture\"\ncurl --fail --location --output \"$fixture/electron-v44.9.2-win32-x64.zip\" https://github.com/electron/electron/releases/download/v44.9.2/electron-v44.9.2-win32-x64.zip\ncurl --fail --location --output \"$fixture/SHASUMS256.txt\" https://github.com/electron/electron/releases/download/v44.9.2/SHASUMS256.txt\n(cd \"$fixture\" && sha256sum --check --ignore-missing SHASUMS256.txt)\nprintf '%s  %s\\n' '1a9ed7f4e70291c95ed9479d7fcd384a2d9cf062e5fb7ce846b119c7c63036c3' \"$fixture/electron-v44.9.2-win32-x64.zip\" | sha256sum --check --status\necho \"CAFE_ELECTRON_ZIP_DIR=$(cd \"$fixture\" && pwd -W 2>/dev/null || pwd)\" >> \"$GITHUB_ENV\"\necho \"CAFE_TEST_PYTHON=$(python -c 'import sys; print(sys.executable)')\" >> \"$GITHUB_ENV\"\n"
+        },
+        {
+          "name": "Build reviewed presentation renderer",
+          "run": "npm run build:renderer"
+        },
+        {
           "id": "gate_node",
           "name": "Gate node",
           "run": "python -B tools/run_ci.py --stage node"

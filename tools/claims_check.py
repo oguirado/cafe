@@ -16,7 +16,7 @@ import sys
 from ci_support import ROOT,prepared_inventory
 
 ACTION_PINS={'actions/checkout':'11d5960a326750d5838078e36cf38b85af677262','actions/setup-node':'49933ea5288caeca8642d1e84afbd3f7d6820020','actions/setup-python':'a26af69be951a213d495a4c3e4e4022e16d87065'}
-BASELINE_SHA256='ff9c5e1d7f50c990d58f9c7d51d6d537037cea36ad52c530b0925ad19dc024e4'
+BASELINE_SHA256='375182e4d7fe463d48518e51cae5d38346758e1dcec1508e372f1b49e38f58a2'
 GITLEAKS_SHA='ba6dbb656933921c775ee5a2d1c13a91046e7952e9d919f9bac4cec61d628e7d'
 STAGES=('rust','python','node','checkjs','integration','router','publication','claims')
 EXTERNAL_FLAGS={
