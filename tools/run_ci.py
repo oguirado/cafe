@@ -194,6 +194,7 @@ def run_stage(stage,root=ROOT):
             required={'tests/security/backendSupervisor.test.js','tests/security/electronShell.test.js','tests/security/shellFuses.test.js'}
             if not selected or not required.issubset(selected):raise ValueError('security_test_inventory_incomplete')
             run([executable('npm'),'run','build:preload'],'sandbox_preload_build')
+            run([executable('npm'),'run','build:renderer'],'renderer_build')
             for name in selected:
                 result=run([node,'--test',name],name)
                 result['test_counts']=node_test_evidence(result['stdout'])
