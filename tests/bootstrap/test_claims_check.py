@@ -31,6 +31,11 @@ class TestClaims(unittest.TestCase):
  def test_current_discovered_claims_and_all_ci_stages_pass(self):
   result=self.inspect();self.assertEqual(result['findings'],[]);self.assertEqual(result['ci_stages'],8)
   self.assertIn('README.md',result['checked_documents']);self.assertTrue(result['deferred'])
+ def test_stage_equals_duplicate_and_missing_value_are_not_proven(self):
+  for command in ['python3 tools/run_ci.py --stage=invented','python3 tools/run_ci.py --stage=rust','python3 tools/run_ci.py --stage rust --stage invented','python3 tools/run_ci.py --stage rust --stage','python3 tools/run_ci.py --stage']:
+   with self.subTest(command=command):
+    (self.root/'README.md').write_text('Run `'+command+'`.\n')
+    self.assertEqual(self.inspect()['status'],'fail')
  def test_new_unlisted_document_with_missing_path_fails(self):
   name='docs/new_claim.md';path=self.root/name;path.parent.mkdir(exist_ok=True);path.write_text('Run `tools/does_not_exist.py`.\n');self.names=sorted(self.names+[name])
   self.assertEqual(self.inspect()['status'],'fail')
@@ -91,6 +96,127 @@ class TestClaims(unittest.TestCase):
  def test_shipped_tokenizer_asset_digest(self):
   asset=ROOT/'tools/assets/tokenizer/fb374d419588a4632f3f557e76b4b70aebbca790'
   self.assertEqual(hashlib.sha256(asset.read_bytes()).hexdigest(),'446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0cfb1a2d')
+
+
+class TestStrictCommandClaims(unittest.TestCase):
+ def setUp(self):
+  self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+  self.root=Path(self.temp.name);self.names={'Cargo.toml','tests/existing.js','tests/existing.rs'}
+  (self.root/'tests').mkdir()
+  (self.root/'tests/existing.js').write_text('/* named test fixture */\n')
+  (self.root/'tests/existing.rs').write_text('#[test] fn existing() {}\n')
+  self.manifest()
+ def manifest(self,path='tests/existing.rs',extra=''):
+  (self.root/'Cargo.toml').write_text('[package]\nname="fixture"\nversion="0.1.0"\n[[test]]\nname="existing"\npath='+json.dumps(path)+'\n'+extra)
+ def reject(self,command):
+  with self.assertRaises(ValueError,msg=command):claims.command_claim(self.root,command,self.names)
+ def test_exact_named_file_and_declared_target_pass(self):
+  for command in ['node --test tests/existing.js','cargo test --test existing','cargo test --locked --offline --test existing','cargo test --target aarch64-unknown-linux-gnu --test existing']:
+   with self.subTest(command=command):claims.command_claim(self.root,command,self.names)
+ def test_node_directory_absent_from_inventory_rejected(self):
+  (self.root/'tests/folder.js').mkdir()
+  self.reject('node --test tests/folder.js')
+  self.names.add('tests/folder.js');self.reject('node --test tests/folder.js')
+ def test_node_requires_exactly_one_inventory_file(self):
+  (self.root/'tests/unlisted.js').write_text('')
+  for command in ['node --test','node --test tests/existing.js tests/existing.js','node --test tests/unlisted.js','node --test tests/missing.js','node --test tests/*.js','node --test tests/existing.rs','node --test=tests/existing.js','node --test --invented-flag tests/existing.js','node --test params.json','node --test target/debug/cafe-wgc-synthetic.exe']:
+   with self.subTest(command=command):self.reject(command)
+ def test_node_alias_absolute_and_symlink_paths_rejected(self):
+  (self.root/'tests/link.js').symlink_to('existing.js');self.names.add('tests/link.js')
+  (self.root/'tests/loop.js').symlink_to('loop.js');self.names.add('tests/loop.js')
+  (self.root/'alias').symlink_to(self.root/'tests',target_is_directory=True);self.names.add('alias/existing.js')
+  os.link(self.root/'tests/existing.js',self.root/'tests/hard.js');self.names.add('tests/hard.js')
+  for path in ['tests/loop.js','tests/link.js','alias/existing.js','tests/hard.js','tests/existing.js','./tests/existing.js','tests/../tests/existing.js','tests//existing.js','../escape.js',str(self.root/'tests/existing.js'),r'tests\existing.js']:
+   with self.subTest(path=path):self.reject('node --test '+json.dumps(path))
+ def test_cargo_equals_duplicates_and_wrong_subcommands_rejected(self):
+  for command in ['cargo test --test=missing','cargo test --test=existing','cargo test --test existing --test missing','cargo test --test existing --test existing','cargo build --test existing','cargo check --test existing','cargo --test existing','cargo test --test','cargo test --test missing','cargo test --tests --test existing','cargo test -- --test existing','cargo test --test existing --invented-flag','cargo test --test existing extra','cargo test --bin existing --test existing']:
+   with self.subTest(command=command):self.reject(command)
+ def test_cargo_removed_declared_source_rejected(self):
+  (self.root/'tests/existing.rs').unlink()
+  self.reject('cargo test --test existing')
+ def test_cargo_target_must_be_uniquely_declared(self):
+  self.manifest(extra='[[test]]\nname="existing"\npath="tests/existing.rs"\n')
+  self.reject('cargo test --test existing')
+  (self.root/'Cargo.toml').write_text('# [[test]]\n# name="existing"\n# path="tests/existing.rs"\n')
+  self.reject('cargo test --test existing')
+ def test_cargo_unsafe_missing_unlisted_directory_sources_rejected(self):
+  (self.root/'tests/folder.rs').mkdir()
+  (self.root/'tests/unlisted.rs').write_text('')
+  (self.root/'tests/link.rs').symlink_to('existing.rs')
+  (self.root/'alias').symlink_to(self.root/'tests',target_is_directory=True)
+  self.names.update({'tests/folder.rs','tests/link.rs','alias/existing.rs'})
+  for path in ['../escape.rs','/escape.rs',str(self.root/'tests/existing.rs'),'tests/../tests/existing.rs','./tests/existing.rs','tests//existing.rs',r'tests\existing.rs','tests/missing.rs','tests/unlisted.rs','tests/folder.rs','tests/link.rs','alias/existing.rs','tests/existing.js','params.json']:
+   with self.subTest(path=path):
+    self.manifest(path);self.reject('cargo test --test existing')
+  os.link(self.root/'tests/existing.rs',self.root/'tests/hard.rs');self.names.add('tests/hard.rs')
+  self.manifest('tests/hard.rs');self.reject('cargo test --test existing')
+ def test_cargo_manifest_itself_requires_inventory_regular_file(self):
+  self.names.remove('Cargo.toml');self.reject('cargo test --test existing')
+ def test_cargo_bin_selector_also_requires_declared_source(self):
+  (self.root/'Cargo.toml').write_text('[[bin]]\nname="existing"\npath="tests/existing.rs"\n')
+  claims.command_claim(self.root,'cargo build --locked --bin existing',self.names)
+  self.reject('cargo build --bin missing')
+  (self.root/'tests/existing.rs').unlink();self.reject('cargo build --bin existing')
+ def flags(self,source):
+  path=self.root/'cli.py';path.write_text(source);return claims.argument_flags(path)
+ def test_literal_argparse_flags_and_finite_tuple_loop(self):
+  source="p.add_argument('--literal')\nfor name in ('alpha', 'beta-flag'):\n p.add_argument('--'+name, required=True)\n"
+  self.assertEqual(self.flags(source),{'--literal','--alpha','--beta-flag'})
+ def test_finite_loop_contrasts_do_not_infer_flags(self):
+  for source in [
+   "for name in dynamic_names:\n p.add_argument('--'+name)\n",
+   "names=('alpha',)\nfor name in names:\n p.add_argument('--'+name)\n",
+   "for name in ['alpha']:\n p.add_argument('--'+name)\n",
+   "for name in ('alpha',):\n name='bogus'\n p.add_argument('--'+name)\n",
+   "for name in ('alpha',):\n p.add_argument('--'+name)\n mutate()\n",
+   "for name in ('alpha',):\n p.add_argument('--'+name, default=(name:='bogus'))\n",
+   "for name in ('alpha',):\n p.add_argument('--'+name, default=rebind())\n",
+   "for name in ('alpha',):\n p.add_argument('--'+name, **options)\n",
+   "for name in ('alpha',):\n p.add_argument('--'+name, *options)\n",
+   "for name in ('alpha',):\n p.add_argument('--'+name)\nelse:\n mutate()\n",
+   "for name in ('alpha', dynamic_name):\n p.add_argument('--'+name)\n",
+   "for name in ('alpha',):\n p.add_argument('--'+name, '--alias')\n",
+   "for name in ('alpha',):\n p.add_argument(f'--{name}')\n",
+   "for p in dynamic_parsers:\n for name in ('alpha',):\n  p.add_argument('--'+name)\n",
+   "for name in ('alpha',):\n name.add_argument('--'+name)\n",
+  ]:
+   with self.subTest(source=source):self.assertNotIn('--alpha',self.flags(source))
+ def test_finite_flags_remain_local_to_python_entrypoint(self):
+  (self.root/'cli.py').write_text("for name in ('alpha', 'beta'):\n p.add_argument('--'+name)\n")
+  self.names.add('cli.py')
+  claims.command_claim(self.root,'python3 cli.py --alpha value --beta value',self.names)
+  self.reject('python3 cli.py --invented-flag')
+
+
+class TestClaimDiscoveryRepair(unittest.TestCase):
+ # Reuse fixture setup without rerunning inherited test methods.
+ setUp=TestClaims.setUp
+ inspect=TestClaims.inspect
+ def test_actual_connector_cli_flags_are_discovered(self):
+  (self.root/'README.md').write_text('Use `python3 connectors/cafe/twitch_storage.py --channel fixture --data fixture`.\nUse `python3 connectors/cafe/mcp_server.py --data fixture`.\n')
+  self.assertEqual(self.inspect()['findings'],[])
+  (self.root/'README.md').write_text('Use `python3 connectors/cafe/mcp_server.py --channel fixture`.\n')
+  self.assertEqual(self.inspect()['status'],'fail')
+ def test_finite_loop_discovery_in_tools_and_connectors(self):
+  for name in ['tools/finite_fixture.py','connectors/cafe/finite_fixture.py']:
+   with self.subTest(name=name):
+    (self.root/name).write_text("for name in ('finite-claim-fixture',):\n p.add_argument('--'+name)\n")
+    self.names=sorted(set(self.names)|{name})
+    (self.root/'README.md').write_text('Use `python3 '+name+' --finite-claim-fixture value`.\n')
+    self.assertEqual(self.inspect()['findings'],[])
+    (self.root/name).write_text("for name in dynamic_names:\n p.add_argument('--'+name)\n")
+    self.assertEqual(self.inspect()['status'],'fail')
+    self.names.remove(name)
+ def test_node_and_cargo_claims_in_markdown_and_workflow(self):
+  (self.root/'README.md').write_text('Run `node --test tests/security/control.test.js`.\n```bash\ncargo test --test journal_recovery\n```\n')
+  self.assertEqual(self.inspect()['findings'],[])
+  for text in ['Run `node --test tests/security/missing.js`.','```bash\ncargo test --test=missing\n```','```text\nnode --test tests/security/missing.js\n```']:
+   with self.subTest(text=text):
+    (self.root/'README.md').write_text(text);self.assertEqual(self.inspect()['status'],'fail')
+  (self.root/'README.md').write_text('No command claims.\n')
+  path=self.root/'.github/workflows/ci.yml';data=json.loads(path.read_text())
+  data['jobs']['verify']['steps'].append({'run':'node --test tests/security/missing.js'})
+  path.write_text(json.dumps(data));self.assertEqual(self.inspect()['status'],'fail')
 
 
 if __name__=='__main__':unittest.main()
