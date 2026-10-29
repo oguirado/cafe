@@ -14,21 +14,21 @@
       "symbol_prefix": "cafe.channel_auth."
     },
     {
+      "path": "connectors/cafe/mcp_control.py",
       "id": "py-mcp-control",
       "language": "python",
-      "path": "connectors/cafe/mcp_control.py",
       "symbol_prefix": "cafe.mcp_control."
     },
     {
+      "path": "connectors/cafe/mcp_queries.py",
       "id": "py-mcp-queries",
       "language": "python",
-      "path": "connectors/cafe/mcp_queries.py",
       "symbol_prefix": "cafe.mcp_queries."
     },
     {
+      "path": "connectors/cafe/mcp_server.py",
       "id": "py-mcp-server",
       "language": "python",
-      "path": "connectors/cafe/mcp_server.py",
       "symbol_prefix": "cafe.mcp_server."
     },
     {
@@ -44,33 +44,33 @@
       "symbol_prefix": "cafe.obs_bridge."
     },
     {
+      "path": "connectors/cafe/runtime_service_auth.py",
       "id": "py-runtime-service-auth",
       "language": "python",
-      "path": "connectors/cafe/runtime_service_auth.py",
       "symbol_prefix": "cafe.runtime_service_auth."
     },
     {
+      "path": "connectors/cafe/runtime_service_host.py",
       "id": "py-runtime-service-host",
       "language": "python",
-      "path": "connectors/cafe/runtime_service_host.py",
       "symbol_prefix": "cafe.runtime_service_host."
     },
     {
+      "path": "connectors/cafe/runtime_services.py",
       "id": "py-runtime-services",
       "language": "python",
-      "path": "connectors/cafe/runtime_services.py",
       "symbol_prefix": "cafe.runtime_services."
     },
     {
+      "path": "connectors/cafe/twitch_chat.py",
       "id": "py-twitch-chat",
       "language": "python",
-      "path": "connectors/cafe/twitch_chat.py",
       "symbol_prefix": "cafe.twitch_chat."
     },
     {
+      "path": "connectors/cafe/twitch_storage.py",
       "id": "py-twitch-storage",
       "language": "python",
-      "path": "connectors/cafe/twitch_storage.py",
       "symbol_prefix": "cafe.twitch_storage."
     },
     {
@@ -116,15 +116,15 @@
       "symbol_prefix": "cafe_core::capture_health::"
     },
     {
+      "path": "core/src/capture_pipeline.rs",
       "id": "rust-capture-pipeline",
       "language": "rust",
-      "path": "core/src/capture_pipeline.rs",
       "symbol_prefix": "cafe_core::capture_pipeline::"
     },
     {
+      "path": "core/src/control_intents.rs",
       "id": "rust-control-intents",
       "language": "rust",
-      "path": "core/src/control_intents.rs",
       "symbol_prefix": "cafe_core::control_intents::"
     },
     {
@@ -146,9 +146,9 @@
       "symbol_prefix": "cafe_core::"
     },
     {
+      "path": "core/src/operator_protocol.rs",
       "id": "rust-operator-protocol",
       "language": "rust",
-      "path": "core/src/operator_protocol.rs",
       "symbol_prefix": "cafe_core::operator_protocol::"
     },
     {
@@ -164,39 +164,39 @@
       "symbol_prefix": "cafe_core::recorder_pacer::"
     },
     {
+      "path": "core/src/runtime_effects.rs",
       "id": "rust-runtime-effects",
       "language": "rust",
-      "path": "core/src/runtime_effects.rs",
       "symbol_prefix": "cafe_core::runtime_effects::"
     },
     {
+      "path": "core/src/runtime_main.rs",
       "id": "rust-runtime-main",
       "language": "rust",
-      "path": "core/src/runtime_main.rs",
       "symbol_prefix": "cafe_core::runtime_main::"
     },
     {
+      "path": "core/src/runtime_recording.rs",
       "id": "rust-runtime-recording",
       "language": "rust",
-      "path": "core/src/runtime_recording.rs",
       "symbol_prefix": "cafe_core::runtime_recording::"
     },
     {
+      "path": "core/src/runtime_service_owner.rs",
       "id": "rust-service-owner",
       "language": "rust",
-      "path": "core/src/runtime_service_owner.rs",
       "symbol_prefix": "cafe_core::runtime_service_owner::"
     },
     {
+      "path": "core/src/runtime_storage.rs",
       "id": "rust-runtime-storage",
       "language": "rust",
-      "path": "core/src/runtime_storage.rs",
       "symbol_prefix": "cafe_core::runtime_storage::"
     },
     {
+      "path": "core/src/runtime_windows_security.rs",
       "id": "rust-runtime-win-acl",
       "language": "rust",
-      "path": "core/src/runtime_windows_security.rs",
       "symbol_prefix": "cafe_core::runtime_windows_security::"
     },
     {
@@ -242,6 +242,12 @@
       "symbol_prefix": ""
     },
     {
+      "path": "docs/acceptance/WINDOWS_PC_RUNBOOK.md",
+      "id": "windows-pc-runbook",
+      "language": "markdown",
+      "symbol_prefix": ""
+    },
+    {
       "id": "architecture-v0-1",
       "language": "markdown",
       "path": "docs/architecture/ARCHITECTURE.v0.1.md",
@@ -260,9 +266,9 @@
       "symbol_prefix": "cafe_shell::main::backendSupervisor::"
     },
     {
+      "path": "src/main/ffmpegSelection.js",
       "id": "js-ffmpeg-selection",
       "language": "js",
-      "path": "src/main/ffmpegSelection.js",
       "symbol_prefix": "cafe_shell::main::ffmpegSelection::"
     },
     {
@@ -272,15 +278,15 @@
       "symbol_prefix": "cafe_shell::main::index::"
     },
     {
+      "path": "src/main/rendererAssets.js",
       "id": "js-renderer-assets",
       "language": "js",
-      "path": "src/main/rendererAssets.js",
       "symbol_prefix": "cafe_shell::main::rendererAssets::"
     },
     {
+      "path": "src/main/runtimeBackend.js",
       "id": "js-runtime-backend",
       "language": "js",
-      "path": "src/main/runtimeBackend.js",
       "symbol_prefix": "cafe_shell::main::runtimeBackend::"
     },
     {
@@ -308,9 +314,9 @@
       "symbol_prefix": "cafe_shell::preload::preloadSecurity::"
     },
     {
+      "path": "src/renderer/control.js",
       "id": "js-renderer-control",
       "language": "js",
-      "path": "src/renderer/control.js",
       "symbol_prefix": "cafe_shell::renderer::control::"
     },
     {
@@ -323,10 +329,10 @@
   "rust_roots": [
     {
       "cfg": {
-        "target_os": "linux",
-        "test": false,
+        "windows": false,
         "unix": true,
-        "windows": false
+        "test": false,
+        "target_os": "linux"
       },
       "crate": "cafe_core",
       "entry": "core/src/main.rs",
@@ -362,10 +368,10 @@
     },
     {
       "cfg": {
-        "target_os": "linux",
-        "test": false,
         "unix": true,
-        "windows": false
+        "windows": false,
+        "test": false,
+        "target_os": "linux"
       },
       "crate": "cafe_authority_fixture",
       "entry": "core/tests/authority_fixture.rs",
@@ -376,9 +382,9 @@
         "core/tests/authority_fixture.rs"
       ],
       "module_paths": {
-        "core/src/authority_auth.rs::windows_auth": "core/src/windows_auth.rs",
         "core/tests/authority_fixture.rs::authority_auth": "core/src/authority_auth.rs",
-        "core/tests/authority_fixture.rs::python_connector_supervisor": "core/src/python_connector_supervisor.rs"
+        "core/tests/authority_fixture.rs::python_connector_supervisor": "core/src/python_connector_supervisor.rs",
+        "core/src/authority_auth.rs::windows_auth": "core/src/windows_auth.rs"
       }
     }
   ],

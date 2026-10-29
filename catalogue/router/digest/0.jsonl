@@ -57,3 +57,4 @@
 {"g":["NativeSupport","CaptureConfig","ObservedCaptureConfig","ObservedCaptureConfig::resolve_size","CaptureError","native_support"],"i":56,"id":"rust-wgc-producer","o":[],"p":"Exact rust source coordinates for core/src/windows_graphics_capture.rs","t":"core/src/windows_graphics_capture.rs"}
 {"g":["Rect","WindowHandle","WindowView","FixtureWindow","WindowError","WindowRegistry"],"i":57,"id":"rust-window-registry","o":[],"p":"Exact rust source coordinates for core/src/windows_window_registry.rs","t":"core/src/windows_window_registry.rs"}
 {"g":["file"],"i":58,"id":"rust-windows-auth","o":[],"p":"Exact rust source coordinates for core/src/windows_auth.rs","t":"core/src/windows_auth.rs"}
+{"g":["heading-1","heading-2","heading-3","heading-4","heading-5","heading-6"],"i":59,"id":"windows-pc-runbook","o":[],"p":"Exact markdown source coordinates for docs/acceptance/WINDOWS_PC_RUNBOOK.md","t":"docs/acceptance/WINDOWS_PC_RUNBOOK.md"}

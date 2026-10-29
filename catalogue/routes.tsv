@@ -58,3 +58,4 @@ rust-service-owner	core/src/runtime_service_owner.rs
 rust-wgc-producer	core/src/windows_graphics_capture.rs
 rust-window-registry	core/src/windows_window_registry.rs
 rust-windows-auth	core/src/windows_auth.rs
+windows-pc-runbook	docs/acceptance/WINDOWS_PC_RUNBOOK.md
