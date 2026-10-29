@@ -26,6 +26,18 @@
       "symbol_prefix": "cafe.obs_bridge."
     },
     {
+      "path": "connectors/cafe/twitch_chat.py",
+      "id": "py-twitch-chat",
+      "language": "python",
+      "symbol_prefix": "cafe.twitch_chat."
+    },
+    {
+      "path": "connectors/cafe/twitch_storage.py",
+      "id": "py-twitch-storage",
+      "language": "python",
+      "symbol_prefix": "cafe.twitch_storage."
+    },
+    {
       "id": "py-windows-auth",
       "language": "python",
       "path": "connectors/cafe/windows_auth.py",

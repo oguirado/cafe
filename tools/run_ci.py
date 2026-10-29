@@ -49,6 +49,10 @@ def run_stage(stage,root=ROOT):
             text=result['stdout']+result['stderr']
             if not re.search(r'(?m)^Ran [1-9][0-9]* tests? in ',text) or not re.search(r'(?m)^OK\s*$',text) or 'skipped=' in text:raise ValueError('empty_or_skipped_obs_tests')
 
+            result=run([python,'-B','-m','unittest','discover','-s','tests/integration','-p','test_twitch_chat.py'],'twitch_real_peer_tests')
+            text=result['stdout']+result['stderr']
+            if not re.search(r'(?m)^Ran [1-9][0-9]* tests? in ',text) or not re.search(r'(?m)^OK\s*$',text) or 'skipped=' in text:raise ValueError('empty_or_skipped_twitch_chat_tests')
+
         elif stage=='router':
             result=run([python,'-B','router/tools/build_index_v2.py','--nodes','catalogue/nodes.jsonl','--out','catalogue/router','--corpus','cafe','--check'],'router_byte_identical')
             if result['stdout'].strip()!='byte-identical':raise ValueError('router_check_evidence_invalid')

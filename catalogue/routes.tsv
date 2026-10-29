@@ -9,6 +9,8 @@ py-authority-channel	connectors/cafe/authority_channel.py
 py-channel-auth	connectors/cafe/channel_auth.py
 py-obs-auth	connectors/cafe/obs_auth.py
 py-obs-bridge	connectors/cafe/obs_bridge.py
+py-twitch-chat	connectors/cafe/twitch_chat.py
+py-twitch-storage	connectors/cafe/twitch_storage.py
 py-windows-auth	connectors/cafe/windows_auth.py
 readme	docs/acceptance/README.md
 rust-authority-auth	core/src/authority_auth.rs
