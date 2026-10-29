@@ -7,6 +7,8 @@ js-backend-supervisor	src/main/backendSupervisor.js
 js-cafe-bridge	src/preload/cafeBridge.js
 py-authority-channel	connectors/cafe/authority_channel.py
 py-channel-auth	connectors/cafe/channel_auth.py
+py-mcp-queries	connectors/cafe/mcp_queries.py
+py-mcp-server	connectors/cafe/mcp_server.py
 py-obs-auth	connectors/cafe/obs_auth.py
 py-obs-bridge	connectors/cafe/obs_bridge.py
 py-twitch-chat	connectors/cafe/twitch_chat.py

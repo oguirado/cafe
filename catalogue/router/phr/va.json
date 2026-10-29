@@ -1,1 +1,1 @@
-{"validate authority frame":[14],"validate capsule":[8],"validate channel":[11],"validate connector frame":[14],"validate endpoint":[8],"validate event":[11],"validate frame":[7],"validate identified":[8],"validate lease":[7],"validate options":[11],"validate url":[11]}
+{"validate arguments":[9],"validate authority frame":[16],"validate capsule":[10],"validate channel":[13],"validate connector frame":[16],"validate endpoint":[10],"validate event":[13],"validate frame":[7],"validate identified":[10],"validate lease":[7],"validate options":[13],"validate url":[13]}

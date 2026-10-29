@@ -14,6 +14,18 @@
       "symbol_prefix": "cafe.channel_auth."
     },
     {
+      "path": "connectors/cafe/mcp_queries.py",
+      "id": "py-mcp-queries",
+      "language": "python",
+      "symbol_prefix": "cafe.mcp_queries."
+    },
+    {
+      "path": "connectors/cafe/mcp_server.py",
+      "id": "py-mcp-server",
+      "language": "python",
+      "symbol_prefix": "cafe.mcp_server."
+    },
+    {
       "id": "py-obs-auth",
       "language": "python",
       "path": "connectors/cafe/obs_auth.py",
