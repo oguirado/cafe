@@ -168,7 +168,8 @@ def _parse(path, source, module, owner):
 
 
 def extract(root, paths, inventory):
-    root = Path(root).resolve()
+    try: root = Path(root).resolve(strict=True)
+    except (OSError, RuntimeError): raise ExtractionError('invalid_python_root') from None
     if (not isinstance(paths, list) or not paths or any(not isinstance(p, str) for p in paths) or
             paths != sorted(set(paths))):
         raise ExtractionError('explicit_sorted_unique_files_required')
@@ -180,7 +181,9 @@ def extract(root, paths, inventory):
             raise ExtractionError('unversioned_or_unsafe_python_path', rel if q.safe_relative(rel) else None)
         path = root / rel
         try:
-            if path.resolve() != path or not path.is_file():
+            resolved = path.resolve(strict=True)
+            if (not resolved.is_relative_to(root) or not resolved.is_file() or
+                    any(part.is_symlink() for part in [path, *path.parents] if part != root.parent)):
                 raise ExtractionError('missing_or_aliased_source', rel)
         except (OSError, RuntimeError):
             raise ExtractionError('missing_or_aliased_source', rel) from None

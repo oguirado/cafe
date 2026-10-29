@@ -125,20 +125,31 @@ def link_hold(camp):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('status', 'request', 'release', 'set'))
+    parser.add_argument('action', choices=('status', 'request', 'release', 'set', 'recover-legacy', 'recover'))
     parser.add_argument('count', nargs='?', type=int, default=0)
     parser.add_argument('--writer', action='store_true')
+    parser.add_argument('--watch', type=Path)
     args = parser.parse_args(argv)
     try:
         camp = Path(os.environ['CAMP']).resolve()
-        settings = json.loads((Path(__file__).resolve().parents[1] / 'local' / 'sprint.json').read_text())
-        other_path = settings['other_lanes']
-        stopped = ((camp / 'PARADA.txt').read_text().strip() != 'LIBRE'
-                   or link_hold(camp))
-        result = transact(camp / 'LANES_CAFE.json', args.action, args.count,
-                          other_path, measure(), stopped, args.writer)
-        print(json.dumps(result, sort_keys=True))
-        return 0 if result['admitted'] else 75
+        import memory_policy as policy
+        if args.action == 'recover-legacy':
+            if args.watch is None:
+                raise ValueError('watch_evidence_required')
+            result = policy.recover_legacy(camp, args.watch)
+            print(json.dumps(result, sort_keys=True)); return 0
+        if args.action in ('request', 'release', 'set'):
+            raise ValueError('use_recorded_capped_runner_not_anonymous_counts')
+        with locked(camp / 'LANES_CAFE.json'):
+            state = policy.read_state(camp)
+            policy.recover_dead(state)
+            policy.save(camp, state)
+            desktop, bridge = policy.application_memory()
+            result = {'admitted': not state['hold'], 'lanes': state['lanes'],
+                      'writers': state['writers'], 'memory_max_sum': sum(x['memory_max'] for x in state['leases'].values()),
+                      'desktop_current': desktop, 'bridge_current': bridge,
+                      'sentinel_events': state['sentinel_events'], 'hold': state['hold']}
+        print(json.dumps(result, sort_keys=True)); return 0
     except (OSError, ValueError, TypeError, KeyError, StopIteration):
         print(json.dumps({'admitted': False, 'capacity': 0, 'error': 'admission_unavailable'}))
         return 75

@@ -4,21 +4,22 @@ import os
 import subprocess
 import tempfile
 import unittest
+from host_shell import run_bash
 
 SCRIPT = Path(__file__).resolve().parents[2] / 'ctl' / 'unit.sh'
 
 
 class UnitWorktreeTests(unittest.TestCase):
     def test_bash_syntax_and_invalid_slugs(self):
-        subprocess.run(['bash', '-n', str(SCRIPT)], check=True)
+        run_bash(['-n', str(SCRIPT)], check=True)
         for slug in ('../escape', 'Uppercase', 'a/b', '-option', ''):
             with self.subTest(slug=slug):
-                result = subprocess.run(['bash', str(SCRIPT), slug], capture_output=True)
+                result = run_bash([str(SCRIPT), slug], capture_output=True)
                 self.assertEqual(result.returncode, 2)
 
     def test_requires_external_campaign_before_git(self):
         env = dict(os.environ); env.pop('CAMP', None)
-        result = subprocess.run(['bash', str(SCRIPT), 'safe-unit'], env=env, capture_output=True)
+        result = run_bash([str(SCRIPT), 'safe-unit'], env=env, capture_output=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b'CAMP', result.stderr)
 
@@ -43,7 +44,7 @@ class UnitWorktreeTests(unittest.TestCase):
         from unittest import mock
         source = SCRIPT.read_text().split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
         with tempfile.TemporaryDirectory(prefix='cafe-unit-test-') as temp:
-            root = Path(temp); repo = root / 'repo'; repo.mkdir()
+            root = Path(temp).resolve(strict=True); repo = root / 'repo'; repo.mkdir()
             camp = root / 'campaign'; camp.mkdir()
             parent = root / 'worktrees'
             revision = 'a' * 40
@@ -66,11 +67,11 @@ class UnitWorktreeTests(unittest.TestCase):
 
     def test_existing_destination_is_rejected_before_fetch(self):
         with tempfile.TemporaryDirectory(prefix='cafe-unit-test-') as temp:
-            root = Path(temp); camp = root / 'campaign'; camp.mkdir()
+            root = Path(temp).resolve(strict=True); camp = root / 'campaign'; camp.mkdir()
             worktrees = root / 'worktrees'; worktrees.mkdir()
             (worktrees / 'wt-safe-unit').mkdir()
             env = dict(os.environ, CAMP=str(camp), CAFE_WORKTREE_ROOT=str(worktrees))
-            result = subprocess.run(['bash', str(SCRIPT), 'safe-unit'], env=env, capture_output=True)
+            result = run_bash([str(SCRIPT), 'safe-unit'], env=env, capture_output=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(b'worktree_already_exists', result.stderr)
 

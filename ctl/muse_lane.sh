@@ -6,7 +6,7 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 job=${1:?job required}; brief=${2:?brief required}; wall=${3:-1500}
 [[ "$job" =~ ^cf_[a-zA-Z0-9_]+$ ]] || exit 2
 [[ "$wall" =~ ^[1-9][0-9]*$ && -f "$brief" ]] || exit 2
-python3 - "$brief" <<'PY'
+"${CAFE_PYTHON:-python3}" - "$brief" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -14,11 +14,12 @@ text = Path(sys.argv[1]).read_text()
 if re.search(r'(?i)\bpid\s+[0-9]+\b|\b[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9]{2}:[0-9]{2})?', text):
     raise SystemExit(67)
 PY
-role=()
-[[ "${CAFE_LANE_ROLE:-context}" != writer ]] || role=(--writer)
-python3 -B "$root/ctl/cafe_lanes.py" request 1 "${role[@]}"
-release() { python3 -B "$root/ctl/cafe_lanes.py" release 1 "${role[@]}"; }
-trap release EXIT
+if [[ -z "${CAFE_CAPPED_ACTIVE:-}" ]]; then
+    role=(); [[ "${CAFE_LANE_ROLE:-context}" != writer ]] || role=(--writer)
+    exec "${CAFE_PYTHON:-python3}" -B "$root/ctl/run_capped.py" --kind muse "${role[@]}" -- bash "$0" "$@"
+fi
+"${CAFE_PYTHON:-python3}" -B "$root/ctl/run_capped.py" --verify-active "$CAFE_CAPPED_ACTIVE"
+
 if [[ "${CAFE_DRY_RUN:-0}" == 1 ]]; then
     printf '%s\n' 'admitted dry-run; no worker started'
 else

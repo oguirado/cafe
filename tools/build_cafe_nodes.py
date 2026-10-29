@@ -159,13 +159,17 @@ def enforce_admitted_symbols(root, products):
 def write_products(root, products):
     for rel, data in products.items():
         path = C.safe(root, rel, exists=False); path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(dir=path.parent, prefix='.cafe-router-', delete=False) as stream:
-            temp = Path(stream.name)
-            try:
+        temp = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=path.parent, prefix='.cafe-router-', delete=False) as stream:
+                temp = Path(stream.name)
                 stream.write(data); stream.flush()
-                os.replace(temp, path)
-            finally:
+            # Windows rejects replacing/unlinking this name while its handle is open.
+            os.replace(temp, path)
+        finally:
+            if temp is not None:
                 temp.unlink(missing_ok=True)
+
 
 
 def build(root, inventory, check=False):

@@ -173,6 +173,7 @@ def git(repo, *args):
 
 
 def safe_path(repo, name):
+    repo = Path(repo).resolve(strict=True)
     path = Path(name)
     if not name or '\\' in name or ':' in name or '\x00' in name or path.is_absolute() or any(p in ('', '.', '..') for p in name.split('/')):
         raise ValueError('unsafe_patch_path')
@@ -330,7 +331,7 @@ def full_gate(repo, camp, unit):
     python = str(Path(camp) / 'out' / 'P15' / 'deps' / 'venv' / 'bin' / 'python')
     if not Path(python).is_file():
         raise ValueError('approved_sprint_python_absent')
-    argv = ['systemd-run', '--user', '--scope', '-q', '-p', 'MemoryMax=8G', '-p', 'MemorySwapMax=0', '--', 'timeout', '900', python, '-B', 'tools/run_ci.py']
+    argv = [python, '-B', str(Path(repo) / 'ctl' / 'run_capped.py'), '--kind', 'build', '--', 'timeout', '900', python, '-B', 'tools/run_ci.py']
     result = subprocess.run(argv, cwd=repo, env=env, capture_output=True, text=True)
     evidence = Path(camp) / 'out' / 'link' / unit
     evidence.mkdir(parents=True, exist_ok=True)

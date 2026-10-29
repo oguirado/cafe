@@ -281,7 +281,9 @@ def safe_path(path):
 
 
 def extract(root, paths, inventory, profile=None, *, entry=ENTRY, crate=CRATE, module_paths=None, include_modules=False):
-    root = Path(root).resolve(); profile = profile_map(profile)
+    try: root = Path(root).resolve(strict=True)
+    except (OSError, RuntimeError): raise ExtractionError('invalid_explicit_root') from None
+    profile = profile_map(profile)
     if not safe_path(entry) or not IDENT.fullmatch(crate): raise ExtractionError('invalid_explicit_root')
     module_paths = {} if module_paths is None else module_paths
     if not isinstance(module_paths, dict) or any(not isinstance(k, str) or not safe_path(v) for k,v in module_paths.items()):
@@ -294,7 +296,11 @@ def extract(root, paths, inventory, profile=None, *, entry=ENTRY, crate=CRATE, m
     parsers, files = {}, {}
     for path in paths:
         lexical = root / path
-        if lexical.resolve() != lexical or not lexical.is_file(): raise ExtractionError('unsafe_or_missing_source', path)
+        try: resolved = lexical.resolve(strict=True)
+        except (OSError, RuntimeError): raise ExtractionError('unsafe_or_missing_source', path) from None
+        if (not resolved.is_relative_to(root) or not resolved.is_file() or
+                any(part.is_symlink() for part in [lexical, *lexical.parents] if part != root.parent)):
+            raise ExtractionError('unsafe_or_missing_source', path)
     for path in paths:
         try: data = (root / path).read_bytes()
         except OSError: raise ExtractionError('source_unreadable', path) from None
@@ -337,7 +343,7 @@ def read_inline_inventory(root):
         names = json.loads(value)
         if not isinstance(names, list) or not names or any(not isinstance(p, str) for p in names) or names != sorted(set(names)):
             raise ValueError('invalid_prepared_inventory')
-        root = Path(root).resolve()
+        root = Path(root).resolve(strict=True)
         for name in names:
             parts = name.split('/')
             if not name or name.startswith('/') or '\\' in name or ':' in name or '\0' in name or any(p in ['', '.', '..'] for p in parts) or parts[0] in ['.git', 'local', 'node_modules', 'target', '_scratch', '_target']:

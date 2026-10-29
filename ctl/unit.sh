@@ -9,8 +9,17 @@ slug=$1
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 : "${CAMP:?CAMP must name the external campaign directory}"
 worktrees=${CAFE_WORKTREE_ROOT:-"$(dirname -- "$repo")/$(basename -- "$repo")-wt"}
+if [[ -e "$worktrees/wt-$slug" || -L "$worktrees/wt-$slug" ]]; then
+  printf '%s\n' 'worktree_already_exists' >&2
+  exit 1
+fi
+if [[ -z "${CAFE_CAPPED_ACTIVE:-}" ]]; then
+  exec "${CAFE_PYTHON:-python3}" -B "$repo/ctl/run_capped.py" --kind preparation -- bash "$0" "$@"
+fi
+"${CAFE_PYTHON:-python3}" -B "$repo/ctl/run_capped.py" --verify-active "$CAFE_CAPPED_ACTIVE"
+worktrees=${CAFE_WORKTREE_ROOT:-"$(dirname -- "$repo")/$(basename -- "$repo")-wt"}
 export CAFE_UNIT_REPO=$repo CAFE_UNIT_SLUG=$slug CAFE_UNIT_WT=$worktrees
-python3 -B - <<'PY'
+"${CAFE_PYTHON:-python3}" -B - <<'PY'
 import json, os, pathlib, re, subprocess
 repo=pathlib.Path(os.environ['CAFE_UNIT_REPO']).resolve()
 slug=os.environ['CAFE_UNIT_SLUG']

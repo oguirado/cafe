@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from host_shell import run_bash
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -112,26 +113,26 @@ class AdmissionTests(unittest.TestCase):
         wrapper_root = self.base / 'wrapper'
         (wrapper_root / 'ctl').mkdir(parents=True)
         shutil.copy(ROOT / 'ctl/muse_lane.sh', wrapper_root / 'ctl/muse_lane.sh')
-        gate = wrapper_root / 'ctl/cafe_lanes.py'
-        gate.write_text("import os,sys\nfrom pathlib import Path\np=Path(os.environ['CAMP'])/'actions'\nwith p.open('a') as f:f.write(sys.argv[1]+'\\n')\n")
+        gate = wrapper_root / 'ctl/run_capped.py'
+        gate.write_text("import os,sys,subprocess\nfrom pathlib import Path\np=Path(os.environ['CAMP'])/'actions'\nif '--verify-active' in sys.argv: raise SystemExit(0)\nwith p.open('a') as f:f.write('reserve\\n')\nenv=dict(os.environ,CAFE_CAPPED_ACTIVE='fixture')\ntry: rc=subprocess.run(sys.argv[sys.argv.index('--')+1:],env=env).returncode\nfinally:\n with p.open('a') as f:f.write('release\\n')\nraise SystemExit(rc)\n")
         brief = self.base / 'brief.md'; brief.write_text('A fixed harmless brief.')
-        (self.base / 'launch_muse.sh').write_text('exit 19\n')
-        env = dict(os.environ, CAMP=str(self.base))
+        (self.base / 'launch_muse.sh').write_text('exit 19\n', newline='\n')
+        env = dict(os.environ, CAMP=str(self.base)); env.pop('CAFE_CAPPED_ACTIVE', None)
         script = wrapper_root / 'ctl/muse_lane.sh'
         for dry, expected in (('0', 19), ('1', 0)):
-            result = subprocess.run(['bash', str(script), 'cf_probe', str(brief)],
+            result = run_bash([str(script), 'cf_probe', str(brief)],
                                     env=dict(env, CAFE_DRY_RUN=dry), capture_output=True)
             self.assertEqual(result.returncode, expected, result.stderr)
         self.assertEqual((self.base / 'actions').read_text().splitlines(),
-                         ['request', 'release', 'request', 'release'])
+                         ['reserve', 'release', 'reserve', 'release'])
 
     def test_wrapper_syntax_and_volatile_refusal(self):
         script = ROOT / 'ctl/muse_lane.sh'
-        result = subprocess.run(['bash', '-n', str(script)], capture_output=True)
+        result = run_bash(['-n', str(script)], capture_output=True)
         self.assertEqual(result.returncode, 0)
         for text in ('process pid 123', 'date 2026-10-28T12:00:00'):
             brief = self.base / 'brief.md'; brief.write_text(text)
-            result = subprocess.run(['bash', str(script), 'cf_probe', str(brief)],
+            result = run_bash([str(script), 'cf_probe', str(brief)],
                                     env={'PATH': __import__('os').environ['PATH'], 'CAMP': str(self.base)},
                                     capture_output=True)
             self.assertEqual(result.returncode, 67)

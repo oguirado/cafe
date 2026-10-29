@@ -18,7 +18,7 @@ class LinkQueueTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='cafe-queue-test-')
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve(strict=True)
         self.repo = self.root / 'repo'; self.repo.mkdir()
         self.camp = self.root / 'campaign'; self.camp.mkdir()
         (self.camp / 'PARADA.txt').write_text('LIBRE\n')

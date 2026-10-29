@@ -49,6 +49,10 @@
           "run": "rustup toolchain install 1.97.0 --profile minimal\nrustup default 1.97.0\nrustup target add x86_64-pc-windows-msvc"
         },
         {
+          "name": "Verify exact Rust toolchain profile",
+          "run": "python -B tools/verify_toolchain.py --expected 1.97.0"
+        },
+        {
           "name": "Pinned tokenizer CI tooling",
           "run": "python -m pip install --disable-pip-version-check --require-hashes -r requirements-ci.txt"
         },
