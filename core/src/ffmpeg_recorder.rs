@@ -2,6 +2,7 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, Command};
@@ -9,7 +10,7 @@ use tokio::task::JoinHandle;
 use sha2::{Digest, Sha256};
 use crate::authority_journal::{Committed, Journal};
 use crate::capture_frame_pool::OwnedFrame;
-use crate::recorder_pacer::{Pacer, PacerProfile, PacerError, OutputFrame};
+use crate::recorder_pacer::{Pacer, PacerProfile, PacerError, OutputFrame, PreviewSelector, PreviewCounters};
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum Encoder { Ffv1, Nvenc, Amf, Qsv }
@@ -139,6 +140,8 @@ pub struct Recorder {
     counters: RecorderCounters,
     binary: PathBuf,
     encoder: Encoder,
+    preview: Option<PreviewSelector>,
+    latest_preview: Option<Arc<OwnedFrame>>,
     #[cfg(test)]
     disk_full: bool,
 }
@@ -178,6 +181,8 @@ impl Recorder {
             counters: RecorderCounters::default(),
             binary,
             encoder,
+            preview: None,
+            latest_preview: None,
             #[cfg(test)]
             disk_full: false,
         })
@@ -208,6 +213,37 @@ impl Recorder {
         self.queue.len()
     }
 
+    /// Enable bounded preview decimation at `fps_num`/`fps_den`. Off by
+    /// default; must be called while `Recording` and before any selected
+    /// slot or queued frame. Validates before mutation.
+    pub fn enable_preview(&mut self, fps_num: u32, fps_den: u32) -> Result<(), RecorderError> {
+        if self.state != RecordingState::Recording {
+            return Err(RecorderError::State);
+        }
+        if self.preview.is_some() {
+            return Err(RecorderError::State);
+        }
+        if self.pacer.counters().selected != 0 || !self.queue.is_empty() {
+            return Err(RecorderError::State);
+        }
+        let record = self.profile.pacer().map_err(RecorderError::Pacer)?;
+        let selector =
+            PreviewSelector::new(record, fps_num, fps_den).map_err(RecorderError::Pacer)?;
+        self.preview = Some(selector);
+        Ok(())
+    }
+
+    /// Copy of the preview counters, or `None` when preview is off.
+    pub fn preview_counters(&self) -> Option<PreviewCounters> {
+        self.preview.as_ref().map(|selector| selector.counters())
+    }
+
+    /// Take the newest held preview frame, if any. At most one is stored;
+    /// pixels are shared via [`Arc`], never copied.
+    pub fn take_preview(&mut self) -> Option<Arc<OwnedFrame>> {
+        self.latest_preview.take()
+    }
+
     /// Offer a frame with exact admitted geometry. Never encodes or blocks.
     pub fn admit(&mut self, frame: OwnedFrame, now: Instant) -> Result<(), RecorderError> {
         if self.state != RecordingState::Recording {
@@ -216,6 +252,7 @@ impl Recorder {
         let expected = match self.profile.frame_bytes() {
             Ok(bytes) => bytes,
             Err(err) => {
+                self.latest_preview = None;
                 self.state = RecordingState::Interrupted;
                 return Err(err);
             }
@@ -224,10 +261,12 @@ impl Recorder {
             || frame.height() != self.profile.height
             || frame.pixels().len() != expected
         {
+            self.latest_preview = None;
             self.state = RecordingState::Interrupted;
             return Err(RecorderError::InvalidProfile);
         }
         if let Err(err) = self.pacer.offer(frame, now) {
+            self.latest_preview = None;
             self.state = RecordingState::Interrupted;
             return Err(RecorderError::Pacer(err));
         }
@@ -243,15 +282,30 @@ impl Recorder {
         if self.queue.len() >= self.profile.queue_capacity {
             self.counters.queue_full = self.counters.queue_full.saturating_add(1);
             self.counters.backpressure = self.counters.backpressure.saturating_add(1);
+            self.latest_preview = None;
             self.state = RecordingState::Interrupted;
             return Err(RecorderError::QueueFull);
         }
         match self.pacer.select(now) {
             Err(err) => {
+                self.latest_preview = None;
                 self.state = RecordingState::Interrupted;
                 Err(RecorderError::Pacer(err))
             }
             Ok(Some(output)) => {
+                if let Some(selector) = self.preview.as_mut() {
+                    match selector.observe(&output) {
+                        Ok(Some(preview)) => {
+                            self.latest_preview = Some(preview);
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            self.latest_preview = None;
+                            self.state = RecordingState::Interrupted;
+                            return Err(RecorderError::Pacer(err));
+                        }
+                    }
+                }
                 self.queue.push_back(output);
                 Ok(true)
             }
@@ -266,6 +320,7 @@ impl Recorder {
         }
         #[cfg(test)]
         if self.disk_full {
+            self.latest_preview = None;
             self.state = RecordingState::Interrupted;
             return Err(RecorderError::DiskFull);
         }
@@ -273,6 +328,7 @@ impl Recorder {
             return Ok(false);
         };
         if output.index != self.counters.written_frames {
+            self.latest_preview = None;
             self.state = RecordingState::Interrupted;
             return Err(RecorderError::State);
         }
@@ -290,6 +346,7 @@ impl Recorder {
                 if err == RecorderError::WriteTimeout {
                     self.counters.backpressure = self.counters.backpressure.saturating_add(1);
                 }
+                self.latest_preview = None;
                 self.state = RecordingState::Interrupted;
                 Err(err)
             }
@@ -298,6 +355,7 @@ impl Recorder {
 
     /// Abort the child and keep partial evidence; no receipt is emitted.
     pub async fn interrupt(&mut self) -> Result<(), RecorderError> {
+        self.latest_preview = None;
         self.state = RecordingState::Interrupted;
         self.child.abort().await
     }
@@ -305,18 +363,21 @@ impl Recorder {
     /// Drain, finish the child, decode-validate, then publish durably.
     pub async fn stop(&mut self, journal: &mut Journal) -> Result<RecordingReceipt, RecorderError> {
         if self.state == RecordingState::Interrupted {
+            self.latest_preview = None;
             let _ = self.child.abort().await;
             return Err(RecorderError::State);
         }
         if self.state == RecordingState::Complete {
             return Err(RecorderError::State);
         }
+        self.latest_preview = None;
         self.state = RecordingState::Finalizing;
         loop {
             match self.pump_one().await {
                 Ok(true) => {}
                 Ok(false) => break,
                 Err(err) => {
+                    self.latest_preview = None;
                     self.state = RecordingState::Interrupted;
                     let _ = self.child.abort().await;
                     return Err(err);
@@ -324,11 +385,13 @@ impl Recorder {
             }
         }
         if let Err(err) = self.child.finish().await {
+            self.latest_preview = None;
             self.state = RecordingState::Interrupted;
             let _ = self.child.abort().await;
             return Err(err);
         }
         if self.counters.written_frames == 0 {
+            self.latest_preview = None;
             self.state = RecordingState::Interrupted;
             return Err(RecorderError::ArtifactInvalid);
         }
@@ -341,6 +404,7 @@ impl Recorder {
         )
         .await
         {
+            self.latest_preview = None;
             self.state = RecordingState::Interrupted;
             return Err(err);
         }
@@ -352,10 +416,12 @@ impl Recorder {
         ) {
             Ok(committed) => committed,
             Err(_) => {
+                self.latest_preview = None;
                 self.state = RecordingState::Interrupted;
                 return Err(RecorderError::Journal);
             }
         };
+        self.latest_preview = None;
         self.state = RecordingState::Complete;
         Ok(RecordingReceipt {
             journal: committed,
@@ -385,7 +451,7 @@ impl Recorder {
         let profile=profile.validate()?;validate_plan(root,&plan)?;
         journal.append_media_intent(&plan.intent_event,&plan.media_id,&plan.published_name).map_err(|_|RecorderError::Journal)?;
         let child=ChildSupervisor::fixture(mode,profile,root)?;
-        Ok(Self{profile,root:root.to_path_buf(),plan,pacer:Pacer::new(profile.pacer().map_err(RecorderError::Pacer)?,origin).map_err(RecorderError::Pacer)?,queue:VecDeque::new(),child,state:RecordingState::Recording,counters:RecorderCounters::default(),binary:std::env::current_exe().map_err(|_|RecorderError::Spawn)?,encoder:Encoder::Ffv1,disk_full:false})
+        Ok(Self{profile,root:root.to_path_buf(),plan,pacer:Pacer::new(profile.pacer().map_err(RecorderError::Pacer)?,origin).map_err(RecorderError::Pacer)?,queue:VecDeque::new(),child,state:RecordingState::Recording,counters:RecorderCounters::default(),binary:std::env::current_exe().map_err(|_|RecorderError::Spawn)?,encoder:Encoder::Ffv1,preview:None,latest_preview:None,disk_full:false})
     }
     pub(crate) fn test_disk_full(&mut self){self.disk_full=true;}
     pub(crate) fn test_argv(profile:VideoProfile,encoder:Encoder,path:&Path)->Vec<std::ffi::OsString>{complete_argv(profile,encoder,path)}

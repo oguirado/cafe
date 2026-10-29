@@ -130,3 +130,7 @@ path = "core/tests/capture_pipeline.rs"
 [[test]]
 name = "runtime_effects"
 path = "core/tests/runtime_effects.rs"
+
+[[test]]
+name = "recorder_timing"
+path = "core/tests/recorder_timing.rs"

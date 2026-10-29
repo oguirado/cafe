@@ -57,11 +57,12 @@ pub(crate) async fn build_feed(approved:ffmpeg_recorder::Preflight,binding:&Bind
  let construction=async {
   let deadline=Instant::now()+Duration::from_secs(3);
   let first=loop{if let Some(frame)=capture.take_latest(){break frame;}if Instant::now()>=deadline{return Err("capture_first_frame_timeout");}match capture.poll_state(windows){CaptureState::Waiting|CaptureState::Healthy=>{},_=>return Err("capture_not_healthy")};tokio::time::sleep(Duration::from_millis(5)).await;};
-  let pool=FramePool::new(PoolLimits{slots:3,max_frame_bytes:(binding.crop.width as usize).checked_mul(binding.crop.height as usize).and_then(|v|v.checked_mul(4)).filter(|v|*v<=3840*2160*4).ok_or("crop_resource_bound")?,max_width:binding.crop.width,max_height:binding.crop.height}).map_err(|_|"crop_resource_bound")?;
+  let pool=FramePool::new(PoolLimits{slots:4,max_frame_bytes:(binding.crop.width as usize).checked_mul(binding.crop.height as usize).and_then(|v|v.checked_mul(4)).filter(|v|*v<=3840*2160*4).ok_or("crop_resource_bound")?,max_width:binding.crop.width,max_height:binding.crop.height}).map_err(|_|"crop_resource_bound")?;
   // Verify the crop against observed pixels, not only window rectangle metadata.
   drop(crop_frame(&pool,&first,binding.crop)?);
   let plan=RecordingPlan{media_id:format!("media-{effect_id}"),intent_event:format!("intent-{effect_id}"),publish_event:format!("publish-{effect_id}"),staged_name:format!("{effect_id}.partial.mkv"),published_name:format!("{effect_id}.mkv")};
-  let recorder=Recorder::start(approved,folder,plan,journal,Instant::now()).await.map_err(|_|"recorder_start_failed")?;
+  let mut recorder=Recorder::start(approved,folder,plan,journal,Instant::now()).await.map_err(|_|"recorder_start_failed")?;
+  recorder.enable_preview(10,1).map_err(|_|"recorder_start_failed")?;
   Ok((first,pool,recorder))
  }.await;
  match construction{Ok((first,pool,recorder))=>Ok(CapturePipeline::new(RecordingSource{capture,first:Some(first),pool,crop:binding.crop,failed:false},recorder)),Err(code)=>{let _=capture.stop();Err(code)}}

@@ -41,6 +41,17 @@ impl PacerProfile {
         }
         Ok(self)
     }
+
+    /// Validated 60/1 profile with caller-supplied budgets; no globals.
+    pub fn sixty_fps(max_lateness_ns: u64, max_hold_ns: u64) -> Result<Self, PacerError> {
+        Self {
+            fps_num: 60,
+            fps_den: 1,
+            max_lateness_ns,
+            max_hold_ns,
+        }
+        .validate()
+    }
 }
 
 /// Pacer rejection reasons.
@@ -199,6 +210,153 @@ impl Pacer {
 
     /// Copy of the explicit slot counters.
     pub fn counters(&self) -> PacerCounters {
+        self.counters
+    }
+}
+
+/// Explicit preview counters; emission and decimation counted separately.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct PreviewCounters {
+    pub emitted: u64,
+    pub decimated: u64,
+}
+
+/// Bounded preview decimator over recording-slot indices.
+///
+/// The recording slot index of each observed [`OutputFrame`] is the preview
+/// clock: the first observed output must be index 0 and later indices must
+/// strictly increase. Holds only scalar state; emitted previews share pixels
+/// through [`Arc`] only and no frame is ever retained.
+pub struct PreviewSelector {
+    record_num: u32,
+    record_den: u32,
+    preview_num: u32,
+    preview_den: u32,
+    last_index: Option<u64>,
+    last_tick: u64,
+    counters: PreviewCounters,
+}
+
+impl PreviewSelector {
+    /// Validate `record` and bind a preview rate of `fps_num`/`fps_den`.
+    /// Rejects zero rates, preview rates above 60 FPS, and preview rates
+    /// above the recording rate. All comparisons are checked `u128`
+    /// cross-products; no floating point.
+    pub fn new(
+        record: PacerProfile,
+        fps_num: u32,
+        fps_den: u32,
+    ) -> Result<Self, PacerError> {
+        let record = record.validate()?;
+        if fps_num == 0 || fps_den == 0 {
+            return Err(PacerError::InvalidProfile);
+        }
+        let sixty = 60u128
+            .checked_mul(fps_den as u128)
+            .ok_or(PacerError::InvalidProfile)?;
+        if (fps_num as u128) > sixty {
+            return Err(PacerError::InvalidProfile);
+        }
+        let preview_scaled = (fps_num as u128)
+            .checked_mul(record.fps_den as u128)
+            .ok_or(PacerError::InvalidProfile)?;
+        let record_scaled = (record.fps_num as u128)
+            .checked_mul(fps_den as u128)
+            .ok_or(PacerError::InvalidProfile)?;
+        if preview_scaled > record_scaled {
+            return Err(PacerError::InvalidProfile);
+        }
+        Ok(Self {
+            record_num: record.fps_num,
+            record_den: record.fps_den,
+            preview_num: fps_num,
+            preview_den: fps_den,
+            last_index: None,
+            last_tick: 0,
+            counters: PreviewCounters::default(),
+        })
+    }
+
+    /// Preview tick of recording slot `index`:
+    /// `floor(index * preview_num * record_den / (preview_den * record_num))`.
+    fn tick_for(
+        index: u64,
+        preview_num: u32,
+        preview_den: u32,
+        record_num: u32,
+        record_den: u32,
+    ) -> Result<u64, PacerError> {
+        let numerator = (index as u128)
+            .checked_mul(preview_num as u128)
+            .and_then(|scaled| scaled.checked_mul(record_den as u128))
+            .ok_or(PacerError::Overflow)?;
+        let denominator = (preview_den as u128)
+            .checked_mul(record_num as u128)
+            .ok_or(PacerError::Overflow)?;
+        let tick = numerator
+            .checked_div(denominator)
+            .ok_or(PacerError::Overflow)?;
+        u64::try_from(tick).map_err(|_| PacerError::Overflow)
+    }
+
+    /// Observe one recording output. Emits index 0, then emits exactly when
+    /// the preview tick increases relative to the preceding recording index;
+    /// otherwise counts one decimation. At most one preview per call; never
+    /// touches [`Pacer`] state. Rejects duplicate or regressing indices and
+    /// any arithmetic or counter overflow with no partial mutation.
+    pub fn observe(
+        &mut self,
+        output: &OutputFrame,
+    ) -> Result<Option<Arc<OwnedFrame>>, PacerError> {
+        let index = output.index;
+        match self.last_index {
+            None => {
+                if index != 0 {
+                    return Err(PacerError::ClockRegression);
+                }
+            }
+            Some(last) => {
+                if index <= last {
+                    return Err(PacerError::ClockRegression);
+                }
+            }
+        }
+        let tick = Self::tick_for(
+            index,
+            self.preview_num,
+            self.preview_den,
+            self.record_num,
+            self.record_den,
+        )?;
+        let emit = match self.last_index {
+            None => true,
+            Some(_) => tick > self.last_tick,
+        };
+        if emit {
+            let emitted = self
+                .counters
+                .emitted
+                .checked_add(1)
+                .ok_or(PacerError::Overflow)?;
+            self.last_index = Some(index);
+            self.last_tick = tick;
+            self.counters.emitted = emitted;
+            Ok(Some(Arc::clone(&output.frame)))
+        } else {
+            let decimated = self
+                .counters
+                .decimated
+                .checked_add(1)
+                .ok_or(PacerError::Overflow)?;
+            self.last_index = Some(index);
+            self.last_tick = tick;
+            self.counters.decimated = decimated;
+            Ok(None)
+        }
+    }
+
+    /// Copy of the explicit preview counters.
+    pub fn counters(&self) -> PreviewCounters {
         self.counters
     }
 }

@@ -192,3 +192,18 @@ mod confirmed_pipe_tests {
     }
 
 }
+
+#[test]
+fn parent_preview_hook_uses_same_recorder_and_clears_on_interruption(){runtime().block_on(async{
+    let scratch=Scratch::new();let mut journal=scratch.journal();let origin=Instant::now();let p=profile();let pool=pool(p,4);
+    let mut recorder=Recorder::test_with_child("drain",&scratch.0,plan(),p,&mut journal,origin).unwrap();
+    let pid=recorder.pid();recorder.enable_preview(10,1).unwrap();
+    recorder.admit(frame(&pool,p,1,[3,4,5,255]),origin).unwrap();assert!(recorder.pace(origin).unwrap());
+    let preview=recorder.take_preview().expect("preview from selected frame");assert_eq!(preview.pixels(),[3,4,5,255].repeat(256));
+    assert!(recorder.take_preview().is_none());assert_eq!(recorder.pid(),pid);drop(preview);
+    recorder.pump_one().await.unwrap();
+    assert!(recorder.pace(origin+Duration::from_millis(40)).unwrap());assert!(recorder.take_preview().is_none());
+    recorder.test_disk_full();assert!(matches!(recorder.pump_one().await,Err(RecorderError::DiskFull)));
+    assert_eq!(recorder.state(),RecordingState::Interrupted);assert!(recorder.take_preview().is_none());assert!(recorder.stop(&mut journal).await.is_err());
+    assert_eq!(journal.records().len(),1);assert_eq!(journal.records()[0].kind,"media_intent");
+});}

@@ -45,7 +45,7 @@
 {"g":["file"],"i":44,"id":"rust-main","o":[],"p":"Exact rust source coordinates for core/src/main.rs","t":"core/src/main.rs"}
 {"g":["file"],"i":45,"id":"rust-operator-protocol","o":[],"p":"Exact rust source coordinates for core/src/operator_protocol.rs","t":"core/src/operator_protocol.rs"}
 {"g":["ConnectorSupervisor","ConnectorSupervisor::spawn","ConnectorSupervisor::status","ConnectorSupervisor::exchange","ConnectorSupervisor::lease","ConnectorSupervisor::restart"],"i":46,"id":"rust-python-supervisor","o":[],"p":"Exact rust source coordinates for core/src/python_connector_supervisor.rs","t":"core/src/python_connector_supervisor.rs"}
-{"g":["PacerProfile","PacerProfile::validate","PacerError","PacerCounters","OutputFrame","Pacer"],"i":47,"id":"rust-recorder-pacer","o":[],"p":"Exact rust source coordinates for core/src/recorder_pacer.rs","t":"core/src/recorder_pacer.rs"}
+{"g":["PacerProfile","PacerProfile::validate","PacerProfile::sixty_fps","PacerError","PacerCounters","OutputFrame"],"i":47,"id":"rust-recorder-pacer","o":[],"p":"Exact rust source coordinates for core/src/recorder_pacer.rs","t":"core/src/recorder_pacer.rs"}
 {"g":["file"],"i":48,"id":"rust-runtime-effects","o":[],"p":"Exact rust source coordinates for core/src/runtime_effects.rs","t":"core/src/runtime_effects.rs"}
 {"g":["file"],"i":49,"id":"rust-runtime-main","o":[],"p":"Exact rust source coordinates for core/src/runtime_main.rs","t":"core/src/runtime_main.rs"}
 {"g":["file"],"i":50,"id":"rust-runtime-recording","o":[],"p":"Exact rust source coordinates for core/src/runtime_recording.rs","t":"core/src/runtime_recording.rs"}
