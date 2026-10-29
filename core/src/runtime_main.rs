@@ -1,7 +1,7 @@
 //! Single authority owner. Native effects remain explicitly blocked until configured.
 use std::{path::PathBuf,sync::{Arc,Mutex,Condvar},io::{Read,Write},time::{Duration,Instant}};
 use serde_json::{json,Value};
-use crate::{capsule_registry::{Clock,Command,Envelope,SCHEMA},authority_journal::Journal,authority_auth::BrokerAuthority,control_intents::{ControlRuntime,ControlCommandSender,ControlActorClient,ControlAction,ActorControlAction,ActorCompletion},operator_protocol::{decode_operator,OperatorBody,OperatorRequest,MAX_OPERATOR_BYTES},runtime_storage::RuntimeStorage,windows_window_registry::{WindowRegistry,NativeAdapter},capsule_pairing::{PairingBook,PairRequest,Crop},runtime_recording::{RecordingSource,ExternalFfmpeg},runtime_effects::RuntimeEffects};
+use crate::{capsule_registry::{Clock,Command,Envelope,SCHEMA},authority_journal::Journal,authority_auth::BrokerAuthority,control_intents::{ControlRuntime,ControlCommandSender,ControlActorClient,ControlAction,ActorControlAction,ActorCompletion},operator_protocol::{decode_operator,OperatorBody,OperatorRequest,MAX_OPERATOR_BYTES},runtime_storage::RuntimeStorage,windows_window_registry::{WindowRegistry,NativeAdapter},capsule_pairing::{PairingBook,PairRequest,Crop},runtime_recording::{RecordingSource,ExternalFfmpeg},runtime_effects::RuntimeEffects,runtime_service_owner::{ServiceClient,ServiceKey}};
 struct Projection {pending:Mutex<Option<Vec<u8>>>,ready:Condvar}
 impl Projection {
  fn publish(&self,value:Value){let bytes=serde_json::to_vec(&value).expect("owned projection serialization");if bytes.len()>4096{return;}if let Ok(mut pending)=self.pending.lock(){*pending=Some(bytes);self.ready.notify_one();}}
@@ -24,22 +24,22 @@ fn window_page(windows:&WindowRegistry,window_offset:u32)->(Vec<crate::windows_w
  let observed=windows.snapshots();let total=observed.len();let offset=window_offset as usize;let next=offset.saturating_add(3);
  (observed.into_iter().skip(offset).take(3).collect(),total,if next<total{Some(next)}else{None})
 }
-fn snapshot(runtime:&ControlRuntime<ControlCommandSender>,windows:&WindowRegistry,last:&Value,configured:bool,engine:&RuntimeEffects<RecordingSource>,window_offset:u32)->Value{
+fn snapshot(runtime:&ControlRuntime<ControlCommandSender>,windows:&WindowRegistry,last:&Value,configured:bool,engine:&RuntimeEffects<RecordingSource>,window_offset:u32,services:&ServiceClient)->Value{
  let (page,total,next)=window_page(windows,window_offset);
- let mut state=json!({"runtime":"authority_ready","platform":if cfg!(windows){"windows"}else{"unsupported"},"recording_available":false,"recording_configured":configured,"recordings":engine.status().iter().map(|capsule|json!({"capsule_id":capsule.capsule_id,"state":format!("{:?}",capsule.state),"feeds":capsule.feeds.iter().map(|feed|json!({"feed_id":feed.feed_id,"state":format!("{:?}",feed.state),"written_frames":feed.counters.written_frames.to_string(),"backpressure":feed.counters.backpressure.to_string()})).collect::<Vec<_>>()})).collect::<Vec<_>>(),"obs_available":false,"mcp_control_available":false,"capsules":runtime.capsule_snapshot().capsules,"windows":page,"window_page":{"offset":window_offset,"next_offset":next,"total":total},"folder_configured":runtime.folder_configured(),"last_result":last});
+ let mut state=json!({"runtime":"authority_ready","platform":if cfg!(windows){"windows"}else{"unsupported"},"recording_available":false,"recording_configured":configured,"recordings":engine.status().iter().map(|capsule|json!({"capsule_id":capsule.capsule_id,"state":format!("{:?}",capsule.state),"feeds":capsule.feeds.iter().map(|feed|json!({"feed_id":feed.feed_id,"state":format!("{:?}",feed.state),"written_frames":feed.counters.written_frames.to_string(),"backpressure":feed.counters.backpressure.to_string()})).collect::<Vec<_>>()})).collect::<Vec<_>>(),"obs_available":services.obs_ready(),"obs_configurable":services.configurable(),"chat_available":services.chat_ready(),"chat_configurable":services.configurable()&&!services.chat_running(),"services":services.projection(),"mcp_control_available":false,"capsules":runtime.capsule_snapshot().capsules,"windows":page,"window_page":{"offset":window_offset,"next_offset":next,"total":total},"folder_configured":runtime.folder_configured(),"last_result":last});
  // Never truncate identifiers or descriptors. Oversized projections fail visibly;
  // durable recording state is not reset or represented as a successful empty set.
  if serde_json::to_vec(&state).map_or(true,|bytes|bytes.len()>3500){state=json!({"runtime":"projection_unavailable","code":"projection_budget_exceeded"});}
  json!({"kind":"snapshot","authority_epoch":runtime.capsule_snapshot().authority_epoch,"revision":runtime.revision(),"state":state})
 }
-fn mutate(request:OperatorRequest,runtime:&mut ControlRuntime<ControlCommandSender>,windows:&mut WindowRegistry,adapter:&mut NativeAdapter,book:&mut PairingBook,bindings:&Arc<std::sync::RwLock<Vec<crate::capsule_pairing::Binding>>>,ffmpeg:&mut Option<ExternalFfmpeg>,window_offset:&mut u32)->Value{
+fn mutate(request:OperatorRequest,runtime:&mut ControlRuntime<ControlCommandSender>,windows:&mut WindowRegistry,adapter:&mut NativeAdapter,book:&mut PairingBook,bindings:&Arc<std::sync::RwLock<Vec<crate::capsule_pairing::Binding>>>,ffmpeg:&mut Option<ExternalFfmpeg>,window_offset:&mut u32,services:&mut ServiceClient)->Value{
  let epoch=runtime.capsule_snapshot().authority_epoch;
  if request.authority_epoch!=epoch{return result("rejected","old_authority_epoch");}
  let query=matches!(&request.body,OperatorBody::Snapshot{}|OperatorBody::ListWindows{..});
  let effect=matches!(&request.body,OperatorBody::SetFolder{..}|OperatorBody::StartRecording{..}|OperatorBody::StopRecording{..}|OperatorBody::SendToObs{..});
  if !query&&!effect&&request.expected_revision!=runtime.revision(){return result("rejected","stale_revision");}
  let state=runtime.capsule_snapshot();
- if effect&&state.seen_requests.contains(&request.request_id){return result("rejected","request_id_conflict");}
+ if !query&&(state.seen_requests.contains(&request.request_id)||runtime.known_control_request(&request.request_id)){return result("rejected","request_id_conflict");}
  match request.body{
   OperatorBody::Snapshot{}=>result("observed","snapshot"),
   OperatorBody::ListWindows{offset}=>match adapter.enumerate(windows){Ok(_)=>{let requested=offset.unwrap_or(0);if requested as usize>windows.snapshots().len(){*window_offset=0;result("rejected","window_page_invalidated")}else{*window_offset=requested;result("observed","windows_refreshed")}},Err(_)=>result("blocked","native_enumeration_unavailable")},
@@ -62,15 +62,30 @@ fn mutate(request:OperatorRequest,runtime:&mut ControlRuntime<ControlCommandSend
   OperatorBody::SetFolder{folder}=>serde_json::to_value(runtime.handle_operator_folder(&request.request_id,epoch,request.expected_revision,PathBuf::from(folder))).unwrap_or_else(|_|result("blocked","reply_encoding_failed")),
   OperatorBody::StartRecording{capsule_id}=>{if !cfg!(windows)||ffmpeg.is_none(){return result("blocked","recording_runtime_not_configured");}serde_json::to_value(runtime.handle_operator(&request.request_id,epoch,request.expected_revision,ControlAction::StartRecording(capsule_id))).unwrap_or_else(|_|result("blocked","reply_encoding_failed"))},
   OperatorBody::StopRecording{capsule_id}=>serde_json::to_value(runtime.handle_operator(&request.request_id,epoch,request.expected_revision,ControlAction::StopRecording(capsule_id))).unwrap_or_else(|_|result("blocked","reply_encoding_failed")),
-  OperatorBody::SendToObs{..}=>result("blocked","obs_runtime_not_configured"),
+  OperatorBody::SendToObs{capsule_id}=>{if !services.obs_ready(){return result("blocked","obs_runtime_not_configured");}serde_json::to_value(runtime.handle_operator(&request.request_id,epoch,request.expected_revision,ControlAction::SendToObs(capsule_id))).unwrap_or_else(|_|result("blocked","reply_encoding_failed"))},
   OperatorBody::ConfigureFfmpeg{path,sha256}=>match ExternalFfmpeg::select(&PathBuf::from(path),&sha256){Ok(approval)=>{*ffmpeg=Some(approval);result("configured","hardware_preflight_required")},Err(code)=>result("blocked",code)},
-  OperatorBody::ConfigureObs{..}|OperatorBody::ConfigureTwitch{..}=>result("blocked","configuration_runtime_pending"),
+  OperatorBody::ConfigureObs{port,password}=>{
+   if !services.configurable()||!runtime.accepts_configuration(){return result("blocked","private_python_unavailable");}
+   let key=ServiceKey::Configuration(request.request_id.clone());let permit=match services.reserve(&key){Ok(value)=>value,Err(code)=>return result("blocked",code)};
+   let present=matches!(&password,crate::operator_protocol::PasswordChoice::Provided{..});
+   if runtime.journal_for_media_actor().append_service_configuration(&request.request_id,"obs",present).is_err(){return result("blocked","configuration_not_durable");}
+   let choice=match password{crate::operator_protocol::PasswordChoice::Absent{}=>json!({"mode":"absent"}),crate::operator_protocol::PasswordChoice::Provided{value}=>json!({"mode":"provided","value":value.expose()})};
+   services.submit(permit,key,json!({"op":"configure_obs","port":port,"password":choice}));result("pending","configuration_pending")
+  },
+  OperatorBody::ConfigureTwitch{channel}=>{
+   if !services.configurable()||!runtime.accepts_configuration(){return result("blocked","private_python_unavailable");}
+   if services.chat_running(){return result("rejected","chat_already_running");}
+   let key=ServiceKey::Configuration(request.request_id.clone());let permit=match services.reserve(&key){Ok(value)=>value,Err(code)=>return result("blocked",code)};
+   if runtime.journal_for_media_actor().append_service_configuration(&request.request_id,"chat",false).is_err(){return result("blocked","configuration_not_durable");}
+   services.submit(permit,key,json!({"op":"start_chat","channel":channel}));result("pending","configuration_pending")
+  },
  }
 }
-async fn execute_effect(job:&crate::control_intents::ActorControlJob,authority:&mut ControlRuntime<ControlCommandSender>,windows:&WindowRegistry,adapter:&mut NativeAdapter,book:&PairingBook,engine:&mut RuntimeEffects<RecordingSource>,ffmpeg:Option<&ExternalFfmpeg>)->ActorCompletion {
- let interrupted=ActorCompletion::Interrupted;
+async fn execute_effect(job:&crate::control_intents::ActorControlJob,authority:&mut ControlRuntime<ControlCommandSender>,windows:&mut WindowRegistry,adapter:&mut NativeAdapter,book:&PairingBook,engine:&mut RuntimeEffects<RecordingSource>,ffmpeg:Option<&ExternalFfmpeg>,services:&mut ServiceClient)->Option<ActorCompletion> {
+ let interrupted=Some(ActorCompletion::Interrupted);
+ if matches!(&job.action,ActorControlAction::SendToObs(_))&&adapter.enumerate(windows).is_err(){return interrupted;}
  if job.authority_epoch!=authority.capsule_snapshot().authority_epoch{return interrupted;}
- if let ActorControlAction::SetFolder(folder)=&job.action{return if folder.revalidate().is_ok(){ActorCompletion::Applied}else{interrupted};}
+ if let ActorControlAction::SetFolder(folder)=&job.action{return if folder.revalidate().is_ok(){Some(ActorCompletion::Applied)}else{interrupted};}
  let current=authority.capsule_snapshot();
  let capsule=match &job.action{ActorControlAction::StartRecording{capsule,..}|ActorControlAction::StopRecording(capsule)|ActorControlAction::SendToObs(capsule)=>capsule,_=>return interrupted};
  let Some(actual)=current.capsules.get(&capsule.capsule_id) else{return interrupted;};
@@ -88,9 +103,23 @@ async fn execute_effect(job:&crate::control_intents::ActorControlJob,authority:&
    let mut feeds=Vec::new();for (binding,media_key,approved) in prepared{
     match crate::runtime_recording::build_feed(approved,binding,&media_key,windows,adapter,root,authority.journal_for_media_actor()).await{Ok(pipeline)=>feeds.push((binding.feed_id.clone(),pipeline)),Err(_)=>{for (_,pipeline) in &mut feeds{let _=pipeline.abort().await;}return interrupted;}}
    }
-   if engine.attach_capsule(capsule.capsule_id.clone(),feeds).await.is_ok(){ActorCompletion::Applied}else{interrupted}
+   if engine.attach_capsule(capsule.capsule_id.clone(),feeds).await.is_ok(){Some(ActorCompletion::Applied)}else{interrupted}
   },
-  ActorControlAction::StopRecording(capsule)=>if engine.stop_capsule(&capsule.capsule_id,authority.journal_for_media_actor()).await.is_ok(){ActorCompletion::Applied}else{interrupted},
+  ActorControlAction::StopRecording(capsule)=>if engine.stop_capsule(&capsule.capsule_id,authority.journal_for_media_actor()).await.is_ok(){Some(ActorCompletion::Applied)}else{interrupted},
+  ActorControlAction::SendToObs(capsule)=>{
+   if !services.obs_ready(){return interrupted;}
+   let observed=windows.snapshots();let mut feeds=serde_json::Map::new();let mut crops=serde_json::Map::new();
+   for binding in &job.window_bindings {
+    let Ok(view)=windows.resolve(&binding.window,binding.window_generation) else{return interrupted;};
+    if observed.iter().filter(|v|v.visible&&!v.minimized&&v.title==view.title&&v.class==view.class&&v.executable==view.executable).count()!=1{return interrupted;}
+    let role=match binding.role{crate::capsule_registry::Role::Game=>"game",crate::capsule_registry::Role::Camera=>"camera"};
+    if feeds.insert(role.into(),json!(format!("{}:{}:{}",view.title,view.class,view.executable))).is_some(){return interrupted;}
+    crops.insert(role.into(),json!({"x":binding.crop.x,"y":binding.crop.y,"width":binding.crop.width,"height":binding.crop.height}));
+   }
+   let body=json!({"op":"send_capsule","capsule_id":capsule.capsule_id,"feeds":feeds,"crops":crops});
+   if crate::authority_auth::validate_authority_frame(&crate::authority_auth::make_frame("service_request",job.authority_epoch.0,body.clone()),job.authority_epoch.0).is_err(){return interrupted;}
+   let key=ServiceKey::Effect(job.effect_id.clone());let Ok(permit)=services.reserve(&key)else{return interrupted;};services.submit(permit,key,body);None
+  },
   _=>interrupted,
  }
 }
@@ -105,13 +134,18 @@ pub(crate) fn run()->Result<(),&'static str>{
   let (requests_tx,mut requests_rx)=tokio::sync::mpsc::channel(8);let client=ControlActorClient::new(requests_tx,Duration::from_secs(4))?;
   let broker=BrokerAuthority::start_control(&storage.session.join("broker"),"127.0.0.1",storage.epoch.0,Box::new(client)).await.map_err(|_|"runtime_broker_unavailable")?;
   let mut windows=WindowRegistry::new(storage.epoch);let mut adapter=NativeAdapter::new(storage.epoch);let mut book=PairingBook::new();let mut engine=RuntimeEffects::<RecordingSource>::new(2,4).map_err(|_|"runtime_effect_budget_invalid")?;
-  let mut ffmpeg=None;let mut window_offset=0;let input=input();let output=output();let mut last=result("observed","authority_started");output.publish(snapshot(&authority,&windows,&last,ffmpeg.is_some(),&engine,window_offset));
+  let mut services=ServiceClient::packaged(storage.chat.clone(),storage.epoch.0);let mut ffmpeg=None;let mut window_offset=0;let input=input();let output=output();let mut last=result("observed","authority_started");output.publish(snapshot(&authority,&windows,&last,ffmpeg.is_some(),&engine,window_offset,&services));
   loop{
-   let mut changed=false;for _ in 0..4{match input.try_recv(){Ok(bytes)=>{last=match decode_operator(&bytes){Ok(request)=>mutate(request,&mut authority,&mut windows,&mut adapter,&mut book,&bindings,&mut ffmpeg,&mut window_offset),Err(code)=>result("rejected",code)};changed=true;},Err(std::sync::mpsc::TryRecvError::Empty)=>break,Err(std::sync::mpsc::TryRecvError::Disconnected)=>{let _=engine.abort_all().await;drop(broker);return Ok(());}}}
+   let mut changed=false;for _ in 0..4{match input.try_recv(){Ok(bytes)=>{last=match decode_operator(&bytes){Ok(request)=>mutate(request,&mut authority,&mut windows,&mut adapter,&mut book,&bindings,&mut ffmpeg,&mut window_offset,&mut services),Err(code)=>result("rejected",code)};changed=true;},Err(std::sync::mpsc::TryRecvError::Empty)=>break,Err(std::sync::mpsc::TryRecvError::Disconnected)=>{let _=engine.abort_all().await;services.close().await;drop(broker);return Ok(());}}}
    for _ in 0..8{match requests_rx.try_recv(){Ok(request)=>{request.execute_on(&mut authority);changed=true;},Err(_)=>break}}
-   for _ in 0..8{match effects_rx.try_recv(){Ok(job)=>{let outcome=execute_effect(&job,&mut authority,&windows,&mut adapter,&book,&mut engine,ffmpeg.as_ref()).await;let reply=authority.complete_from_actor(&job.effect_id,outcome);last=serde_json::to_value(reply).unwrap_or_else(|_|result("blocked","reply_encoding_failed"));changed=true;},Err(_)=>break}}
+   for _ in 0..8{match effects_rx.try_recv(){Ok(job)=>{let outcome=execute_effect(&job,&mut authority,&mut windows,&mut adapter,&book,&mut engine,ffmpeg.as_ref(),&mut services).await;if let Some(outcome)=outcome{let reply=authority.complete_from_actor(&job.effect_id,outcome);last=serde_json::to_value(reply).unwrap_or_else(|_|result("blocked","reply_encoding_failed"));}changed=true;},Err(_)=>break}}
+   let (completed,service_changed)=services.drain();changed|=service_changed;
+   for (key,applied) in completed {match key{
+    ServiceKey::Configuration(_)=>last=if applied{result("configured","service_configured")}else{result("blocked","service_operation_failed")},
+    ServiceKey::Effect(effect)=>{let outcome=if applied{ActorCompletion::Applied}else{ActorCompletion::Interrupted};last=serde_json::to_value(authority.complete_from_actor(&effect,outcome)).unwrap_or_else(|_|result("blocked","reply_encoding_failed"));},
+   }changed=true;}
    if engine.tick_all(&windows,Instant::now()).await.is_err(){last=result("interrupted","recording_effect_failed");changed=true;}
-   if changed{output.publish(snapshot(&authority,&windows,&last,ffmpeg.is_some(),&engine,window_offset));}tokio::time::sleep(Duration::from_millis(5)).await;
+   if changed{output.publish(snapshot(&authority,&windows,&last,ffmpeg.is_some(),&engine,window_offset,&services));}tokio::time::sleep(Duration::from_millis(5)).await;
   }
  })
 }

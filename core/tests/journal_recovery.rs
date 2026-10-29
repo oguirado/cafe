@@ -20,6 +20,24 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 const SESSION: &str = "session-test";
 const MEDIA: &[u8] = b"synthetic-media-byte-fixture";
+
+#[test]
+fn service_configuration_records_presence_only_and_replays_without_capsule_changes(){
+    let fixture=Fixture::new();let mut journal=fixture.journal();
+    journal.append_service_configuration("configure-one","obs",true).unwrap();
+    journal.append_service_configuration("configure-two","chat",false).unwrap();
+    assert_eq!(journal.records()[0].payload,json!({"service":"obs","secret_present":true}));
+    assert_eq!(journal.records()[1].payload,json!({"service":"chat","secret_present":false}));
+    assert!(journal.has_service_configuration("configure-one"));
+    assert!(journal.append_service_configuration("configure-one","obs",false).is_err());
+    assert!(journal.append_service_configuration("invalid-chat","chat",true).is_err());
+    assert!(journal.append_service_configuration("invalid-service","other",false).is_err());
+    drop(journal);let reopened=fixture.journal();
+    assert!(reopened.has_service_configuration("configure-one"));
+    assert_eq!(reopened.records().len(),2);
+    let bytes=fs::read(&fixture.log).unwrap();assert!(!String::from_utf8_lossy(&bytes).contains("SYNTHETIC_SERVICE_PASSWORD"));
+    assert_eq!(reopened.snapshot(),empty());
+}
 // All four operations and expected facts are hand-authored, never replay snapshots.
 const BOOK: [(&str, &str, u64, &str); 4] = [
     ("event-create", "request-create", 0, r#"{"op":"create_capsule","capsule_id":"cap-one","person_label":"Guest","generation":"1"}"#),

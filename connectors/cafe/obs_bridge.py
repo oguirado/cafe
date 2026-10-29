@@ -108,8 +108,10 @@ class ObsBridge:
         if ws is not None:
             await _quiet_close(ws)
 
-    async def send_capsule(self, capsule_id, feeds):
+    async def send_capsule(self, capsule_id, feeds, crops=None):
         obs_auth.validate_capsule(capsule_id, feeds)
+        if crops is not None:
+            obs_auth.validate_crops(feeds, crops)
         async with self._lock:
             if self._closed or self._broken or self._ws is None:
                 raise ObsError("not_connected")
@@ -127,9 +129,10 @@ class ObsBridge:
             items = await self._scene_items()
             result_feeds = {}
             for role in sorted(names):
+                crop = None if crops is None else crops[role]
                 item_id = await self._ensure_source(
                     names[role], feeds[role], kinds.get(names[role]),
-                    items.get(names[role]),
+                    items.get(names[role]), crop,
                 )
                 result_feeds[role] = {
                     "input_name": names[role],
@@ -218,7 +221,7 @@ class ObsBridge:
         if type(settings) is not dict or settings.get("window") != descriptor:
             raise ObsError("source_conflict")
 
-    async def _ensure_source(self, name, descriptor, kind, item_id):
+    async def _ensure_source(self, name, descriptor, kind, item_id, crop=None):
         if kind is None:
             data = await self._exchange("CreateInput", {
                 "sceneName": _SCENE,
@@ -248,6 +251,8 @@ class ObsBridge:
             if type(item_id) is not int:
                 raise ObsError("malformed_response")
         await self._verify_settings(name, descriptor)
+        if crop is not None:
+            await self._apply_crop(item_id, crop)
         await self._exchange("SetSceneItemEnabled", {
             "sceneName": _SCENE,
             "sceneItemId": item_id,
@@ -263,3 +268,34 @@ class ObsBridge:
         if enabled is not True:
             raise ObsError("request_failed")
         return item_id
+
+    async def _apply_crop(self, item_id, crop):
+        await self._exchange("SetSceneItemEnabled", {
+            "sceneName": _SCENE,
+            "sceneItemId": item_id,
+            "sceneItemEnabled": False,
+        })
+        state = await self._exchange("GetSceneItemEnabled", {
+            "sceneName": _SCENE,
+            "sceneItemId": item_id,
+        })
+        enabled = state.get("sceneItemEnabled")
+        if type(enabled) is not bool:
+            raise ObsError("malformed_response")
+        if enabled is not False:
+            raise ObsError("request_failed")
+        observed = await self._exchange("GetSceneItemTransform", {
+            "sceneName": _SCENE,
+            "sceneItemId": item_id,
+        })
+        plan = obs_auth.plan_crop(crop, observed)
+        await self._exchange("SetSceneItemTransform", {
+            "sceneName": _SCENE,
+            "sceneItemId": item_id,
+            "sceneItemTransform": plan["transform"],
+        })
+        applied = await self._exchange("GetSceneItemTransform", {
+            "sceneName": _SCENE,
+            "sceneItemId": item_id,
+        })
+        obs_auth.verify_crop(plan, applied)

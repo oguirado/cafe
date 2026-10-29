@@ -8,6 +8,7 @@ import base64
 import hashlib
 import json
 import logging
+import math
 import re
 from websockets import __version__ as _websockets_version
 from websockets.asyncio.client import connect as _connect
@@ -186,3 +187,55 @@ def validate_capsule(capsule_id, feeds):
         if descriptor in seen:
             raise ObsError('ambiguous_window')
         seen.add(descriptor)
+
+
+def validate_crops(feeds, crops):
+    from .runtime_service_auth import validate_crops as check
+    try:
+        check(feeds, crops)
+    except ValueError:
+        raise ObsError('invalid_capsule') from None
+
+
+def _observed_integer(value, minimum=0, maximum=4294967295):
+    if type(value) is int and minimum <= value <= maximum:
+        return value
+    if type(value) is float and math.isfinite(value) and value.is_integer() and minimum <= value <= maximum:
+        return int(value)
+    raise ObsError('malformed_response')
+
+
+def plan_crop(crop, response):
+    # OBS owns the source dimensions. A window rectangle is not substituted for
+    # them; only the four reviewed crop fields are sent back to the server.
+    validate_crops({'camera': 'unused'}, {'camera': crop})
+    if type(response) is not dict or type(response.get('sceneItemTransform')) is not dict:
+        raise ObsError('malformed_response')
+    observed = response['sceneItemTransform']
+    width = _observed_integer(observed.get('sourceWidth'), 1)
+    height = _observed_integer(observed.get('sourceHeight'), 1)
+    if crop['x'] + crop['width'] > width or crop['y'] + crop['height'] > height:
+        raise ObsError('invalid_capsule')
+    transform = {'cropLeft': crop['x'], 'cropTop': crop['y'],
+                 'cropRight': width - crop['x'] - crop['width'],
+                 'cropBottom': height - crop['y'] - crop['height']}
+    if any(value > 100000 for value in transform.values()):
+        raise ObsError('invalid_capsule')
+    return {'transform': transform, 'source_width': width, 'source_height': height}
+
+
+def verify_crop(plan, response):
+    if (type(plan) is not dict or set(plan) != {'transform', 'source_width', 'source_height'}
+            or type(plan['transform']) is not dict
+            or set(plan['transform']) != {'cropLeft', 'cropTop', 'cropRight', 'cropBottom'}
+            or type(response) is not dict or type(response.get('sceneItemTransform')) is not dict):
+        raise ObsError('malformed_response')
+    transform = response['sceneItemTransform']
+    if (_observed_integer(transform.get('sourceWidth'), 1) != plan['source_width']
+            or _observed_integer(transform.get('sourceHeight'), 1) != plan['source_height']):
+        raise ObsError('request_failed')
+    for name, value in plan['transform'].items():
+        if type(value) is not int or not 0 <= value <= 100000:
+            raise ObsError('malformed_response')
+        if _observed_integer(transform.get(name), 0, 100000) != value:
+            raise ObsError('request_failed')

@@ -93,11 +93,12 @@ pub fn validate_authority_frame(v:&Value, epoch:u64)->Result<(),String>{
     let valid=match v["kind"].as_str(){
         Some("connector_start")=>keys(b,&[]),
         Some("approved_effect")=>keys(b,&["action"]) && b["action"].as_str().is_some_and(|s|!s.is_empty()&&s.len()<=64),
+        Some("service_request")=>service_request_valid(b),
         Some("token_lease")=>keys(b,&["token","expires_unix_ms"]) && b["token"].as_str().is_some_and(|s|!s.is_empty()&&s.len()<=2048) && clock(&b["expires_unix_ms"]).is_some_and(|t|now_ms().is_ok_and(|n|t>n&&t-n<=5000)),
         _=>false};if valid{Ok(())}else{Err("connector_capability_denied".into())}
 }
 pub fn validate_connector_frame(v:&Value,epoch:u64)->Result<(),String>{
-    validate_base(v,epoch)?;let valid=match v["kind"].as_str(){Some("observation")=>keys(&v["body"],&["ready"])&&v["body"]["ready"].is_boolean(),Some("effect_result")=>keys(&v["body"],&["accepted"])&&v["body"]["accepted"].is_boolean(),_=>false};if valid{Ok(())}else{Err("connector_capability_denied".into())}
+    validate_base(v,epoch)?;let valid=match v["kind"].as_str(){Some("observation")=>keys(&v["body"],&["ready"])&&v["body"]["ready"].is_boolean(),Some("effect_result")=>keys(&v["body"],&["accepted"])&&v["body"]["accepted"].is_boolean(),Some("service_result")=>service_result_valid(&v["body"]),_=>false};if valid{Ok(())}else{Err("connector_capability_denied".into())}
 }
 fn now_ms()->Result<u64,String>{SystemTime::now().duration_since(UNIX_EPOCH).ok().and_then(|d|u64::try_from(d.as_millis()).ok()).ok_or_else(||"clock_unavailable".into())}
 pub fn lease_frame(epoch:u64,token:&str,ttl_ms:u64,sink:&str)->Result<Value,String>{
@@ -301,3 +302,46 @@ impl BrokerAuthority {
     pub fn status(&self)->Value{json!({"host":"127.0.0.1","port":self.port,"epoch":self.epoch.to_string(),"effects":self.effects.load(Ordering::SeqCst),"rendezvous_ready":true})}
 }
 impl Drop for BrokerAuthority {fn drop(&mut self){self.live.store(false,Ordering::Release);for t in &self.tasks{t.abort();}let _=std::fs::remove_file(self.dir.join("broker.sock"));let _=std::fs::remove_file(self.dir.join("broker.pipe"));let _=std::fs::remove_dir(&self.dir);}}
+
+// Closed private child commands, never admitted by the public broker endpoint.
+fn service_request_valid(b:&Value)->bool {
+    let bounded=|v:&Value,max:usize|v.as_str().is_some_and(|s|!s.is_empty()&&s.len()<=max&&!s.contains('\0'));
+    match b["op"].as_str() {
+        Some("status"|"close")=>keys(b,&["op"]),
+        Some("configure_obs")=>{
+            let p=&b["password"];
+            keys(b,&["op","port","password"])&&b["port"].as_u64().is_some_and(|n|(1..=65535).contains(&n))
+              &&((keys(p,&["mode"])&&p["mode"]=="absent")||(keys(p,&["mode","value"])&&p["mode"]=="provided"&&bounded(&p["value"],1024)))
+        },
+        Some("start_chat")=>keys(b,&["op","channel"])&&b["channel"].as_str().is_some_and(|s|!s.is_empty()&&s.len()<=25&&s.bytes().all(|v|v.is_ascii_lowercase()||v.is_ascii_digit()||v==b'_')),
+        Some("send_capsule")=>{
+            if !keys(b,&["op","capsule_id","feeds","crops"])||!b["capsule_id"].as_str().is_some_and(|s|!s.is_empty()&&s.len()<=64&&s.bytes().all(|c|c.is_ascii_alphanumeric()||b"_-".contains(&c))){return false;}
+            let (Some(feeds),Some(crops))=(b["feeds"].as_object(),b["crops"].as_object())else{return false;};
+            if feeds.is_empty()||feeds.len()>2||feeds.len()!=crops.len(){return false;}
+            let mut descriptors=std::collections::BTreeSet::new();
+            for (role,descriptor) in feeds {
+                if !matches!(role.as_str(),"game"|"camera")||!bounded(descriptor,4096){return false;}
+                let s=descriptor.as_str().unwrap();let parts=s.split(':').collect::<Vec<_>>();
+                if s.contains(['\r','\n'])||parts.len()!=3||parts.iter().any(|p|p.is_empty())||!descriptors.insert(s){return false;}
+                let Some(crop)=crops.get(role)else{return false;};
+                if !keys(crop,&["x","y","width","height"]){return false;}
+                let values=["x","y","width","height"].map(|k|crop[k].as_u64().and_then(|v|u32::try_from(v).ok()));
+                let [Some(x),Some(y),Some(w),Some(h)]=values else{return false;};
+                if w==0||h==0||x.checked_add(w).is_none()||y.checked_add(h).is_none(){return false;}
+            }
+            true
+        },
+        _=>false,
+    }
+}
+fn service_result_valid(b:&Value)->bool {
+    if !keys(b,&["accepted","closed","obs","obs_code","chat","chat_code","chat_connected","messages","malformed","reconnects","connections"])
+       ||!b["accepted"].is_boolean()||!b["closed"].is_boolean()
+       ||!matches!(b["obs"].as_str(),Some("absent"|"configured"|"closed"|"failed"))
+       ||!matches!(b["chat"].as_str(),Some("idle"|"running"|"succeeded"|"failed"|"cancelled"))
+       ||(!b["chat_connected"].is_null()&&!b["chat_connected"].is_boolean()){return false;}
+    for field in ["obs_code","chat_code"] {
+        if !b[field].is_null()&&!matches!(b[field].as_str(),Some("closed"|"not_configured"|"already_running"|"operation_uncertain"|"unavailable")){return false;}
+    }
+    ["messages","malformed","reconnects","connections"].iter().all(|k|b[*k].is_null()||clock(&b[*k]).is_some())
+}

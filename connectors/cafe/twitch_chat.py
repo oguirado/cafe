@@ -309,12 +309,14 @@ async def _backoff_sleep(sleep, delay, stop_event):
 
 async def run_chat(channel, root, *, url=OFFICIAL_URL, max_connections=None,
                    stop_event=None, backoff_initial=1.0, backoff_max=30.0,
-                   sleep=asyncio.sleep, session_id=None):
+                   sleep=asyncio.sleep, session_id=None, progress=None):
     """Run the anonymous read-only chat loop; return closed counters."""
     channel = validate_channel(channel)
     url = validate_url(url)
     max_connections, backoff_initial, backoff_max, session_id = validate_options(
         max_connections, backoff_initial, backoff_max, sleep, session_id)
+    if progress is not None and not callable(progress):
+        raise ChatError('storage_failed')
     writer = JsonlWriter(root, channel)
     messages = 0
     malformed = 0
@@ -322,6 +324,14 @@ async def run_chat(channel, root, *, url=OFFICIAL_URL, max_connections=None,
     connections = 0
     current_backoff = backoff_initial
     nick = 'NICK justinfan%d' % random.randint(0, 9999999999)
+    def observe(connected):
+        if progress is not None:
+            try:
+                progress({'messages': messages, 'malformed': malformed,
+                          'reconnects': reconnects, 'connections': connections,
+                          'connected': connected})
+            except Exception:
+                raise ChatError('storage_failed') from None
     try:
         while True:
             if stop_event is not None and stop_event.is_set():
@@ -342,6 +352,8 @@ async def run_chat(channel, root, *, url=OFFICIAL_URL, max_connections=None,
                     await readonly_send(ws, nick)
                     await readonly_send(ws, _CAP_REQ)
                     await readonly_send(ws, 'JOIN #' + channel)
+                    observed_channel = False
+                    observe(False)
                     while True:
                         if stop_event is not None and stop_event.is_set():
                             break
@@ -377,10 +389,12 @@ async def run_chat(channel, root, *, url=OFFICIAL_URL, max_connections=None,
                             malformed += bad
                             if outcome == 'appended':
                                 messages += 1
+                                observed_channel = True
                             elif outcome == 'reconnect':
                                 reconnect_now = True
                                 break
                         writer.flush_due()
+                        observe(observed_channel)
                         if reconnect_now:
                             break
                     if buf:
@@ -396,9 +410,12 @@ async def run_chat(channel, root, *, url=OFFICIAL_URL, max_connections=None,
                         buf = ''
                 finally:
                     try:
-                        await ws.close()
-                    except Exception:
-                        pass
+                        observe(False)
+                    finally:
+                        try:
+                            await ws.close()
+                        except Exception:
+                            pass
             if stop_event is not None and stop_event.is_set():
                 break
             if max_connections is not None and connections >= max_connections:

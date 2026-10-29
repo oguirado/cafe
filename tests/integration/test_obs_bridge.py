@@ -53,6 +53,9 @@ class FakeOBS:
         self.requests = []
         self.identifies = []
         self.effects = []
+        self.transforms = {}
+        self.source_size = (1280, 720)
+        self.crop_mode = None
         self.accepted = 0
         self.rpc = 1
         self.omit_studio_version = False
@@ -153,6 +156,16 @@ class FakeOBS:
                     response = {'sceneItemId': item}
                 elif kind == 'SetSceneItemEnabled':
                     self.items[body['sceneItemId']]['sceneItemEnabled'] = body['sceneItemEnabled']
+                    self.effects.append(kind)
+                elif kind == 'GetSceneItemTransform':
+                    item = body['sceneItemId']
+                    response = {'sceneItemTransform': {'sourceWidth': self.source_size[0], 'sourceHeight': self.source_size[1], **self.transforms.get(item, {'cropLeft': 0, 'cropTop': 0, 'cropRight': 0, 'cropBottom': 0})}}
+                    if self.crop_mode == 'mismatch' and item in self.transforms:
+                        response['sceneItemTransform']['cropLeft'] += 1
+                elif kind == 'SetSceneItemTransform':
+                    if self.items[body['sceneItemId']]['sceneItemEnabled']:
+                        self.errors.append('crop_applied_while_visible')
+                    self.transforms[body['sceneItemId']] = dict(body['sceneItemTransform'])
                     self.effects.append(kind)
                 elif kind == 'GetSceneItemEnabled':
                     response = {'sceneItemEnabled': self.items[body['sceneItemId']]['sceneItemEnabled']}

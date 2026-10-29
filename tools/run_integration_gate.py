@@ -90,7 +90,7 @@ def run_owned(command, root, env, timeout=900):
         raise
 
 
-def run_gate(root=ROOT, config=None):
+def run_gate(root=ROOT, config=None, services=False):
     report = {'schema': 'cafe.integration-gate.v1', 'status': 'fail',
               'build_rc': None, 'test_rc': None, 'tests': None, 'cleanup': False}
     owned = None
@@ -112,7 +112,8 @@ def run_gate(root=ROOT, config=None):
                     raise ValueError('test_authority_binary_absent')
                 env['CAFE_AUTHORITY_FIXTURE'] = str(binary)
                 test = run_owned([sys.executable, '-B', '-m', 'unittest', 'discover',
-                                  '-s', 'tests/integration', '-p', 'test_authority_channel.py'], root, env)
+                                  '-s', 'tests/integration', '-p',
+                                  'test_runtime_service*.py' if services else 'test_authority_channel.py'], root, env)
                 report['test_rc'] = test.returncode
                 text = test.stdout + test.stderr
                 sys.stderr.write(text)
@@ -135,8 +136,9 @@ def run_gate(root=ROOT, config=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', help='explicit external machine configuration')
+    parser.add_argument('--services', action='store_true', help='real owned service-child tests against local fixtures')
     args = parser.parse_args(argv)
-    report = run_gate(config=args.config)
+    report = run_gate(config=args.config, services=args.services)
     print(json.dumps(report, sort_keys=True))
     return 0 if report['status'] == 'pass' and report['cleanup'] else 1
 

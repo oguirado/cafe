@@ -47,3 +47,7 @@ mod runtime_main;
 
 #[allow(dead_code)]
 mod runtime_recording;
+#[allow(dead_code)]
+mod python_connector_supervisor;
+#[allow(dead_code)]
+mod runtime_service_owner;

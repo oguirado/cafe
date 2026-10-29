@@ -38,6 +38,24 @@
       "symbol_prefix": "cafe.obs_bridge."
     },
     {
+      "path": "connectors/cafe/runtime_service_auth.py",
+      "id": "py-runtime-service-auth",
+      "language": "python",
+      "symbol_prefix": "cafe.runtime_service_auth."
+    },
+    {
+      "path": "connectors/cafe/runtime_service_host.py",
+      "id": "py-runtime-service-host",
+      "language": "python",
+      "symbol_prefix": "cafe.runtime_service_host."
+    },
+    {
+      "path": "connectors/cafe/runtime_services.py",
+      "id": "py-runtime-services",
+      "language": "python",
+      "symbol_prefix": "cafe.runtime_services."
+    },
+    {
       "path": "connectors/cafe/twitch_chat.py",
       "id": "py-twitch-chat",
       "language": "python",
@@ -156,6 +174,12 @@
       "id": "rust-runtime-recording",
       "language": "rust",
       "symbol_prefix": "cafe_core::runtime_recording::"
+    },
+    {
+      "path": "core/src/runtime_service_owner.rs",
+      "id": "rust-service-owner",
+      "language": "rust",
+      "symbol_prefix": "cafe_core::runtime_service_owner::"
     },
     {
       "path": "core/src/runtime_storage.rs",
@@ -307,10 +331,12 @@
         "core/src/journal_replay.rs",
         "core/src/main.rs",
         "core/src/operator_protocol.rs",
+        "core/src/python_connector_supervisor.rs",
         "core/src/recorder_pacer.rs",
         "core/src/runtime_effects.rs",
         "core/src/runtime_main.rs",
         "core/src/runtime_recording.rs",
+        "core/src/runtime_service_owner.rs",
         "core/src/runtime_storage.rs",
         "core/src/runtime_windows_security.rs",
         "core/src/windows_auth.rs",

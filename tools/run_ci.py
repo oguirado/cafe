@@ -203,6 +203,12 @@ def run_stage(stage,root=ROOT):
             data=json.loads(result['stdout'])
             if data.get('status')!='pass' or not data.get('cleanup') or not isinstance(data.get('tests'),int) or data['tests']<=0:raise ValueError('integration_evidence_invalid')
             if importlib.metadata.version('websockets')!='17.2':raise ValueError('wrong_obs_transport_version')
+            result=run([python,'-B','tools/run_integration_gate.py','--services'],'service_private_child_one_command')
+            data=json.loads(result['stdout'])
+            if data.get('status')!='pass' or not data.get('cleanup') or not isinstance(data.get('tests'),int) or data['tests']<=0:raise ValueError('service_integration_evidence_invalid')
+            result=run([python,'-B','-m','unittest','discover','-s','tests/integration','-p','test_obs_crop.py'],'obs_hidden_crop_tests')
+            text=result['stdout']+result['stderr']
+            if not re.search(r'(?m)^Ran [1-9][0-9]* tests? in ',text) or not re.search(r'(?m)^OK\s*$',text) or 'skipped=' in text:raise ValueError('empty_or_skipped_obs_crop_tests')
             result=run([python,'-B','-m','unittest','discover','-s','tests/integration','-p','test_obs_bridge.py'],'obs_bridge_fake_server_tests')
             text=result['stdout']+result['stderr']
             if not re.search(r'(?m)^Ran [1-9][0-9]* tests? in ',text) or not re.search(r'(?m)^OK\s*$',text) or 'skipped=' in text:raise ValueError('empty_or_skipped_obs_tests')

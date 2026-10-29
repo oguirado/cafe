@@ -60,7 +60,7 @@ class TestRouterIndex(unittest.TestCase):
             ('cafe_core::capsule_registry::decode_envelope', 'core/src/capsule_registry.rs', 293, 'decode_envelope'),
             ('cafe_shell::preload::cafeBridge::createCafeBridge::getSnapshot', 'src/preload/cafeBridge.js', 201, 'getSnapshot'),
             ('cafe.authority_channel.serve_connector', 'connectors/cafe/authority_channel.py', 27, 'serve_connector'),
-            ('cafe_authority_fixture::authority_auth::hmac_sha256', 'core/src/authority_auth.rs', 110, 'hmac_sha256')]
+            ('cafe_authority_fixture::authority_auth::hmac_sha256', 'core/src/authority_auth.rs', 111, 'hmac_sha256')]
         for key, path, line, name in expected:
             with self.subTest(key=key):
                 result = R.resolve(ROOT, key, inventory())
@@ -162,7 +162,13 @@ class TestRouterIndex(unittest.TestCase):
     def test_shared_authentication_roots_preserve_admitted_fixture_namespace(self):
         before = B.compose(self.root, self.inventory)[C.SYMBOLS]
         source = self.root / 'core/src/main.rs'
-        source.write_text(source.read_text() + ('\nmod authority_auth;\n' if '\nmod authority_auth;' not in source.read_text() else '') + '\nmod python_connector_supervisor;\n')
+        text = source.read_text()
+        for module in ('authority_auth', 'python_connector_supervisor'):
+            declaration = 'mod ' + module + ';'
+            if declaration not in text:
+                text += '\n' + declaration + '\n'
+            self.assertEqual(text.count(declaration), 1)
+        source.write_text(text)
         profile = C.load(self.root, C.PROFILE)
         main = next(row for row in profile['rust_roots'] if row['crate'] == 'cafe_core')
         main['files'] = sorted(set(main['files']) | {'core/src/authority_auth.rs',
@@ -176,6 +182,13 @@ class TestRouterIndex(unittest.TestCase):
         self.assertTrue(authentication)
         self.assertTrue(all(row['symbol'].startswith('cafe_authority_fixture::authority_auth::') for row in authentication))
         self.assertEqual(B.compose(self.root, self.inventory), after)
+
+    def test_duplicate_shared_module_declaration_is_rejected(self):
+        source = self.root / 'core/src/main.rs'
+        self.assertIn('mod python_connector_supervisor;', source.read_text())
+        source.write_text(source.read_text() + '\nmod python_connector_supervisor;\n')
+        with self.assertRaisesRegex(Exception, 'ambiguous_module_owner'):
+            B.compose(self.root, self.inventory)
 
     def test_rust_optional_root_default_refuses_path_override(self):
         rust=C.tool(self.root,'tools/extract_rust.py');profile=C.load(self.root,C.PROFILE)['rust_roots'][1]

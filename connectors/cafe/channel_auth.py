@@ -61,9 +61,17 @@ def validate_frame(frame, epoch, from_authority=True):
         return actual
     if from_authority and kind == 'approved_effect' and _keys(body, ('action',)) and isinstance(body['action'], str) and 1 <= len(body['action'].encode()) <= 64:
         return actual
+    if from_authority and kind == 'service_request':
+        from .runtime_service_auth import validate_service_request
+        validate_service_request(body)
+        return actual
     if not from_authority and kind == 'observation' and _keys(body, ('ready',)) and type(body['ready']) is bool:
         return actual
     if not from_authority and kind == 'effect_result' and _keys(body, ('accepted',)) and type(body['accepted']) is bool:
+        return actual
+    if not from_authority and kind == 'service_result':
+        from .runtime_service_auth import validate_service_result
+        validate_service_result(body)
         return actual
     raise ValueError('capability_denied')
 

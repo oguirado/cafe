@@ -19,6 +19,7 @@ async fn serve(args:Vec<String>)->Result<(),String>{
         let result:Result<Value,String>=match v["op"].as_str(){
             Some("status")=>Ok(json!({"connector":connector.status(),"broker":broker.as_ref().map(|b|b.status()),"admitted":admitted})),
             Some("effect")=>{let status=connector.status();let epoch=status["authority_epoch"].as_str().and_then(|s|s.parse().ok()).ok_or("invalid_epoch")?;let action=v["action"].as_str().unwrap_or("");connector.exchange(make_frame("approved_effect",epoch,json!({"action":action}))).await},
+            Some("service")=>{let status=connector.status();let epoch=status["authority_epoch"].as_str().and_then(|s|s.parse().ok()).ok_or("invalid_epoch")?;connector.exchange(make_frame("service_request",epoch,v["body"].clone())).await},
             Some("accept_connector")=>{let status=connector.status();let epoch=status["authority_epoch"].as_str().and_then(|s|s.parse().ok()).ok_or("invalid_epoch")?;match validate_connector_frame(&v["frame"],epoch){Ok(())=>{admitted+=1;Ok(json!({"accepted":true,"admitted":admitted}))},Err(e)=>Err(e)}},
             Some("lease")=>connector.lease(v["token"].as_str().unwrap_or(""),v["ttl_ms"].as_u64().unwrap_or(0),v["sink"].as_str().unwrap_or("")).await,
             Some("restart")=>connector.restart().await.map(|()|connector.status()),

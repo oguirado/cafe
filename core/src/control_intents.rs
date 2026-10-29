@@ -229,7 +229,8 @@ impl<E: ControlEffects> ControlRuntime<E> {
         self.handle_operator(id,epoch,expected,ControlAction::SetFolder(canonical))
     }
     pub(crate) fn folder_configured(&self)->bool{self.selected_folder.is_some()}
-    pub(crate) fn known_control_request(&self,id:&str)->bool{self.history.contains_key(id)}
+    pub(crate) fn known_control_request(&self,id:&str)->bool{self.history.contains_key(id)||self.journal.has_service_configuration(id)}
+    pub(crate) fn accepts_configuration(&self)->bool{!self.poisoned}
     pub(crate) fn revision(&self) -> Clock { self.journal.records().last().map_or(Clock(0),|r|r.sequence) }
     fn reply(&self, id:&str,state:ControlState,error:Option<&'static str>) -> ControlReply { ControlReply{request_id:id.into(),state,revision:self.revision(),error,receipt:None} }
     fn normalized(&self, action:&ControlAction) -> Result<ControlAction,&'static str> {
@@ -267,7 +268,7 @@ impl<E: ControlEffects> ControlRuntime<E> {
         self.issue_confirmation(identity,request_id,action,ttl,now)
     }
     fn issue_confirmation(&mut self, identity:&str, request_id:&str, action:ControlAction, ttl:Duration, now:Instant) -> Result<OperatorConfirmation,&'static str> {
-        if self.poisoned || !matches!(identity,"broker"|"operator") || !identifier(request_id) || ttl.is_zero() || ttl>MAX_CONFIRMATION_TTL || self.history.contains_key(request_id) { return Err("confirmation_denied"); }
+        if self.poisoned || !matches!(identity,"broker"|"operator") || !identifier(request_id) || ttl.is_zero() || ttl>MAX_CONFIRMATION_TTL || self.known_control_request(request_id) { return Err("confirmation_denied"); }
         let normalized=self.normalized(&action)?;
         self.confirmations.retain(|_,c|c.expires>now);
         if self.confirmations.len()>=MAX_PENDING_CONFIRMATIONS { return Err("confirmation_capacity"); }
@@ -319,6 +320,7 @@ impl<E: ControlEffects> ControlRuntime<E> {
         let id=&intent.request_id;
         if self.poisoned { return self.reply(id,ControlState::Blocked,Some("authority_requires_recovery")); }
         if !peer.is_live() || !peer.authorized() || peer.epoch()!=self.epoch.0 || intent.authority_epoch!=self.epoch { return self.reply(id,ControlState::Rejected,Some("control_identity_or_epoch_denied")); }
+        if self.journal.has_service_configuration(id){return self.reply(id,ControlState::Rejected,Some("request_id_conflict"));}
         let action=match self.normalized(&intent.body.action()) { Ok(action)=>action,Err(code)=>return self.reply(id,ControlState::Rejected,Some(code)) };
         let args=match self.fingerprint(id,intent.expected_revision,&action) {Ok(value)=>value,Err(code)=>return self.reply(id,ControlState::Rejected,Some(code))};
         let identity=sha256_hex(peer.identity().as_bytes());

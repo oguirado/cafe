@@ -20,3 +20,29 @@ use serde_json::json;
     assert!(first!=second,"independent system CSPRNG calls must differ");
     assert!(matches!(authority_auth::test_failed_entropy(),Err(e) if e=="simulated_os_failure"));
 }
+
+#[test]fn service_request_surface_is_closed_before_private_pipe_write(){
+    let valid=[json!({"op":"status"}),json!({"op":"close"}),json!({"op":"configure_obs","port":4455,"password":{"mode":"absent"}}),json!({"op":"configure_obs","port":4455,"password":{"mode":"provided","value":"SYNTHETIC_ONLY"}}),json!({"op":"start_chat","channel":"synthetic_channel"}),json!({"op":"send_capsule","capsule_id":"guest","feeds":{"game":"Game:Fixture:app.exe"},"crops":{"game":{"x":0,"y":0,"width":1280,"height":720}}})];
+    for body in valid {
+        assert!(validate_authority_frame(&make_frame("service_request",7,body.clone()),7).is_ok());
+        let mut extra=body;extra["unknown"]=json!(true);assert!(validate_authority_frame(&make_frame("service_request",7,extra),7).is_err());
+    }
+    for body in [json!({"op":"configure_obs","host":"0.0.0.0","port":4455,"password":{"mode":"absent"}}),json!({"op":"configure_obs","port":true,"password":{"mode":"absent"}}),json!({"op":"configure_obs","port":4455,"password":{"mode":"absent","value":"SYNTHETIC_ONLY"}}),json!({"op":"start_chat","channel":"bad\r\nJOIN #other"}),json!({"op":"start_chat","channel":"synthetic","destination":"elsewhere"}),json!({"op":"send_capsule","capsule_id":"guest","feeds":{"game":"Game:Fixture:app.exe"}})] {
+        assert!(validate_authority_frame(&make_frame("service_request",7,body),7).is_err());
+    }
+    let frame=make_frame("service_request",7,json!({"op":"status"}));assert!(validate_authority_frame(&frame,8).is_err());assert!(validate_connector_frame(&frame,7).is_err());
+}
+#[test]fn service_crops_and_roles_never_wrap_or_fall_back_to_whole_window(){
+    let base=json!({"op":"send_capsule","capsule_id":"guest","feeds":{"camera":"Call:Fixture:app.exe"},"crops":{"camera":{"x":1,"y":2,"width":320,"height":240}}});
+    for (key,value) in [("width",json!(0)),("x",json!(4294967295_u64)),("width",json!(-1)),("x",json!(true)),("height",json!(1.5))] {
+        let mut body=base.clone();body["crops"]["camera"][key]=value;assert!(validate_authority_frame(&make_frame("service_request",7,body),7).is_err());
+    }
+    let mut body=base.clone();body["crops"]["game"]=body["crops"]["camera"].clone();assert!(validate_authority_frame(&make_frame("service_request",7,body),7).is_err());
+}
+#[test]fn service_results_cannot_reflect_secrets_or_unsafe_json_counter_numbers(){
+    let base=json!({"accepted":true,"closed":false,"obs":"configured","obs_code":null,"chat":"running","chat_code":null,"chat_connected":null,"messages":"9007199254740993","malformed":null,"reconnects":null,"connections":null});
+    assert!(validate_connector_frame(&make_frame("service_result",7,base.clone()),7).is_ok());
+    for (key,value) in [("password",json!("SYNTHETIC_ONLY")),("obs_code",json!("SYNTHETIC_ONLY")),("messages",json!(9007199254740993_u64)),("messages",json!("01")),("messages",json!("18446744073709551616")),("chat",json!("connected"))] {
+        let mut body=base.clone();body[key]=value;assert!(validate_connector_frame(&make_frame("service_result",7,body),7).is_err());
+    }
+}

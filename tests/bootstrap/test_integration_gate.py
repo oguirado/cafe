@@ -37,6 +37,23 @@ def fixture_binary(target):
 
 
 class TestIntegrationGate(unittest.TestCase):
+    def test_service_suite_uses_owned_platform_fixture_and_cleans(self):
+        selected = []
+        def run(command, root, env):
+            if 'build' in command:
+                binary = fixture_binary(Path(env['CARGO_TARGET_DIR']))
+                binary.parent.mkdir(parents=True)
+                binary.touch()
+                return subprocess.CompletedProcess(command, 0, '', '')
+            self.assertTrue(Path(env['CAFE_AUTHORITY_FIXTURE']).is_file())
+            selected.append(command[-1])
+            return subprocess.CompletedProcess(command, 0, '', 'Ran 23 tests in 0.01s\n\nOK\n')
+        with mock.patch.object(gate, 'configuration', return_value=('cargo', {})), mock.patch.object(gate, 'run_owned', side_effect=run), mock.patch('sys.stderr', io.StringIO()):
+            report = gate.run_gate(ROOT, services=True)
+        self.assertEqual(selected, ['test_runtime_service*.py'])
+        self.assertEqual(report['status'], 'pass')
+        self.assertTrue(report['cleanup'])
+
     def test_target_owned_and_fixture_selected_without_caller_export(self):
         observed = []
         def run(command, root, env):

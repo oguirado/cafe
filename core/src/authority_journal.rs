@@ -565,6 +565,14 @@ fn validate_record(
         return Err(JournalError::Corrupt);
     }
     match record.kind.as_str() {
+        "service_configuration" => {
+            let Some(body) = record.payload.as_object() else { return Err(JournalError::Corrupt); };
+            if body.len()!=2 || !matches!(body.get("service").and_then(Value::as_str),Some("obs"|"chat"))
+                || !body.get("secret_present").is_some_and(Value::is_boolean)
+                || (body["service"]=="chat" && body["secret_present"]!=Value::Bool(false)) {
+                return Err(JournalError::Corrupt);
+            }
+        }
         "confirmed_control_intent" | "confirmed_control_result" => {
             apply_control_fact(&record.kind, &record.payload, record.sequence, control_book, registry)?;
         }
@@ -808,6 +816,29 @@ impl Journal {
     }
 
     pub(crate) fn authority_epoch(&self) -> Clock { self.epoch }
+
+    pub(crate) fn has_service_configuration(&self, request_id:&str)->bool {
+        self.event_ids.contains(&format!("service-config.{}",sha256_hex(request_id.as_bytes())))
+    }
+
+    /// Only service identity and secret presence are durable. Credentials,
+    /// channel names, descriptors, and chat payloads are not accepted here.
+    pub(crate) fn append_service_configuration(&mut self, request_id:&str, service:&str, secret_present:bool)->Result<Committed,JournalError> {
+        if self.poisoned{return Err(JournalError::Io);}
+        if self.staged.is_some(){return Err(JournalError::Pending);}
+        if !control_identifier(request_id)||!matches!(service,"obs"|"chat")||(service=="chat"&&secret_present)
+            ||self.has_service_configuration(request_id)
+            ||self.records.iter().any(|r|r.payload.get("request_id").and_then(Value::as_str)==Some(request_id)) {
+            return Err(JournalError::Invalid);
+        }
+        let event=format!("service-config.{}",sha256_hex(request_id.as_bytes()));
+        let payload=serde_json::json!({"service":service,"secret_present":secret_present});
+        let (record,body)=self.build_record(&event,"service_configuration",payload)?;
+        self.write_committed_frame(&body)?;
+        self.event_ids.insert(event.clone());
+        let receipt=Committed{sequence:record.sequence,event_id:event,record_digest:record.record_digest.clone()};
+        self.records.push(record);Ok(receipt)
+    }
 
     /// Appends a closed confirmed intent only after durable flush; no effect is dispatched here.
     pub(crate) fn append_confirmed_intent(&mut self, intent: ControlIntentRecord) -> Result<Committed, JournalError> {

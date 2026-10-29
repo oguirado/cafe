@@ -23,7 +23,7 @@ def policy(value):
 
 class TestPublicationLint(unittest.TestCase):
     def test_reviewed_runtime_words_do_not_create_filename_exceptions(self):
-        for name in ['core/src/capture_pipeline.rs','core/src/control_intents.rs','core/src/operator_protocol.rs','core/src/runtime_effects.rs','core/src/runtime_recording.rs','src/main/runtimeBackend.js']:
+        for name in ['core/src/capture_pipeline.rs','core/src/control_intents.rs','core/src/operator_protocol.rs','core/src/runtime_effects.rs','core/src/runtime_recording.rs','src/main/runtimeBackend.js','core/src/runtime_service_owner.rs','connectors/cafe/runtime_services.py','tests/integration/test_obs_crop.py']:
             self.assertTrue(P.filename_ok(name),name)
         for name in ['core/src/captura.py','runtime/unreviewedforeignword.py','core/src/registro_ventanas.rs']:
             self.assertFalse(P.filename_ok(name),name)

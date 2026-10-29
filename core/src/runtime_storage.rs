@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 use std::{fs::{File,OpenOptions},path::{Path,PathBuf}};
 use crate::capsule_registry::Clock;
-pub(crate) struct RuntimeStorage {pub root:PathBuf,pub session:PathBuf,pub recordings:PathBuf,pub epoch:Clock,pub session_id:String,_writer:File}
+pub(crate) struct RuntimeStorage {pub root:PathBuf,pub session:PathBuf,pub recordings:PathBuf,pub chat:PathBuf,pub epoch:Clock,pub session_id:String,_writer:File}
 fn links(path:&Path)->bool{path.ancestors().any(|part|match std::fs::symlink_metadata(part){Ok(meta)=>{
  #[cfg(windows)]{use std::os::windows::fs::MetadataExt;if meta.file_attributes()&0x400!=0{return true;}}
  meta.file_type().is_symlink()},Err(_)=>false})}
@@ -38,7 +38,8 @@ impl RuntimeStorage {
   let session_id=format!("session-{}",epoch.0);let session=root.join(&session_id);
   // Exclusive create fails on a retained epoch collision; never reuse it.
   create_private(&session)?;let recordings=session.join("recordings");create_private(&recordings)?;
-  Ok(Self{root,session,recordings,epoch,session_id,_writer:writer})
+  let chat=session.join("chat");create_private(&chat)?;
+  Ok(Self{root,session,recordings,chat,epoch,session_id,_writer:writer})
  }
 }
 #[cfg(test)]mod tests{

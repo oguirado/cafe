@@ -243,9 +243,25 @@ impl ConnectorSupervisor {
     pub async fn stop(&mut self) {
         self.available = false;
         self.stdin.take();
-        let _ = self.child.kill().await;
+        if can_signal(self.child.id(),self.pid,std::process::id()) {
+            let _ = self.child.kill().await;
+        }
         self.stdout_task.abort();
         self.stderr_task.abort();
+    }
+}
+
+fn can_signal(pid:Option<u32>,known:Option<u32>,own:u32)->bool {
+    pid.is_some_and(|value|value>1&&value!=own&&Some(value)==known)
+}
+
+#[cfg(test)]mod signal_guard_tests {
+    use super::can_signal;
+    #[test]fn never_signal_a_sentinel_self_or_unknown_target(){
+        for (pid,known) in [(None,None),(Some(0),Some(0)),(Some(1),Some(1)),(Some(77),Some(77)),(Some(88),Some(89)),(Some(88),None)] {
+            assert!(!can_signal(pid,known,77));
+        }
+        assert!(can_signal(Some(88),Some(88),77));
     }
 }
 
