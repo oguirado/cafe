@@ -5,6 +5,7 @@ backend-book	subjects/backend/page.md
 github-repo-rule	docs/GITHUB_REPO_RULE.md
 js-backend-supervisor	src/main/backendSupervisor.js
 js-cafe-bridge	src/preload/cafeBridge.js
+js-ffmpeg-selection	src/main/ffmpegSelection.js
 js-preload-security	src/preload/preloadSecurity.js
 js-renderer-assets	src/main/rendererAssets.js
 js-renderer-control	src/renderer/control.js
@@ -17,6 +18,7 @@ js-shell-security-p3	src/main/shellSecurity.js
 provenance	docs/ui/PROVENANCE.md
 py-authority-channel	connectors/cafe/authority_channel.py
 py-channel-auth	connectors/cafe/channel_auth.py
+py-mcp-control	connectors/cafe/mcp_control.py
 py-mcp-queries	connectors/cafe/mcp_queries.py
 py-mcp-server	connectors/cafe/mcp_server.py
 py-obs-auth	connectors/cafe/obs_auth.py

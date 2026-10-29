@@ -58,6 +58,74 @@ class TestPythonExtraction(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.assertEqual(rows, GOLD)
 
+    def test_handwritten_mcp_control_inventory(self):
+        path = 'connectors/cafe/mcp_control.py'
+        inventory, _ = q.load_inventory(ROOT, os.environ.get('CAFE_ROUTER_INVENTORY'))
+        # Numbered current source, independently transcribed before extraction.
+        expected = [
+            ('CONTROL_TOOLS', 56, 'constant'), ('AUTHORITY_OPS', 57, 'constant'),
+            ('INTENT_SCHEMA', 58, 'constant'), ('INTENT_KIND', 59, 'constant'),
+            ('RECEIPT_SCHEMA', 60, 'constant'), ('LOOPBACK', 61, 'constant'),
+            ('BROKER_IDENTITY', 62, 'constant'), ('CONTROL_STATES', 72, 'constant'),
+            ('SUCCESS_STATES', 73, 'constant'), ('CONTROL_ERRORS', 75, 'constant'),
+            ('AUTHORITY_ERRORS', 83, 'constant'), ('ControlPlane', 246, 'class'),
+            ('main', 785, 'function'),
+        ]
+        self.assertEqual(x.extract(ROOT, [path], inventory)['files'][0]['symbols'], [
+            {'path': path, 'symbol': 'cafe.mcp_control.'+name, 'name': name,
+             'line': line, 'owner': 'connectors/', 'kind': kind}
+            for name, line, kind in expected])
+
+    def test_bounded_frozenset_literals(self):
+        for literal in ["{'x', 'y'}", "['x', 'y']", "('x', 'y')", '[]', '()',
+                        "[None, True, 1, -2, +3.5, b'x', ('tuple', 2)]"]:
+            with self.subTest(literal=literal):
+                self.assertEqual(self.extract('ALLOWED = frozenset('+literal+')\n'), [
+                    {'path': SOURCE, 'symbol': 'cafe.authority_channel.ALLOWED',
+                     'name': 'ALLOWED', 'line': 1, 'owner': 'connectors/', 'kind': 'constant'}])
+
+    def test_frozenset_dynamic_or_unhashable_arguments_abstain(self):
+        for call in ['frozenset(set())', 'frozenset(calculate())',
+                     "frozenset(iterable={'x'})", "frozenset({'x'}, extra=True)",
+                     'frozenset()', "frozenset({'x'}, {'y'})", 'frozenset(*args)',
+                     'frozenset([[]])', 'frozenset([{}])', 'frozenset([{1}])',
+                     'frozenset([(1, [])])', 'frozenset([calculate()])',
+                     'frozenset([*items])', "frozenset([x for x in 'x'])"]:
+            with self.subTest(call=call), self.assertRaises(x.ExtractionError) as error:
+                self.extract('ALLOWED = '+call+'\n')
+            self.assertEqual(error.exception.code, 'nonliteral_public_binding')
+
+    def test_constructor_census_is_independent_of_all_and_conditionals(self):
+        exact = "__all__=['ALLOWED'];\nif True:\n    from custom import frozenset\nALLOWED=frozenset({'x'})\n"
+        for declaration in [
+            'from custom import frozenset', 'import custom as frozenset',
+            'frozenset = custom', 'def frozenset(): pass', 'class frozenset: pass',
+            'if True:\n    from custom import frozenset',
+            'if False:\n    frozenset = custom',
+            'try:\n    work()\nexcept Error as frozenset:\n    pass',
+            'class Hidden:\n    global frozenset\n    from custom import frozenset',
+            'class Hidden:\n    if True:\n        global frozenset\n        frozenset = custom',
+            'class Hidden:\n    global frozenset\n    def frozenset(): pass',
+            'class Hidden:\n    class Inner:\n        global frozenset\n        frozenset = custom',
+        ]:
+            for text in ["__all__=['ALLOWED']\n"+declaration+"\nALLOWED=frozenset({'x'})\n",
+                         "__all__=['ALLOWED']\nALLOWED=frozenset({'x'})\n"+declaration+'\n']:
+                with self.subTest(text=text), self.assertRaises(x.ExtractionError):
+                    self.extract(text)
+        with self.assertRaises(x.ExtractionError): self.extract(exact)
+
+    def test_deferred_constructor_bindings_and_ordinary_class_locals_excluded(self):
+        for declaration in [
+            'def deferred():\n    global frozenset\n    frozenset = custom',
+            'def deferred():\n    from custom import frozenset',
+            'class Hidden:\n    frozenset = custom',
+            'class Hidden:\n    def deferred(self):\n        global frozenset\n        frozenset = custom',
+        ]:
+            with self.subTest(declaration=declaration):
+                self.assertEqual(self.extract("__all__=['ALLOWED']\n"+declaration+"\nALLOWED=frozenset({'x'})\n"), [
+                    {'path': SOURCE, 'symbol': 'cafe.authority_channel.ALLOWED', 'name': 'ALLOWED',
+                     'line': declaration.count('\n')+3, 'owner': 'connectors/', 'kind': 'constant'}])
+
     def test_strings_docstrings_and_private_declarations_not_extracted(self):
         text = '\n'.join(['"""def doc_fake(): pass"""', 'text = "def string_fake(): pass"',
                           "_value = '''async def another_fake(): pass'''", '# class CommentFake: pass',

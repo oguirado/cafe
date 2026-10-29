@@ -42,6 +42,7 @@ try {
   const isFunction = n => n && (ts.isFunctionDeclaration(n)||ts.isFunctionExpression(n)||ts.isArrowFunction(n)||ts.isMethodDeclaration(n)||ts.isGetAccessorDeclaration(n)||ts.isSetAccessorDeclaration(n)||ts.isConstructorDeclaration(n));
   const isClass = n => n && (ts.isClassDeclaration(n)||ts.isClassExpression(n));
   const access = n => {
+    if (!n) return null;
     if (identifier(n)) return [n.text];
     if (ts.isPropertyAccessExpression(n)) {const base=access(n.expression);return base ? [...base,n.name.text] : null;}
     if (ts.isElementAccessExpression(n)) {const base=access(n.expression);return base ? [...base,null] : null;}
@@ -53,7 +54,7 @@ try {
       const a=access(expr.expression);
       if (a && a.join('.')==='Object.freeze') {
         u.freezeUsed=true;
-        if (u.bindings.has('Object')||u.freezeMutated||expr.arguments.length!==1) fail('ambiguous_freeze',u,expr);
+        if (u.objectBound||u.freezeMutated||expr.arguments.length!==1) fail('ambiguous_freeze',u,expr);
         expr=unwrap(expr.arguments[0]);
       }
     }
@@ -74,6 +75,22 @@ try {
       }
     }
     return out;
+  }
+  // Conservative binding census across executed compounds. Deferred bodies do
+  // not bind the surrounding scope; declaration names still do. Block locals
+  // are deliberately treated as ambiguous even outside their lexical reach.
+  function bindsObject(root) {
+    let found=false;
+    const name=n=>{if(identifier(n)){if(n.text==='Object')found=true;}
+      else if(n&&(ts.isObjectBindingPattern(n)||ts.isArrayBindingPattern(n)))
+        for(const e of n.elements)if(e.name)name(e.name);};
+    function visit(n) {
+      if(isFunction(n)||isClass(n)){if(ts.isFunctionDeclaration(n)||ts.isClassDeclaration(n))name(n.name);return;}
+      if(ts.isVariableDeclaration(n)||ts.isParameter(n)||ts.isBindingElement(n))name(n.name);
+      if(ts.isImportClause(n)||ts.isNamespaceImport(n)||ts.isImportSpecifier(n))name(n.name);
+      ts.forEachChild(n,visit);
+    }
+    visit(root);return found;
   }
   function properties(u,obj,scope,facade=false) {
     const found=[],seen=new Set();
@@ -105,6 +122,7 @@ try {
       const d=sf.parseDiagnostics[0];throw {code:'unsupported_or_invalid_syntax',path:file.path,line:sf.getLineAndCharacterOfPosition(d.start||0).line+1};
     }
     u.bindings=bindings(u,sf.statements);
+    u.objectBound=bindsObject(sf);
     if(u.bindings.has('module')||u.bindings.has('exports')) fail('ambiguous_commonjs_binding',u);
     const typeNames=new Set();
     for(const statement of sf.statements) {
@@ -184,6 +202,14 @@ try {
       if(ts.isBinaryExpression(n)&&n.operatorToken.kind>=ts.SyntaxKind.FirstAssignment&&n.operatorToken.kind<=ts.SyntaxKind.LastAssignment) {
         const target=access(n.left);if(target&&target[0]==='Object')u.freezeMutated=true;
       }
+      if(ts.isDeleteExpression(n)||ts.isPrefixUnaryExpression(n)||ts.isPostfixUnaryExpression(n)) {
+        const target=access(n.expression||n.operand);
+        if(target&&target[0]==='Object'&&(ts.isDeleteExpression(n)||n.operator===ts.SyntaxKind.PlusPlusToken||n.operator===ts.SyntaxKind.MinusMinusToken))u.freezeMutated=true;
+      }
+      if(ts.isCallExpression(n)) {
+        const target=access(n.expression), first=access(n.arguments[0]);
+        if(target&&first&&first.join('.')==='Object'&&['Object.assign','Object.defineProperty','Object.defineProperties','Object.setPrototypeOf','Reflect.set','Reflect.defineProperty','Reflect.deleteProperty','Reflect.setPrototypeOf'].includes(target.join('.')))u.freezeMutated=true;
+      }
       if((ts.isCallExpression(n)||ts.isNewExpression(n))&&identifier(n.expression)&&['eval','Function'].includes(n.expression.text))fail('dynamic_code_unsupported',u,n);
       if(n.kind===ts.SyntaxKind.ThisKeyword) {
         let owner=n.parent;while(owner&&!(isFunction(owner)&&!ts.isArrowFunction(owner))&&!isClass(owner))owner=owner.parent;
@@ -218,16 +244,23 @@ try {
       const value=resolve(u,item);emit(item.name,item.name,item.node);
       if(!isFunction(value)||!value.body)continue;
       const body=value.body;
-      const scope=ts.isBlock(body)?bindings(u,body.statements):new Map();
+      let scope=ts.isBlock(body)?bindings(u,body.statements):new Map();
       const returns=[];
-      function collect(n){if(n!==body&&(isFunction(n)||isClass(n)))return;if(ts.isReturnStatement(n))returns.push({expr:n.expression,direct:n.parent===body});ts.forEachChild(n,collect);}
+      function collect(n){if(n!==body&&(isFunction(n)||isClass(n)))return;if(ts.isReturnStatement(n))returns.push({expr:n.expression,node:n,direct:n.parent===body});ts.forEachChild(n,collect);}
       if(ts.isBlock(body))collect(body);else returns.push({expr:body,direct:true});
       const objects=returns.map(e=>objectLiteral(u,e.expr));
       if(!objects.some(Boolean))continue;
       if(value.asteriskToken||has(value,ts.SyntaxKind.AsyncKeyword))fail('unsupported_async_or_generator_facade',u,value);
-      if(objects.length!==1||!objects[0]||!returns[0].direct)fail('ambiguous_factory_facade',u,value);
+      if(objects.length!==1||!objects[0])fail('ambiguous_factory_facade',u,value);
+      if(!returns[0].direct) {
+        const block=returns[0].node?.parent, attempt=block?.parent;
+        if(!block||!ts.isBlock(block)||!attempt||!ts.isTryStatement(attempt)||attempt.tryBlock!==block||attempt.parent!==body||
+           !attempt.catchClause||attempt.catchClause.block.statements.length!==1||!ts.isThrowStatement(attempt.catchClause.block.statements[0]))fail('ambiguous_factory_facade',u,value);
+        const local=bindings(u,block.statements);
+        for(const [name,binding] of local){if(scope.has(name))fail('ambiguous_binding',u,binding.node);scope.set(name,binding);}
+      }
       function parameterHasObject(n){if(identifier(n))return n.text==='Object';return !!n?.elements?.some(e=>e.name&&parameterHasObject(e.name));}
-      if(scope.has('Object')||value.parameters.some(p=>parameterHasObject(p.name)))fail('ambiguous_freeze',u,value);
+      if(bindsObject(body)||parameterHasObject(value.name)||value.parameters.some(p=>parameterHasObject(p.name)))fail('ambiguous_freeze',u,value);
       for(const p of properties(u,objects[0],scope,true))emit(p.name,item.name+'::'+p.name,p.site);
     }
     output.push({path:u.path,symbols:rows});

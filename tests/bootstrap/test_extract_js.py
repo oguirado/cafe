@@ -170,6 +170,72 @@ export const real=1;
         self.refusal('/** @typedef {object} Same */\n/** @typedef {object} Same */\nconst marker=1;','duplicate_public_typedef')
         self.refusal('function f(){\n/** @public @typedef {object} Visible */\nconst marker=1;\n}','unsupported_nested_public_typedef')
 
+    def test_handwritten_ffmpeg_selection_inventory(self):
+        path = 'src/main/ffmpegSelection.js'
+        inventory, _ = q.load_inventory(ROOT, os.environ.get('CAFE_ROUTER_INVENTORY'))
+        rows = x.extract(ROOT, [path], inventory)['files'][0]['symbols']
+        prefix = 'cafe_shell::main::ffmpegSelection::'
+        expected = [
+            {'path': path, 'symbol': prefix+'verifyFfmpegSelection::bytes', 'name': 'bytes', 'line': 47, 'process': 'main'},
+            {'path': path, 'symbol': prefix+'verifyFfmpegSelection::file', 'name': 'file', 'line': 47, 'process': 'main'},
+            {'path': path, 'symbol': prefix+'verifyFfmpegSelection::sha256', 'name': 'sha256', 'line': 47, 'process': 'main'},
+            {'path': path, 'symbol': prefix+'verifyFfmpegSelection', 'name': 'verifyFfmpegSelection', 'line': 55, 'process': 'main'},
+        ]
+        self.assertEqual(rows, expected)
+
+    def test_direct_try_facade_resolves_only_unambiguous_bindings(self):
+        rows = self.extract('''export function f() {
+  const outer = 1;
+  function deferred(Object) { return Object.freeze({ignored:1}); }
+  try {
+    const local = 2;
+    return Object.freeze({outer, local});
+  } catch (error) { throw error; }
+  finally { cleanup(); }
+}''')
+        self.assertEqual(rows, [
+            {'path': self.path, 'symbol': 'cafe_shell::main::sample::f', 'name': 'f', 'line': 1, 'process': 'main'},
+            {'path': self.path, 'symbol': 'cafe_shell::main::sample::f::local', 'name': 'local', 'line': 6, 'process': 'main'},
+            {'path': self.path, 'symbol': 'cafe_shell::main::sample::f::outer', 'name': 'outer', 'line': 6, 'process': 'main'},
+        ])
+        for source in [
+            'export function f(){try{return {x:1};}catch{return {y:1};}}',
+            'export function f(){try{if(ok)return {x:1};}catch{throw Error();}}',
+            'export function f(){if(ok){try{return {x:1};}catch{throw Error();}}}',
+            'export function f(){try{return {x:1};}catch{log();throw Error();}}',
+            'export function f(){try{return {x:1};}finally{cleanup();}}',
+            'export function f(){try{return {x:1};}catch{throw Error();}finally{return 2;}}',
+            'export function f(){const x=1;try{const x=2;return {x};}catch{throw Error();}}',
+            'export function f(){try{if(ok){const x=1;}return {x};}catch{throw Error();}}',
+        ]:
+            with self.subTest(source=source): self.refusal(source)
+
+    def test_object_binding_census_and_freeze_mutations_abstain(self):
+        exact = 'export function f(){try{if(true){var Object={freeze:x=>({wrong:1})};}return Object.freeze({claimed:1});}catch{throw Error();}}'
+        self.refusal(exact, 'ambiguous_freeze')
+        for declaration in [
+            'if(ok){var Object=other;}', 'if(ok){let Object=other;}',
+            'const {Object}=other;', 'const [Object]=other;',
+            'try{work();}catch(Object){}', 'function Object(){}',
+            'class Object{}',
+        ]:
+            for source in [
+                declaration+'export function f(){try{return Object.freeze({claimed:1});}catch{throw Error();}}',
+                'export function f(){'+declaration+'try{return Object.freeze({claimed:1});}catch{throw Error();}}',
+            ]:
+                with self.subTest(source=source): self.refusal(source, 'ambiguous_freeze')
+        for source in [
+            'export function f(Object){try{return Object.freeze({x:1});}catch{throw Error();}}',
+            'export function f({Object}){try{return Object.freeze({x:1});}catch{throw Error();}}',
+            'export const f=function Object(){try{return Object.freeze({x:1});}catch{throw Error();}};',
+            'export function f(){try{return Object.freeze({x:1});}catch(Object){throw Error();}}',
+            'import {Object} from "custom";export function f(){return Object.freeze({x:1});}',
+            'delete Object.freeze;export function f(){return Object.freeze({x:1});}',
+            'Object.freeze++;export function f(){return Object.freeze({x:1});}',
+            'Object.defineProperty(Object,"freeze",{});export function f(){return Object.freeze({x:1});}',
+        ]:
+            with self.subTest(source=source): self.refusal(source, 'ambiguous_freeze')
+
     def test_explicit_reexport_graph_and_local_process_boundary(self):
         a=self.source('export const original=1;','src/contracts/types.js')
         b=self.source("export { original as copied } from '../contracts/types.js';")

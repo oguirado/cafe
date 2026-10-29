@@ -113,6 +113,100 @@ def _module_bindings(node):
         yield from _module_bindings(child)
 
 
+def _constructor_shadowed(tree):
+    """Syntactic census, independent of __all__ and branch feasibility.
+
+    Class bodies execute, but ordinary class locals do not bind the module.
+    A class-body global directive does. Deferred function bodies are excluded;
+    their defaults, annotations and decorators still execute at definition.
+    This does not model arbitrary calls, imports' effects, or builtin mutation.
+    """
+    class Census(_DynamicGuard):
+        shadowed = False
+
+        def __init__(self):
+            self.module_scope = True
+
+        def bind(self, name):
+            if self.module_scope and name == 'frozenset':
+                self.shadowed = True
+
+        def visit_Name(self, node):
+            if isinstance(node.ctx, (ast.Store, ast.Del)):
+                self.bind(node.id)
+
+        def visit_Import(self, node):
+            for alias in node.names:
+                self.bind(alias.asname or alias.name.split('.')[0])
+
+        def visit_ImportFrom(self, node):
+            for alias in node.names:
+                self.bind(alias.asname or alias.name)
+
+        def visit_ExceptHandler(self, node):
+            self.bind(node.name)
+            self.generic_visit(node)
+
+        def visit_FunctionDef(self, node):
+            self.bind(node.name)
+            super().visit_FunctionDef(node)
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_Call(self, node):
+            self.generic_visit(node)
+
+        def visit_ClassDef(self, node):
+            self.bind(node.name)
+            for value in node.decorator_list + node.bases + [k.value for k in node.keywords]:
+                self.visit(value)
+            def globals_in(node):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                    return False
+                return (isinstance(node, ast.Global) and 'frozenset' in node.names or
+                        any(globals_in(child) for child in ast.iter_child_nodes(node)))
+            previous = self.module_scope
+            self.module_scope = any(globals_in(n) for n in node.body)
+            for statement in node.body:
+                self.visit(statement)
+            self.module_scope = previous
+
+        def visit_MatchAs(self, node):
+            self.bind(node.name)
+            self.generic_visit(node)
+
+        def visit_MatchStar(self, node):
+            self.bind(node.name)
+
+        def visit_MatchMapping(self, node):
+            self.bind(node.rest)
+            self.generic_visit(node)
+
+    census = Census()
+    census.visit(tree)
+    return census.shadowed
+
+
+def _constant_value(node, shadowed):
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'frozenset':
+        if shadowed:
+            raise ValueError('shadowed_constructor')
+        if (len(node.args) != 1 or node.keywords or
+                not isinstance(node.args[0], (ast.Set, ast.List, ast.Tuple))):
+            raise ValueError('unsupported_constructor_argument')
+        def literal(n):
+            return (isinstance(n, ast.Constant) or
+                    isinstance(n, ast.Tuple) and all(literal(e) for e in n.elts) or
+                    isinstance(n, ast.UnaryOp) and isinstance(n.op, (ast.UAdd, ast.USub)) and
+                    isinstance(n.operand, ast.Constant) and type(n.operand.value) in (int, float, complex))
+        for element in node.args[0].elts:
+            if not literal(element):
+                raise ValueError('nonliteral_or_unhashable_content')
+            # Guarded literal data only; no evaluation of the constructor call.
+            hash(ast.literal_eval(element))
+        return
+    ast.literal_eval(node)
+
+
 def _parse(path, source, module, owner):
     try:
         tree = ast.parse(source, filename=path)
@@ -124,6 +218,7 @@ def _parse(path, source, module, owner):
         raise ExtractionError('parser_limit_or_unsupported_syntax', path) from None
     selected, allowed = _all_declaration(tree, path)
     _DynamicGuard(path, allowed).visit(tree)
+    constructor_shadowed = _constructor_shadowed(tree)
     declarations = {}
     imported = set()
     for node in tree.body:
@@ -144,7 +239,7 @@ def _parse(path, source, module, owner):
                 if name == '__all__' or not _public(name) or (selected is not None and name not in selected):
                     continue
                 try:
-                    ast.literal_eval(node.value)
+                    _constant_value(node.value, constructor_shadowed)
                 except (ValueError, TypeError, SyntaxError, RecursionError, MemoryError):
                     _error('nonliteral_public_binding', path, node)
                 kind, at = 'constant', targets[0]

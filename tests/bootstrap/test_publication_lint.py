@@ -22,6 +22,13 @@ def policy(value):
 
 
 class TestPublicationLint(unittest.TestCase):
+    def test_reviewed_build_names_are_only_word_tokens(self):
+        for name in ['tools/windows/python_runtime_pins.json', 'src/main/ffmpegSelection.js', 'tests/security/windowsPackage.test.js', 'docs/acceptance/WINDOWS_PC_RUNBOOK.md']:
+            self.assertTrue(P.filename_ok(name), name)
+        for name in ['docs/acceptance/WINDOWS_PC_RUNBOOK_unreviewedforeignword.md', 'src/main/ffmpegSelection_archivo.js']:
+            self.assertFalse(P.filename_ok(name), name)
+        self.assertTrue(any(row['rule']=='credential' for row in P.scan_text('docs/acceptance/WINDOWS_PC_RUNBOOK.md', 'gh'+'p_'+'A'*36)))
+
     def test_reviewed_runtime_words_do_not_create_filename_exceptions(self):
         for name in ['core/src/capture_pipeline.rs','core/src/control_intents.rs','core/src/operator_protocol.rs','core/src/runtime_effects.rs','core/src/runtime_recording.rs','src/main/runtimeBackend.js','core/src/runtime_service_owner.rs','connectors/cafe/runtime_services.py','tests/integration/test_obs_crop.py','core/tests/recorder_timing.rs']:
             self.assertTrue(P.filename_ok(name),name)

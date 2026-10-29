@@ -57,8 +57,12 @@ refuses instead of guessing.
 ## CLI
 
 ```sh
-python3 -B tools/extract_py.py --files connectors/cafe/authority_channel.py
+python3 -B tools/extract_py.py --files "$SOURCE"
 ```
+
+Here `SOURCE` is the explicit repo-relative Python input. The current
+frozen entry is documented in the Overview; the CLI itself takes only the
+explicit file list, with no discovery.
 
 Optional flags:
 
@@ -104,7 +108,7 @@ Output is deterministic, compact, sorted-key JSON terminated with LF:
 - `owner` is the exact root from the ownership policy, currently `connectors/`.
 - `symbol` is the dotted module path with the `connectors/` prefix removed
   plus the declared name, for example
-  `cafe.authority_channel.serve_connector`. An `__init__.py` file uses
+  `cafe.authority_channel.serve_connector`. A package initializer uses
   package naming: the package path itself without the module suffix.
 - `kind` is one of `function`, `async_function`, `class`, or `constant`.
 - `line` is the 1-based source line of the declaring AST node: the
@@ -160,6 +164,36 @@ A public module-level simple binding to anything but such a literal
 refuses: the extractor emits no guessed constant. Literal tuples and containers are supported; calculated, ambiguous,
 conditional, mutated, or augmented public bindings refuse.
 
+One additional bounded constant form is accepted: an unshadowed
+builtin-name `frozenset` call with exactly one AST `Set`, `List`, or
+`Tuple` literal argument, no keywords, and no star arguments. Elements
+must be guarded hashable literals: scalar `Constant` nodes, recursively
+literal tuples, or signed numeric `Constant` nodes. `ast.literal_eval`
+and `hash` are applied to each element only after its node-shape guard;
+the call itself is never evaluated. Empty list and tuple arguments work.
+`set()` arguments, dynamic calls, keyword and star arguments, and
+unhashable elements refuse. Composite complex-number expressions outside
+this literal-node guard are not admitted.
+
+The constructor binding census for this form is independent of `__all__`,
+statement order, and branch feasibility. It includes module-executed
+assignments and deletions, import aliases, definitions, exception
+targets, pattern captures, and executed defaults, decorators, and
+annotations. Class bodies execute: class-body global constructor bindings
+count, including nested classes and compounds. Ordinary class locals and
+deferred function bodies do not bind the module constructor. Comprehension
+binding syntax can conservatively cause refusal. This is not full scope,
+runtime, or effect simulation. Imported-module effects, builtin namespace
+mutation, arbitrary monkeypatching, and unknown call effects are outside
+the profile. The existing parser-context compile does not execute source.
+No `exec`, `eval`, or source import is used for extraction.
+
+Imported, assigned, or defined constructor shadows explicitly abstain when
+a `frozenset` public constant is considered. All original literal and
+declaration behavior, source-byte-hash-before-decoding, deterministic
+output, explicit inventory, ownership checks, and unrelated behavior
+remain intact.
+
 <a id="extract-py-dunder-all"></a>
 ## `__all__` literal limits
 
@@ -191,6 +225,11 @@ The extractor refuses the whole run on any of the following:
   private name claimed by `__all__`.
 - Unknown syntax or encoding, unsafe or unlisted paths, and wrong
   ownership.
+- A `frozenset` constant candidate with a `set()` argument, a dynamic
+  call, any keyword or star argument, unhashable contents, or a composite
+  complex-number expression outside the literal-node guard.
+- Any imported, assigned, or defined constructor shadow considered
+  alongside a `frozenset` public constant.
 
 <a id="extract-py-strings"></a>
 ## Strings, comments, and docstrings
@@ -224,14 +263,14 @@ source revision at composition time.
 
 Before extraction, the portable one-command runner
 `tools/run_integration_gate.py` compiles the actual `cafe-authority-fixture`
-with `--offline --locked` in its own `TemporaryDirectory` target, sets
+with `--offline` and `--locked` in its own `TemporaryDirectory` target, sets
 `CAFE_AUTHORITY_FIXTURE` internally, executes the real
 `tests/integration/test_authority_channel.py`, and always removes the target
 and nested fixtures, including on failure: assertion, startup, and
 constructor failures clean up through `TemporaryDirectory` and `addCleanup`
 guarantees, and the runner always closes its own handles.
 
-An optional ignored `local/integration_gate.json` or an explicit
+An optional ignored local integration configuration JSON or an explicit
 environment configuration selects an external approved cargo and toolchain
 cache; there is no host path default in publishable code. With no
 configuration the runner uses `PATH` and the default cargo cache, and never
@@ -277,7 +316,7 @@ companion documents them but does not execute them.
 <a id="extract-py-negative-cases"></a>
 ## Negative cases
 
-The six required negative oracle cases follow; each runs in a temporary
+The required negative oracle cases follow; each runs in a temporary
 copy and its executable form belongs to the implementer, not to this
 companion:
 
@@ -294,6 +333,14 @@ companion:
 5. A star import explicitly abstains.
 6. An unlisted file is never read: a read spy proves no unlisted read, and
    a wrong-ownership or alias path refuses.
+7. A `frozenset(set())` candidate refuses, a `frozenset(calculate())`
+   candidate refuses, keyword and star arguments refuse, and unhashable
+   contents refuse.
+8. The exact conditional imported-shadow fixture under `__all__`
+   explicitly abstains when a `frozenset` public constant is considered.
+9. Class-body globals and later constructor bindings refuse; deferred
+   constructor bindings and ordinary class locals do not bind the module
+   constructor.
 
 Supporting oracle behavior: strict input paths, encoding handling, and
 hash-before-decode order; two deterministic CLI executions that are
@@ -310,3 +357,10 @@ host inference. Declarations outside the supported subset refuse rather
 than degrade. The MCP tool profile stays deferred until declared, the
 resolver stays pending R8, and the router stays unavailable. Findings
 outside the closed review list are deferred, not marked as failures.
+
+It is not full scope, runtime, or effect simulation. Imported-module
+effects, builtin namespace mutation, arbitrary monkeypatching, and unknown
+call effects are outside the profile and are not claimed. Comprehension
+binding syntax can conservatively cause refusal. The parser-context
+compile does not execute source; no `exec`, `eval`, or source import is
+used for extraction.

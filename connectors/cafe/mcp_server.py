@@ -31,6 +31,18 @@ _REQUIRED = {
     'search_messages': {'channel', 'query'}, 'top_chatters': {'channel', 'window_minutes'},
     'message_rate': {'channel', 'bucket_seconds'}, 'session_summary': {'channel', 'day'},
 }
+_CONTROL_IDENTIFIER = r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}'
+_CONTROL_ARGUMENTS = {
+    'select_capsule': {'capsule_id': 'control_id'},
+    'start_recording': {'request_id': 'control_id', 'capsule_id': 'control_id'},
+    'stop_recording': {'request_id': 'control_id', 'capsule_id': 'control_id'},
+    'send_to_obs': {'request_id': 'control_id', 'capsule_id': 'control_id'},
+}
+_CONTROL_REQUIRED = {
+    'select_capsule': {'capsule_id'}, 'start_recording': {'request_id'},
+    'stop_recording': {'request_id'}, 'send_to_obs': {'request_id'},
+}
+_CONTROL_TOOL_NAMES = frozenset(_CONTROL_ARGUMENTS)
 _CODES = {-32700: 'Parse error', -32600: 'Invalid Request',
           -32601: 'Method not found', -32602: 'Invalid params'}
 
@@ -197,17 +209,36 @@ def _argument_schema(kind):
             'maximum': {'limit': 200, 'window': 1440, 'bucket': 3600}[kind]}
 
 
-def tools():
-    return [{'name': name, 'description': 'Read-only chat query: ' + name,
+def tools(control_enabled=False):
+    base = [{'name': name, 'description': 'Read-only chat query: ' + name,
              'inputSchema': {'type': 'object', 'additionalProperties': False,
                              'properties': {key: _argument_schema(kind) for key, kind in fields.items()},
                              'required': sorted(_REQUIRED[name])},
              'annotations': {'readOnlyHint': True, 'destructiveHint': False,
                              'idempotentHint': True, 'openWorldHint': False}}
             for name, fields in _TOOL_ARGUMENTS.items()]
+    if not control_enabled:
+        return base
+    return base + [{'name': name, 'description': 'Authority control: ' + name,
+                    'inputSchema': {'type': 'object', 'additionalProperties': False,
+                                    'properties': {key: {'type': 'string', 'pattern': '^' + _CONTROL_IDENTIFIER + '$', 'minLength': 1, 'maxLength': 96} for key in fields},
+                                    'required': sorted(_CONTROL_REQUIRED[name])},
+                    'annotations': {'readOnlyHint': False, 'destructiveHint': False,
+                                    'idempotentHint': False, 'openWorldHint': False}}
+                   for name, fields in _CONTROL_ARGUMENTS.items()]
 
 
 def validate_arguments(name, arguments):
+    if name in _CONTROL_TOOL_NAMES:
+        if type(arguments) is not dict:
+            raise ValueError('invalid_params')
+        fields = _CONTROL_ARGUMENTS[name]
+        if set(arguments) - set(fields) or not _CONTROL_REQUIRED[name] <= set(arguments):
+            raise ValueError('invalid_params')
+        for value in arguments.values():
+            if type(value) is not str or not re.fullmatch(_CONTROL_IDENTIFIER, value):
+                raise ValueError('invalid_params')
+        return dict(arguments)
     if name not in _TOOL_ARGUMENTS or type(arguments) is not dict:
         raise ValueError('invalid_params')
     fields = _TOOL_ARGUMENTS[name]
@@ -247,10 +278,29 @@ def _tool_error():
     return {'content': [{'type': 'text', 'text': 'data_unavailable_or_result_too_large'}], 'isError': True}
 
 
+def _query_now_ns(clock):
+    # Freeze one exact query instant before scanning any records.
+    if clock is None:
+        return time.time_ns()
+    value = clock()
+    if type(value) not in (int, float, Decimal):
+        raise ValueError('invalid_query_clock')
+    precise = Decimal(str(value))
+    if not precise.is_finite():
+        raise ValueError('invalid_query_clock')
+    precise *= 1000000000
+    if precise != precise.to_integral_value():
+        raise ValueError('invalid_query_clock')
+    now_ns = int(precise)
+    if type(now_ns) is not int:
+        raise ValueError('invalid_query_clock')
+    return now_ns
+
+
 class Server:
-    def __init__(self, data, *, query=None, clock=None):
+    def __init__(self, data, *, query=None, clock=None, control=None):
         self.data = Path(data).absolute(); _directory(self.data)
-        self.state = 'new'; self.clock = clock
+        self.state = 'new'; self.clock = clock; self.control = control
         if query is None:
             from .mcp_queries import execute
             query = execute
@@ -280,7 +330,7 @@ class Server:
         if self.state != 'ready':
             return _error(identity, -32600)
         if method == 'tools/list':
-            return _result(identity, {'tools': tools()}) if params == {} else _error(identity, -32602)
+            return _result(identity, {'tools': tools(control_enabled=self.control is not None)}) if params == {} else _error(identity, -32602)
         if method != 'tools/call':
             return _error(identity, -32601)
         if type(params) is not dict or set(params) - {'name', 'arguments'} or type(params.get('name')) is not str:
@@ -289,24 +339,23 @@ class Server:
             args = validate_arguments(params['name'], params.get('arguments', {}))
         except ValueError:
             return _error(identity, -32602)
+        if params['name'] in _CONTROL_TOOL_NAMES:
+            if self.control is None:
+                return _error(identity, -32602)
+            try:
+                # Approval lifetime belongs to the control plane monotonic clock.
+                result = self.control.execute(params['name'], args)
+                if type(result) is not dict or set(result) != {'content', 'structuredContent', 'isError'} or type(result['isError']) is not bool:
+                    raise ValueError('invalid_control_result')
+                response = _result(identity, result)
+                if len(json.dumps(response, ensure_ascii=False).encode('utf-8')) + 1 > MAX_RESPONSE:
+                    return _result(identity, _tool_error())
+                return response
+            except (OSError, ValueError, TypeError, RecursionError):
+                return _result(identity, _tool_error())
         try:
             reader = DataReader(self.data)
-            # Freeze one exact query instant before scanning any records.
-            if self.clock is None:
-                now_ns = time.time_ns()
-            else:
-                value = self.clock()
-                if type(value) not in (int, float, Decimal):
-                    raise ValueError('invalid_query_clock')
-                precise = Decimal(str(value))
-                if not precise.is_finite():
-                    raise ValueError('invalid_query_clock')
-                precise *= 1000000000
-                if precise != precise.to_integral_value():
-                    raise ValueError('invalid_query_clock')
-                now_ns = int(precise)
-            if type(now_ns) is not int:
-                raise ValueError('invalid_query_clock')
+            now_ns = _query_now_ns(self.clock)
             records = reader.events(args.get('channel'))
             try:
                 data = self.query(params['name'], args, records, now_ns // 1000000, now_ns=now_ns)

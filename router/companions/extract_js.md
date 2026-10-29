@@ -72,8 +72,8 @@ fallback, no environment-derived file discovery.
 
 The Node runtime resolves from `PATH` and must validate as major version
 24. An absolute external runtime path in `ROUTER_NODE` overrides `PATH`
-lookup when set. The compiler resolves relative to the tool root at
-`node_modules/typescript` and must check as exact version 5.9.3. A
+lookup when set. The compiler resolves relative to the tool root in the
+provisioned dependency cache and must check as exact version 5.9.3. A
 missing runtime or compiler refuses explicitly; the extractor never
 installs anything.
 
@@ -182,6 +182,34 @@ function execution:
 - The five host methods on the main side are host methods only; they are
   not renderer authority.
 
+The existing direct-body profile above remains. One additional bounded
+facade form is accepted: exactly one successful object return, directly
+inside the try block of a try statement directly in the exported function
+body. A catch clause is required with exactly one throw statement. All
+alternative returns, including catch returns, finally returns, conditional
+returns, or nested-block returns, cause explicit refusal. Deferred nested
+function and class bodies are excluded from return collection; they never
+supply the successful return.
+
+Facade member resolution for this form uses direct function-body bindings
+plus direct try-block bindings. Duplicate member names across these two
+maps refuse. Unresolved compound-only bindings refuse. A conservative
+`Object` binding census covers enclosing module and function compounds,
+`var` and lexical and destructured declarations, catch bindings, imports,
+parameters, and relevant function and class names, including named
+function-expression self-bindings. Deferred nested scopes are excluded
+from that census. Lexically unrelated `Object` bindings appearing in
+compounds can conservatively cause refusal.
+
+Assignment mutation refusal is retained. Direct `delete`, increment, and
+decrement operations and recognized reflective `Object` mutation calls
+affecting the recognized facade identity also refuse. Arbitrary alias
+mutation, imported side effects, unknown calls, prototype and environment
+changes, and exhaustive runtime effects are outside this syntactic
+profile. This is not complete JavaScript effect analysis. Computed
+exports, export stars, and unsupported facade ambiguities continue to
+refuse. No source execution occurs.
+
 <a id="extract-js-module-resolution"></a>
 ## Module resolution
 
@@ -204,6 +232,17 @@ The extractor refuses the whole run on any of the following:
 - Unknown export syntax, TypeScript authored syntax, JSX, or decorators.
 - Explicitly public nested typedefs and duplicate public type names.
 - Any unlisted, ambiguous, external, or cyclic re-export target.
+- Any alternative facade return, including a catch return, a finally
+  return, a conditional return, or a nested-block return; a missing catch
+  on the try-block facade form, or a catch without exactly one throw.
+- Duplicate facade member names across the function-body and try-block
+  binding maps, and unresolved compound-only facade bindings.
+- Any `Object` shadow that makes the recognized facade identity
+  ambiguous, including parameter, module-global, compound, destructuring,
+  catch, named-function self-binding, and hoisted-`var` shadows.
+- Direct assignment, `delete`, increment, or decrement mutations and
+  recognized reflective `Object` mutation calls affecting the recognized
+  facade identity.
 
 <a id="extract-js-comments"></a>
 ## Comments and literals
@@ -308,6 +347,14 @@ companion:
   re-exports, aliases, and defaults behave as specified.
 - Malformed and unsupported syntax refuses explicitly.
 - Repeated runs are deterministic and byte-identical.
+- The exact hoisted-`var` `Object` fixture refuses.
+- An alternative catch return refuses.
+- Conditional and nested facade returns refuse.
+- `Object` parameter, module-global, compound, destructuring, catch, and
+  named-function shadows refuse.
+- Freeze mutations and direct `delete`, increment, decrement, and
+  recognized reflective `Object` mutations affecting the recognized
+  facade identity refuse.
 
 <a id="extract-js-limits"></a>
 ## Limits
@@ -323,3 +370,9 @@ functions with other return shapes remain declared exports only; no unknown
 facade members are inferred. JSDoc type
 bodies are not expanded and JSDoc import types are not resolved. Findings
 outside the closed review list are deferred, not marked as failures.
+
+It is not complete JavaScript effect analysis. Arbitrary alias mutation,
+imported side effects, unknown calls, prototype and environment changes,
+and exhaustive runtime effects are outside the syntactic profile and are
+not claimed. Lexically unrelated `Object` bindings in compounds can
+conservatively cause refusal. No source execution occurs.
