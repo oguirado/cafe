@@ -120,10 +120,37 @@ def _directory(path):
     _safe_stat(path.lstat(), directory=True)
 
 
+def _canonical_root(value):
+    try:
+        supplied = Path(value)
+        if '..' in supplied.parts:
+            raise DataError('unsafe_data_path')
+        raw = supplied.absolute()
+        components = tuple(reversed(raw.parents)) + (raw,)
+        identities = []
+        for component in components:
+            info = component.lstat()
+            _safe_stat(info, directory=True)
+            identities.append((info.st_dev, info.st_ino))
+        canonical = raw.resolve(strict=True)
+        for component, identity in zip(components, identities):
+            info = component.lstat()
+            _safe_stat(info, directory=True)
+            if (info.st_dev, info.st_ino) != identity:
+                raise DataError('unsafe_data_path')
+        info = canonical.lstat()
+        _safe_stat(info, directory=True)
+        if (info.st_dev, info.st_ino) != identities[-1]:
+            raise DataError('unsafe_data_path')
+        _directory(canonical)
+        return canonical
+    except (OSError, ValueError, TypeError):
+        raise DataError('unsafe_data_path') from None
+
+
 class DataReader:
     def __init__(self, root):
-        self.root = Path(root).absolute()
-        _directory(self.root)
+        self.root = _canonical_root(root)
         self.stats = {'corrupt_lines': 0, 'truncated_lines': 0, 'bytes_scanned': 0,
                       'files_scanned': 0, 'scan_limited': False}
 
@@ -299,7 +326,7 @@ def _query_now_ns(clock):
 
 class Server:
     def __init__(self, data, *, query=None, clock=None, control=None):
-        self.data = Path(data).absolute(); _directory(self.data)
+        self.data = _canonical_root(data)
         self.state = 'new'; self.clock = clock; self.control = control
         if query is None:
             from .mcp_queries import execute

@@ -43,7 +43,7 @@ class McpServer(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='cafe-mcp-')
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.folder = self.root / 'twitch/test_channel'; self.folder.mkdir(parents=True)
         self.file = self.folder / '2000-01-01.jsonl'
         self.write([event('first literal', 'alice', 0), event('second literal', 'bob', 1), event('third literal', 'alice', 2)])
@@ -310,6 +310,104 @@ class McpServer(unittest.TestCase):
                                     cwd=ROOT, env=env, capture_output=True, timeout=2)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout, b'special file rejected\n')
+
+
+class McpPathTests(unittest.TestCase):
+    def test_plain_root_is_canonical(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            writer = mcp.DataReader(root)
+            try:
+                self.assertEqual(writer.root, root)
+                self.assertEqual(list(writer.events()), [])
+            finally:
+                pass
+
+    def test_same_identity_alias_is_canonicalized_without_creating_children(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            alias = root.parent / (root.name + '_alias')
+            original_stat, original_lstat, original_resolve = Path.stat, Path.lstat, Path.resolve
+            resolutions = []
+            def mapped(path):
+                return root if path == alias else path
+            def resolve(path, *args, **kwargs):
+                if path == alias:
+                    resolutions.append(path)
+                return original_resolve(mapped(path), *args, **kwargs)
+            with mock.patch.object(Path, 'stat', lambda path, *a, **k: original_stat(mapped(path), *a, **k)), mock.patch.object(Path, 'lstat', lambda path: original_lstat(mapped(path))), mock.patch.object(Path, 'resolve', resolve):
+                writer = mcp.DataReader(alias)
+                try:
+                    self.assertEqual(writer.root, root)
+                    server = mcp.Server(alias)
+                    self.assertEqual(server.data, root)
+                    self.assertEqual(resolutions, [alias, alias])
+                    self.assertFalse((root / 'twitch').exists())
+                finally:
+                    pass
+
+    def test_symlink_root_is_rejected_before_resolving(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            original = Path.lstat
+            def lstat(path):
+                info = original(path)
+                return SimpleNamespace(st_mode=stat.S_IFLNK, st_ino=info.st_ino, st_dev=info.st_dev) if path == root else info
+            with mock.patch.object(Path, 'lstat', lstat):
+                with self.assertRaisesRegex(mcp.DataError, '^unsafe_data_path$'):
+                    mcp.DataReader(root)
+
+    def test_symlink_ancestor_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve(); child = root / 'child'; child.mkdir()
+            original = Path.lstat
+            def lstat(path):
+                info = original(path)
+                return SimpleNamespace(st_mode=stat.S_IFLNK, st_ino=info.st_ino, st_dev=info.st_dev) if path == root else info
+            with mock.patch.object(Path, 'lstat', lstat):
+                with self.assertRaisesRegex(mcp.DataError, '^unsafe_data_path$'):
+                    mcp.DataReader(child)
+
+    def test_windows_reparse_guard_remains_closed(self):
+        info = SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_ino=7, st_dev=11, st_file_attributes=0)
+        with mock.patch.object(mcp, 'os', SimpleNamespace(name='nt')), mock.patch.object(mcp.stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400, create=True):
+            mcp._safe_stat(info, directory=True)
+            info.st_file_attributes = 0x400
+            with self.assertRaisesRegex(mcp.DataError, '^unsafe_data_path$'):
+                mcp._safe_stat(info, directory=True)
+
+    def test_parent_components_and_missing_root_fail_closed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            for value in [root / '..' / root.name, root / 'absent']:
+                with self.subTest(case=value.name):
+                    with self.assertRaisesRegex(mcp.DataError, '^unsafe_data_path$'):
+                        mcp.DataReader(value)
+
+    def test_root_identity_change_during_resolution_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve(); original = Path.lstat; seen = 0
+            def lstat(path):
+                nonlocal seen
+                info = original(path)
+                if path == root:
+                    seen += 1
+                    if seen > 1:
+                        return SimpleNamespace(st_mode=info.st_mode, st_ino=info.st_ino + 1, st_dev=info.st_dev, st_file_attributes=getattr(info, 'st_file_attributes', 0))
+                return info
+            with mock.patch.object(Path, 'lstat', lstat):
+                with self.assertRaisesRegex(mcp.DataError, '^unsafe_data_path$'):
+                    mcp.DataReader(root)
+
+    def test_resolved_directory_identity_must_match_raw_root(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder).resolve(); root = base / 'source'; root.mkdir(); other = base / 'other'; other.mkdir()
+            original = Path.resolve
+            def resolve(path, *args, **kwargs):
+                return original(other if path == root else path, *args, **kwargs)
+            with mock.patch.object(Path, 'resolve', resolve):
+                with self.assertRaisesRegex(mcp.DataError, '^unsafe_data_path$'):
+                    mcp.DataReader(root)
 
 
 if __name__ == '__main__':
