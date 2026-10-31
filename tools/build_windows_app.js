@@ -37,6 +37,16 @@ function runPython(python, argv, root) {
   return result.stdout;
 }
 
+/** Enumerate actual directory spellings; never probe case aliases on Windows.
+ * @param {string} moduleRoot
+ * @returns {string[]}
+ */
+function noticeFiles(moduleRoot) {
+  const allowed = new Set(['license', 'license.md', 'license.txt', 'license-mit', 'notice', 'notice.txt']);
+  return fs.readdirSync(moduleRoot).filter(name => allowed.has(name.toLowerCase()))
+    .sort().map(name => regular(path.join(moduleRoot, name)));
+}
+
 /** @param {Record<string, unknown>} request */
 async function buildCheckedWindowsApp(request) {
   const keys = ['source','output','electronZipDir','pythonTool','pythonArchive','websocketsWheel','authorityExe','authoritySha256','inventory'];
@@ -95,12 +105,9 @@ async function buildCheckedWindowsApp(request) {
       if (installed.version!==row.version) throw new Error('NOTICE_PACKAGE_REJECTED');
       const target=path.join(notices,key.replaceAll('/', '_'));fs.mkdirSync(target);
       fs.writeFileSync(path.join(target,'package.json'),JSON.stringify({name:installed.name,version:installed.version,license:installed.license},null,2)+'\n');
-      for (const name of ['LICENSE','LICENSE.md','LICENSE.txt','license','license.md','LICENSE-MIT','NOTICE','NOTICE.txt']) {
-        const file=path.join(moduleRoot,name);
-        if (!fs.existsSync(file)) continue;
-        const source=regular(file);
+      for (const source of noticeFiles(moduleRoot)) {
         if (fs.statSync(source).size>4*1024*1024) throw new Error('NOTICE_SIZE_REJECTED');
-        fs.copyFileSync(source,path.join(target,name));
+        fs.copyFileSync(source,path.join(target,path.basename(source)));
       }
     }
     phase = 'runtime_copy';
@@ -155,6 +162,7 @@ async function main(args) {
     process.stdout.write(JSON.stringify(result)+'\n');return 0;
   } catch { process.stdout.write(JSON.stringify({schema:'cafe.unsigned-windows-app.v1',status:'blocked',code:'WINDOWS_PACKAGE_BLOCKED'})+'\n');return 1; }
 }
+exports.noticeFiles=noticeFiles;
 exports.buildWindowsApp=buildWindowsApp;
 exports.main=main;
 if (require.main===module) main(process.argv.slice(2)).then(rc=>{process.exitCode=rc;});
