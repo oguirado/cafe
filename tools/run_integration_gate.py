@@ -50,7 +50,7 @@ def run_owned(command, root, env, timeout=900):
     """Signal only this invocation's known child or its newly created session."""
     new_session = os.name == 'posix'
     process = subprocess.Popen(command, cwd=root, env=env, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, text=True,
+                               stderr=subprocess.PIPE, text=True, encoding='utf-8',
                                start_new_session=new_session)
     known_child = process
     child_pid = process.pid

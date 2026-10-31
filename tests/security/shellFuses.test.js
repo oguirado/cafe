@@ -8,7 +8,7 @@ const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const { applyShellFuses } = require('../../tools/apply_shell_fuses');
-const { REQUIRED } = require('../../tools/check_shell_fuses');
+const { REQUIRED, inspectAsar } = require('../../tools/check_shell_fuses');
 const ROOT = path.resolve(__dirname, '../..');
 // Measured from the official Electron44.9.2 release SHASUMS256 document.
 const ELECTRON_ARCHIVE_SHA256 = '1a9ed7f4e70291c95ed9479d7fcd384a2d9cf062e5fb7ce846b119c7c63036c3';
@@ -82,4 +82,14 @@ test('same valid package UNFUSED fails specifically on real fuse policy', () => 
   assert.equal(result.data.code,'FUSE_POLICY_REJECTED');assert.equal(result.data.structure,'pass');
   assert.equal(result.data.embedded_asar_integrity,'verified');assert.equal(result.data.archive_executable_extracted,true);
   assert.ok(result.data.checks.some((check)=>check.pass===false));
+});
+
+test('native ASAR coordinates never excuse a missing packed backend module', async () => {
+  const source=path.join(work,'missing-source');
+  fs.cpSync(path.join(work,'source'),source,{recursive:true,errorOnExist:true});
+  fs.rmSync(path.join(source,'src/main/backendSupervisor.js'));
+  const target=path.join(work,'missing-main.asar');
+  const asar=await import('@electron/asar');
+  await asar.createPackage(source,target);
+  await assert.rejects(inspectAsar(target),/was not found in this archive/);
 });

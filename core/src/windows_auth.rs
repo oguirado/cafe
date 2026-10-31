@@ -1,12 +1,13 @@
 //! Private Windows rendezvous: protected owner-only DACL and local-only named pipe.
 use std::path::Path;
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::io::FromRawHandle;
 use windows::core::{PCWSTR,PWSTR};
-use windows::Win32::Foundation::{CloseHandle,HANDLE,HLOCAL,LocalFree};
+use windows::Win32::Foundation::{CloseHandle,HANDLE,HLOCAL,LocalFree,GENERIC_WRITE};
 use windows::Win32::Security::{GetTokenInformation,TokenUser,TOKEN_QUERY,TOKEN_USER,SECURITY_ATTRIBUTES,PSECURITY_DESCRIPTOR};
 use windows::Win32::Security::Authorization::{ConvertSidToStringSidW,ConvertStringSecurityDescriptorToSecurityDescriptorW};
 use windows::Win32::System::Threading::{GetCurrentProcess,OpenProcessToken};
-use windows::Win32::Storage::FileSystem::CreateDirectoryW;
+use windows::Win32::Storage::FileSystem::{CreateDirectoryW,CreateFileW,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,FILE_SHARE_READ};
 use tokio::net::windows::named_pipe::{NamedPipeServer,ServerOptions};
 
 struct Allocation(*mut core::ffi::c_void);
@@ -50,7 +51,13 @@ pub(crate) fn rendezvous(dir:&Path,nonce:&str)->Result<NamedPipeServer,String>{
             .create_with_security_attributes_raw(&address,(&mut attrs as *mut SECURITY_ATTRIBUTES).cast())}
             .map_err(|_|"rendezvous_bind_failed")?;
         let metadata=serde_json::json!({"schema":"cafe.rendezvous.endpoint.v1","pipe_name":name,"authority_pid":std::process::id()});
-        let mut file=std::fs::OpenOptions::new().write(true).create_new(true).open(dir.join("broker.pipe")).map_err(|_|"rendezvous_create_failed")?;
+        // Inherited DACLs do not carry a protected flag or an explicit file owner.
+        // Create metadata with the same owner-only descriptor as the directory,
+        // including under an elevated token whose default owner is Administrators.
+        let metadata_path:Vec<u16>=dir.join("broker.pipe").as_os_str().encode_wide().chain(Some(0)).collect();
+        let handle=unsafe{CreateFileW(PCWSTR(metadata_path.as_ptr()),GENERIC_WRITE.0,FILE_SHARE_READ,Some(&attrs),CREATE_NEW,FILE_ATTRIBUTE_NORMAL,None)}.map_err(|_|"rendezvous_create_failed")?;
+        // SAFETY: successful CREATE_NEW returns one owned handle, transferred once.
+        let mut file=unsafe{std::fs::File::from_raw_handle(handle.0)};
         use std::io::Write;
         file.write_all(serde_json::to_string(&metadata).map_err(|_|"rendezvous_encode_failed")?.as_bytes()).map_err(|_|"rendezvous_write_failed")?;
         Ok(pipe)

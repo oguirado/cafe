@@ -379,7 +379,7 @@ def g_blind(dev_path, params_path=None, tune=None):
         shutil.rmtree(d, ignore_errors=True)
     if any(x.get("split") == "TEST" for x in read_dev(dev_path)):
         errs.append("DEV file contains TEST rows")
-    if "/bench/" in os.path.abspath(dev_path):
+    if R.is_bench_path(dev_path):
         errs.append("DEV file under /bench/")
     skipped = []
     if params_path and os.path.isfile(params_path):

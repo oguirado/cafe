@@ -112,7 +112,7 @@ def main(argv=None):
         a = ap.parse_args(argv)
     except SystemExit:
         return 2
-    if "/bench/" in os.path.abspath(a.bench):
+    if R.is_bench_path(a.bench):
         print("E_BLIND: /bench/ path", file=sys.stderr)
         return 4
     rows = E.read_bench(a.bench)

@@ -4,6 +4,7 @@ from pathlib import Path, PureWindowsPath
 import shutil
 import subprocess
 import sys
+import tempfile
 
 
 def select_bash(*, windows=None, which=None, exists=None, environ=None):
@@ -41,7 +42,16 @@ def posix_argument(value):
     return '/' + path.drive[0].lower() + '/' + '/'.join(path.parts[1:])
 
 
-def run_bash(arguments, **kwargs):
+PYTHON_ALIAS = b'#!/bin/sh\nexec "$CAFE_PYTHON" "$@"\n'
+
+
+def run_bash(arguments, *, python3_alias=False, **kwargs):
+    """Run arguments under the selected Bash.
+
+    With python3_alias, bare `python3`/`python` inside the child resolve to the
+    current interpreter (CAFE_PYTHON) through a per-call directory prepended to
+    the child PATH only; no global PATH, git config or interpreter is changed.
+    """
     windows = sys.platform == 'win32'
     selected = select_bash(windows=windows)
     env = dict(kwargs.pop('env', os.environ))
@@ -49,4 +59,13 @@ def run_bash(arguments, **kwargs):
     env.pop('ENV', None)
     env['CAFE_PYTHON'] = posix_argument(sys.executable) if windows else sys.executable
     arguments = [posix_argument(arg) if windows else str(arg) for arg in arguments]
-    return subprocess.run([selected, *arguments], env=env, **kwargs)
+    if not python3_alias:
+        return subprocess.run([selected, *arguments], env=env, **kwargs)
+    with tempfile.TemporaryDirectory(prefix='cafe-python-alias-') as alias:
+        for name in ('python3', 'python'):
+            shim = Path(alias) / name
+            shim.write_bytes(PYTHON_ALIAS)
+            shim.chmod(0o755)
+        key = next((k for k in env if k.upper() == 'PATH'), 'PATH')
+        env[key] = alias + os.pathsep + env[key] if env.get(key) else alias
+        return subprocess.run([selected, *arguments], env=env, **kwargs)

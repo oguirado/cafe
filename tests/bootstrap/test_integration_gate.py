@@ -207,5 +207,26 @@ class TestIntegrationGate(unittest.TestCase):
         self.assertFalse(any(hasattr(isolated, key) for key in ('killpg', 'getpgid', 'getsid')))
 
 
+    def test_owned_child_utf8_is_independent_of_platform_text_default(self):
+        # Real child emits Node's UTF-8 summary bytes; emulate a Windows ANSI default.
+        text = '\u2139 tests 1\n\u2139 pass 1\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n'
+        original = gate.subprocess.Popen
+        observed = []
+        def platform_default(*args, **kwargs):
+            observed.append(kwargs.get('encoding'))
+            kwargs.setdefault('encoding', 'cp1252')
+            return original(*args, **kwargs)
+        program = 'import os; os.write(1, ' + repr(text.encode('utf-8')) + ')'
+        with mock.patch.object(gate.subprocess, 'Popen', side_effect=platform_default):
+            result = gate.run_owned([sys.executable, '-B', '-c', program], ROOT, dict(os.environ), 10)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(observed, ['utf-8'])
+        self.assertEqual(result.stdout, text)
+        self.assertEqual(result.stderr, '')
+        sys.path.insert(0, str(ROOT / 'tools'))
+        import run_ci
+        self.assertEqual(run_ci.node_test_evidence(result.stdout)['pass'], 1)
+
+
 if __name__ == '__main__':
     unittest.main()

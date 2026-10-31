@@ -103,6 +103,10 @@ def cargo_targets(root,args,names):
 
 
 def resolve_claim(root,origin,value,names):
+ # Containment is judged against the canonical root, as in command_source:
+ # an alias spelling (symlink, Windows 8.3 short name) must not make an
+ # in-tree claim look escaping, nor an escaping claim look in-tree.
+ root=Path(root).resolve()
  value=value.split('#',1)[0]
  if not value:return
  if '://' in value or value.startswith(('mailto:','@')):return

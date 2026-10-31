@@ -99,7 +99,7 @@ def preflight(source, commit, python, archive, *, runner=subprocess.run, which=s
     if archive.stat().st_size != PYTHON_BYTES or digest(archive) != PYTHON_SHA:
         raise Blocked('APPROVED_PYTHON_ARCHIVE_REQUIRED', 'Get-FileHash -Algorithm SHA256 $PythonArchive')
     python = local_path(python)
-    if run([str(python), '-I', '-c', 'import sys;print(".".join(map(str,sys.version_info[:3])))']).strip() != '3.13.16':
+    if run([str(python), '-I', '-B', '-c', 'import sys;print(".".join(map(str,sys.version_info[:3])))']).strip() != '3.13.16':
         raise Blocked('APPROVED_PYTHON_REQUIRED', '$PythonExe -I --version')
     for name in ('tools/build_windows_app.js', 'tools/package_windows.py', 'tools/check_shell_archive.py', 'package-lock.json', 'Cargo.lock'):
         local_path(source / name)

@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -69,6 +70,38 @@ class TestWindowsBuildRC(unittest.TestCase):
         self.assertEqual(error.exception.code,'TOOLCHAIN_MISSING')
         self.assertEqual(error.exception.command,'Get-Command git -ErrorAction Stop')
         self.assertEqual(calls,[])
+
+    def test_private_runtime_probe_cannot_write_bytecode(self):
+        class ProbeReached(RuntimeError):
+            pass
+        with tempfile.TemporaryDirectory() as temp:
+            source=Path(temp).resolve()
+            archive=source/'private-runtime.tar.gz';archive.write_bytes(b'fixture')
+            executable=str(Path(sys.executable).resolve())
+            expected={
+                ('git','rev-parse','--show-toplevel'):str(source),
+                ('git','rev-parse','HEAD'):'a'*40,
+                ('git','status','--porcelain','--untracked-files=normal'):'',
+                ('rustup','run','1.97.0','rustc','--version'):'rustc 1.97.0 fixture',
+                ('rustup','run','1.97.0','cargo','--version'):'cargo 1.97.0 fixture',
+                ('rustup','target','list','--installed','--toolchain','1.97.0'):B.TARGET,
+                ('node','--version'):'v24.14.0',
+                ('link.exe','/?'):'Microsoft Linker',
+            }
+            def runner(argv,**kwargs):
+                if argv[0]==executable:
+                    # Exercise the real interpreter with the actual flags chosen by preflight.
+                    actual=subprocess.run(argv[:-1]+['import sys;print(int(sys.dont_write_bytecode))'],
+                        capture_output=True,text=True,timeout=30)
+                    self.assertEqual(actual.returncode,0,actual.stderr)
+                    self.assertEqual(actual.stdout.strip(),'1')
+                    raise ProbeReached()
+                self.assertIn(tuple(argv),expected)
+                return subprocess.CompletedProcess(argv,0,expected[tuple(argv)],'')
+            with patch.object(B,'PYTHON_BYTES',7),patch.object(B,'PYTHON_SHA',hashlib.sha256(b'fixture').hexdigest()):
+                with self.assertRaises(ProbeReached):
+                    B.preflight(source,'a'*40,executable,archive,runner=runner,
+                        which=lambda name:str(source/name),platform='win32')
 
     def test_preflight_cli_missing_prerequisite_is_nonzero_blocked(self):
         with tempfile.TemporaryDirectory() as tmp:

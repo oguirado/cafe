@@ -186,6 +186,42 @@ class TestStrictCommandClaims(unittest.TestCase):
   self.names.add('cli.py')
   claims.command_claim(self.root,'python3 cli.py --alpha value --beta value',self.names)
   self.reject('python3 cli.py --invented-flag')
+ def alias_root(self):
+  # A second spelling of the fixture root: a symlink on POSIX; on unprivileged
+  # Windows the raw temp spelling (an 8.3 short name on hosted runners).
+  holder=tempfile.TemporaryDirectory();self.addCleanup(holder.cleanup);self.holder=Path(holder.name).resolve()
+  alias=self.holder/'alias-root'
+  try:alias.symlink_to(self.root.resolve(),target_is_directory=True)
+  except OSError:alias=Path(self.temp.name)
+  return alias
+ def reject_exact(self,root,command,signal):
+  with self.assertRaises(ValueError,msg=command) as caught:claims.command_claim(root,command,self.names)
+  self.assertEqual(str(caught.exception),signal,command)
+ def test_alias_root_resolves_listed_entrypoint_flags(self):
+  (self.root/'cli.py').write_text("for name in ('alpha', 'beta'):\n p.add_argument('--'+name)\n")
+  self.names.add('cli.py');alias=self.alias_root()
+  claims.command_claim(alias,'python3 cli.py --alpha value --beta value',self.names)
+  claims.command_claim(alias,'python3 -B cli.py --alpha value',self.names)
+ def test_alias_root_keeps_every_rejection_signal(self):
+  (self.root/'cli.py').write_text("for name in ('alpha', 'beta'):\n p.add_argument('--'+name)\n")
+  (self.root/'unlisted.py').write_text("p.add_argument('--alpha')\n")
+  self.names.add('cli.py');alias=self.alias_root()
+  (self.holder/'escape.py').write_text("p.add_argument('--alpha')\n")
+  cases=[('python3 cli.py --invented-flag','unknown_document_flag'),
+   ('python3 cli.py --alpha value --gamma value','unknown_document_flag'),
+   ('python3 unlisted.py --alpha value','missing_document_path'),
+   ('python3 missing.py --alpha value','missing_document_path'),
+   ('python3 ../escape.py --alpha value','missing_document_path'),
+   ('python3 '+json.dumps(str(self.holder/'escape.py'))+' --alpha value','unsafe_document_path'),
+   ('python3 --alpha value','document_python_entrypoint_absent')]
+  try:
+   # In-root link whose target escapes: canonicalization must not admit it.
+   (self.root/'outside.py').symlink_to(self.holder/'escape.py');self.names.add('outside.py')
+   cases.append(('python3 outside.py --alpha value','missing_document_path'))
+  except OSError:pass
+  for root in (self.root,alias):
+   for command,signal in cases:
+    with self.subTest(root=str(root),command=command):self.reject_exact(root,command,signal)
 
 
 class TestClaimDiscoveryRepair(unittest.TestCase):

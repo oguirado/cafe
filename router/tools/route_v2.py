@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic integer router v2 (V2-02..V2-08, V2-11, V2-12; precedence table of section 3)."""
-import argparse, bisect, hashlib, json, os, re, sys, unicodedata
+import argparse, bisect, hashlib, io, json, ntpath, os, re, sys, time, unicodedata
+from contextlib import contextmanager
 
 VERSION = "route_v2.py/2.0.1"
 K = 1200000
@@ -506,6 +507,70 @@ def load_params(path):
     return keep, sha16(raw)
 
 
+def is_bench_path(path):
+    """Refuse bench components in supplied and resolved native/Windows forms."""
+    forms = (os.fspath(path), os.path.realpath(path))
+    return any("bench" in form.replace("\\", "/").casefold().split("/")
+               for form in forms)
+
+
+def parse_mount(spec, default_priority):
+    name, rest = spec.split("=", 1)
+    drive, tail = ntpath.splitdrive(rest)
+    path, sep, priority = tail.partition(":")
+    if not name or not path:
+        raise ValueError("empty mount")
+    return {"corpus": name, "path": drive + path,
+            "priority": int(priority) if sep else default_priority}
+
+
+@contextmanager
+def windows_log_lock(path, timeout=10.0):
+    """Lock a stable, separate inode; never unlink it while writers may exist."""
+    import errno
+    import msvcrt
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_BINARY, 0o644)
+    locked = False
+    deadline = time.monotonic() + timeout
+    try:
+        while not locked:
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                locked = True
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                    raise
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("router log lock timeout") from exc
+                time.sleep(0.01)
+        yield
+    finally:
+        try:
+            if locked:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        finally:
+            os.close(fd)
+
+
+def append_log_record(path, record):
+    def append():
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT |
+                     getattr(os, "O_BINARY", 0), 0o644)
+        try:
+            # Keep the Unix single O_APPEND write; a short write is never success.
+            if os.write(fd, record) != len(record):
+                raise OSError("incomplete router log record")
+        finally:
+            os.close(fd)
+    if os.name == "nt":
+        with windows_log_lock(path + ".lock"):
+            append()
+    else:
+        append()
+
+
 def write_log(logdir, agent, q, ans, R):
     os.makedirs(logdir, exist_ok=True)
     line = {"q_sha": sha16(q.encode("utf-8")), "terms": R["terms"][:40], "intent": ans["intent"], "ix": ans["ix"], "pr": ans["pr"],
@@ -514,11 +579,16 @@ def write_log(logdir, agent, q, ans, R):
     if len(b) > 4096:
         line["terms"] = []
         b = (dumps(line) + "\n").encode("utf-8")
-    fd = os.open(os.path.join(logdir, "w_%s.jsonl" % re.sub(r"[^A-Za-z0-9_-]", "_", agent)), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
-    try:
-        os.write(fd, b)
-    finally:
-        os.close(fd)
+    path = os.path.join(logdir, "w_%s.jsonl" % re.sub(r"[^A-Za-z0-9_-]", "_", agent))
+    append_log_record(path, b)
+
+
+def write_stdout_json(value):
+    # External text pipes are canonical UTF-8/LF; in-memory StringIO capture
+    # remains supported for the existing in-process logging oracle.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding="utf-8", newline="\n")
+    sys.stdout.write(dumps(value) + "\n")
 
 
 def main(argv=None):
@@ -556,16 +626,14 @@ def main(argv=None):
         mounts = [{"corpus": "math", "path": a.index, "priority": 0}]
         try:
             for c in a.corpus:
-                name, rest = c.split("=", 1)
-                path, _, pri = rest.partition(":")
-                mounts.append({"corpus": name, "path": path, "priority": int(pri or len(mounts))})
+                mounts.append(parse_mount(c, len(mounts)))
             for m in mounts[1:]:
                 Index(m["path"])
         except (ValueError, IndexError_):
             print("bad --corpus mount", file=sys.stderr)
             return 3
         try:
-            sys.stdout.write(dumps(route_multi(mounts, a.q, params, pr, a.intent, a.k, a.budget, a.no_abstain)) + "\n")
+            write_stdout_json(route_multi(mounts, a.q, params, pr, a.intent, a.k, a.budget, a.no_abstain))
         except BudgetError:
             print("E_BUDGET", file=sys.stderr)
             return 6
@@ -579,7 +647,7 @@ def main(argv=None):
         return 6
     if a.log:
         write_log(a.log, a.agent, a.q, ans, R)
-    sys.stdout.write(dumps(ans) + "\n")
+    write_stdout_json(ans)
     return 0
 
 

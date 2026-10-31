@@ -17,6 +17,8 @@ ROOT=Path(__file__).resolve().parents[2];sys.path.insert(0,str(ROOT/'tools'))
 import ci_support as ci
 import clean_export_test as export
 import install_pre_push as installer
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+from host_shell import run_bash
 
 
 class TestCleanExport(unittest.TestCase):
@@ -52,11 +54,29 @@ class TestCleanExport(unittest.TestCase):
  def test_hook_rejects_real_credential_before_missing_clone_receipt(self):
   token='gh'+'p_'+secrets.token_hex(18);(self.root/'README.md').write_text('Synthetic security contrast: '+token+'\n')
   env=ci.source_environment(self.root,self.names)
-  result=subprocess.run(['sh','tools/hooks/pre-push'],cwd=self.root,env=env,capture_output=True,text=True,timeout=30)
+  # Actual product hook under the owned host Bash (Git Bash on Windows, never System32/WSL); bare python3 -> current venv.
+  result=run_bash(['tools/hooks/pre-push'],python3_alias=True,cwd=self.root,env=env,capture_output=True,text=True,timeout=30)
+  self.assert_credential_rejection(result,token)
+ def assert_credential_rejection(self,result,token):
   self.assertNotEqual(result.returncode,0)
+  self.assertTrue(result.stdout.strip(),'hook produced no JSON: rc=%s stderr=%r'%(result.returncode,result.stderr[-400:]))
   data=json.loads(result.stdout);self.assertEqual(data['status'],'fail')
   self.assertIn('credential',{row['rule'] for row in data['findings']})
   self.assertNotIn('clean-clone',result.stdout);self.assertNotIn(token,result.stdout+result.stderr)
+ def test_hook_contrast_wrong_interpreter_or_empty_output_fails(self):
+  token='gh'+'p_'+secrets.token_hex(18);(self.root/'README.md').write_text('Synthetic security contrast: '+token+'\n')
+  for output in ['','not json']:
+   with self.subTest(output=output),self.assertRaises((self.failureException,ValueError)):self.assert_credential_rejection(subprocess.CompletedProcess([],1,output,''),token)
+  # Same actual hook, but python3 unresolvable: must not count as a credential rejection.
+  empty=Path(self.temp.name)/'empty-path';empty.mkdir()
+  env=dict(ci.source_environment(self.root,self.names),PATH=str(empty))
+  result=run_bash(['tools/hooks/pre-push'],cwd=self.root,env=env,capture_output=True,text=True,timeout=30)
+  with self.assertRaises((self.failureException,ValueError)):self.assert_credential_rejection(result,token)
+  # Receipt-ordering contrast: without a credential the hook passes the lint and stops at the clean-clone receipt.
+  (self.root/'README.md').write_bytes((ROOT/'README.md').read_bytes())
+  clean=run_bash(['tools/hooks/pre-push'],python3_alias=True,cwd=self.root,env=ci.source_environment(self.root,self.names),capture_output=True,text=True,timeout=30)
+  self.assertNotEqual(clean.returncode,0)
+  self.assertIn('clean-clone',clean.stdout)
 
 
  def test_git_inventory_cache_is_ignored_directory_and_inventory_stays_exact(self):

@@ -22,7 +22,7 @@ class LinkQueueTests(unittest.TestCase):
         self.repo = self.root / 'repo'; self.repo.mkdir()
         self.camp = self.root / 'campaign'; self.camp.mkdir()
         (self.camp / 'PARADA.txt').write_text('LIBRE\n')
-        subprocess.run(['git', 'init', '-q', str(self.repo)], check=True)
+        self.init_fixture_repo(self.repo)
         self.file = self.repo / 'sample.txt'; self.file.write_bytes(b'before\n')
         subprocess.run(['git', '-C', str(self.repo), 'add', 'sample.txt'], check=True)
         self.unrelated = self.repo / 'operator.txt'; self.unrelated.write_bytes(b'operator work\n')
@@ -30,6 +30,15 @@ class LinkQueueTests(unittest.TestCase):
         self.patch.write_bytes(b'diff --git a/sample.txt b/sample.txt\n--- a/sample.txt\n+++ b/sample.txt\n@@ -1 +1 @@\n-before\n+after\n')
         self.proof = self.root / 'proof.json'
         self.proof.write_text(json.dumps({'verdict': 'PASS', 'patch_sha256': hashlib.sha256(self.patch.read_bytes()).hexdigest(), 'preimages': {'sample.txt': {'sha256': hashlib.sha256(b'before\n').hexdigest(), 'mode': stat.S_IMODE(self.file.stat().st_mode)}}}))
+
+    @staticmethod
+    def init_fixture_repo(repo):
+        # Byte oracles are LF; pin end-of-line handling in the fixture repo's
+        # own config so a runner-wide core.autocrlf=true (Git for Windows
+        # default) cannot rewrite `git apply` output as CRLF.
+        subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+        subprocess.run(['git', '-C', str(repo), 'config', '--local', 'core.autocrlf', 'false'], check=True)
+        subprocess.run(['git', '-C', str(repo), 'config', '--local', 'core.eol', 'lf'], check=True)
 
     def enqueue(self, unit='alpha'):
         return queue.append(self.repo, self.camp, unit, 'recorder', self.patch, self.proof, 'Implement bounded recorder')
@@ -42,6 +51,36 @@ class LinkQueueTests(unittest.TestCase):
         self.assertEqual(self.file.read_bytes(), b'after\n')
         self.assertEqual(queue.git(self.repo, 'diff', '--cached'), index)
         self.assertEqual(self.unrelated.read_bytes(), b'operator work\n')
+
+    def test_crlf_true_runner_config_still_yields_lf_bytes(self):
+        # Reproduce a runner whose global config sets core.autocrlf=true; the
+        # fixture repo must still produce the exact LF bytes the oracles expect.
+        from unittest import mock
+        home = self.root / 'hostile-home'; home.mkdir()
+        config = home / '.gitconfig'; config.write_bytes(b'[core]\n\tautocrlf = true\n')
+        with mock.patch.dict(os.environ, {'HOME': str(home), 'GIT_CONFIG_GLOBAL': str(config)}):
+            # Non-vacuity: the hostile setting is visible to git in this process tree.
+            visible = subprocess.run(['git', 'config', '--global', '--get', 'core.autocrlf'], check=True, capture_output=True).stdout
+            self.assertEqual(visible.strip(), b'true')
+            repo = self.root / 'hostile-repo'; repo.mkdir()
+            self.init_fixture_repo(repo)
+            self.assertEqual(queue.git(repo, 'config', '--get', 'core.autocrlf').strip(), b'false')
+            target = repo / 'sample.txt'; target.write_bytes(b'before\n')
+            queue.git(repo, 'add', 'sample.txt')
+            camp = self.root / 'hostile-campaign'; camp.mkdir(); (camp / 'PARADA.txt').write_text('LIBRE\n')
+            proof = self.root / 'hostile-proof.json'
+            proof.write_text(json.dumps({'verdict': 'PASS', 'patch_sha256': hashlib.sha256(self.patch.read_bytes()).hexdigest(), 'preimages': {'sample.txt': queue.snapshot(target)}}))
+            queue.append(repo, camp, 'alpha', 'recorder', self.patch, proof, 'Implement bounded recorder')
+            row = queue.apply_next(repo, camp, lambda *_: 0)
+        self.assertEqual(row['status'], 'linked')
+        self.assertEqual(target.read_bytes(), b'after\n')
+
+    def test_patch_preimage_rejects_crlf_drift(self):
+        # The reviewed LF preimage digest must not accept CRLF working-tree bytes.
+        self.file.write_bytes(b'before\r\n')
+        with self.assertRaisesRegex(ValueError, 'preimages'): self.enqueue()
+        self.assertFalse((self.camp / 'LINK_QUEUE.json').exists())
+        self.assertEqual(self.file.read_bytes(), b'before\r\n')
 
     def test_red_restores_only_owned_preimages(self):
         self.enqueue()

@@ -53,7 +53,7 @@ async function inspectAsar(archive) {
   const required = ['package.json', 'src/main/index.js', 'src/main/shellSecurity.js',
     'src/main/backendSupervisor.js', 'dist/preload/index.cjs'];
   for (const name of required) {
-    const row = asar.statFile(target, name, false);
+    const row = asar.statFile(target, path.join(...name.split('/')), false);
     if ('link' in row || 'files' in row || row.unpacked === true || !('size' in row) || row.size > 1024 * 1024) throw new Error('ASAR_CONFIG_REJECTED');
   }
   const manifest = JSON.parse(asar.extractFile(target, 'package.json', false).toString('utf8'));

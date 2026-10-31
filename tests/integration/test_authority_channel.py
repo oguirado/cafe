@@ -187,6 +187,22 @@ class TestAuthorityChannel(unittest.TestCase):
         ticket = asyncio.run(auth.receive_ticket(self.root / 'rendezvous-1'))
         return ticket
 
+    def test_rendezvous_platform_permissions_are_explicit_before_ticket(self):
+        self.a.broker_start()
+        directory = self.root / 'rendezvous-1'
+        if os.name == 'nt':
+            from cafe.windows_auth import _api, _owner, _check_acl
+            kernel, security = _api()
+            storage, sid = _owner(kernel, security)
+            _check_acl(directory, True, kernel, security, sid)
+            _check_acl(directory / 'broker.pipe', False, kernel, security, sid)
+            self.assertGreater(len(storage), 0)
+        elif os.name == 'posix':
+            self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE((directory / 'broker.sock').stat().st_mode), 0o600)
+        else:
+            self.fail('unsupported private transport platform')
+
     def test_real_child_and_independent_broker_positive(self):
         initial = self.a.ready['connector']
         self.assertTrue(initial['available'])

@@ -126,6 +126,45 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual((self.base / 'actions').read_text().splitlines(),
                          ['reserve', 'release', 'reserve', 'release'])
 
+    def test_wrapper_hands_gate_selected_bash_and_propagates_rc(self):
+        import os
+        from pathlib import PurePosixPath, PureWindowsPath
+        import shutil
+        wrapper_root = self.base / 'wrapper'
+        (wrapper_root / 'ctl').mkdir(parents=True)
+        shutil.copy(ROOT / 'ctl/muse_lane.sh', wrapper_root / 'ctl/muse_lane.sh')
+        # The fixture gate records the exact command it is asked to run.
+        (wrapper_root / 'ctl/run_capped.py').write_text("import json,os,sys,subprocess\nfrom pathlib import Path\nc=Path(os.environ['CAMP'])\nif '--verify-active' in sys.argv: raise SystemExit(0)\ncmd=sys.argv[sys.argv.index('--')+1:]\nwith (c/'argv.jsonl').open('a') as f:f.write(json.dumps(cmd)+'\\n')\nwith (c/'actions').open('a') as f:f.write('reserve\\n')\ntry: rc=subprocess.run(cmd,env=dict(os.environ,CAFE_CAPPED_ACTIVE='fixture')).returncode\nfinally:\n with (c/'actions').open('a') as f:f.write('release\\n')\nraise SystemExit(rc)\n")
+        brief = self.base / 'brief.md'; brief.write_text('A fixed harmless brief.')
+        env = dict(os.environ, CAMP=str(self.base)); env.pop('CAFE_CAPPED_ACTIVE', None)
+        script = wrapper_root / 'ctl/muse_lane.sh'
+        for launch_rc in (19, 42, 7):
+            (self.base / 'launch_muse.sh').write_text("printf 'launched\\n' >> \"$CAMP/launched\"\nexit %d\n" % launch_rc, newline='\n')
+            for dry, expected in (('0', launch_rc), ('1', 0)):
+                with self.subTest(launch_rc=launch_rc, dry=dry):
+                    result = run_bash([str(script), 'cf_probe', str(brief)],
+                                      env=dict(env, CAFE_DRY_RUN=dry), capture_output=True)
+                    self.assertEqual(result.returncode, expected, result.stderr)
+                    if dry == '1':
+                        self.assertIn(b'admitted dry-run; no worker started', result.stdout)
+        self.assertEqual((self.base / 'actions').read_text().splitlines(), ['reserve', 'release'] * 6)
+        # Dry runs never start the launcher; real runs start it exactly once each.
+        self.assertEqual((self.base / 'launched').read_text().splitlines(), ['launched'] * 3)
+        commands = [json.loads(line) for line in (self.base / 'argv.jsonl').read_text().splitlines()]
+        self.assertEqual(len(commands), 6)
+        for command in commands:
+            interpreter = command[0]
+            # Never a bare name a native gate would resolve through the system
+            # directory; never the Windows system (WSL) launcher.
+            self.assertNotEqual(interpreter, 'bash')
+            self.assertTrue(PurePosixPath(interpreter).is_absolute() or PureWindowsPath(interpreter).is_absolute(), interpreter)
+            self.assertNotIn('system32', [part.casefold() for part in PureWindowsPath(interpreter).parts])
+            self.assertTrue(Path(interpreter).is_file() or Path(interpreter + '.exe').is_file(), interpreter)
+            self.assertEqual(Path(command[1]).name, 'muse_lane.sh')
+            self.assertEqual(command[2], 'cf_probe')
+            self.assertEqual(Path(command[3]).resolve(), brief.resolve())
+            self.assertEqual(len(command), 4)
+
     def test_wrapper_syntax_and_volatile_refusal(self):
         script = ROOT / 'ctl/muse_lane.sh'
         result = run_bash(['-n', str(script)], capture_output=True)

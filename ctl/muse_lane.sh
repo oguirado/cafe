@@ -16,7 +16,10 @@ if re.search(r'(?i)\bpid\s+[0-9]+\b|\b[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[T ][0-9]{2}:
 PY
 if [[ -z "${CAFE_CAPPED_ACTIVE:-}" ]]; then
     role=(); [[ "${CAFE_LANE_ROLE:-context}" != writer ]] || role=(--writer)
-    exec "${CAFE_PYTHON:-python3}" -B "$root/ctl/run_capped.py" --kind muse "${role[@]}" -- bash "$0" "$@"
+    # Hand the gate the interpreter running this script, never a bare name:
+    # a native Windows gate would resolve bare `bash` through the system
+    # directory (the WSL launcher) before the selected Git Bash.
+    exec "${CAFE_PYTHON:-python3}" -B "$root/ctl/run_capped.py" --kind muse "${role[@]}" -- "$BASH" "$0" "$@"
 fi
 "${CAFE_PYTHON:-python3}" -B "$root/ctl/run_capped.py" --verify-active "$CAFE_CAPPED_ACTIVE"
 
@@ -31,7 +34,7 @@ else
         exit 143
     }
     trap finish_owned INT TERM
-    bash "$CAMP/launch_muse.sh" "$job" "$brief" "$wall" &
+    "$BASH" "$CAMP/launch_muse.sh" "$job" "$brief" "$wall" &
     child_pid=$!
     wait "$child_pid"
 fi
