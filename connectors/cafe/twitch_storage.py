@@ -200,12 +200,39 @@ def _open_file(path, flags):
         raise
 
 
+def _canonical_root(value):
+    try:
+        supplied = Path(value)
+        if '..' in supplied.parts:
+            raise ChatError('unsafe_path')
+        raw = supplied.absolute()
+        components = tuple(reversed(raw.parents)) + (raw,)
+        identities = []
+        for component in components:
+            info = component.lstat()
+            _safe_stat(info, directory=True)
+            identities.append((info.st_dev, info.st_ino))
+        canonical = raw.resolve(strict=True)
+        for component, identity in zip(components, identities):
+            info = component.lstat()
+            _safe_stat(info, directory=True)
+            if (info.st_dev, info.st_ino) != identity:
+                raise ChatError('unsafe_path')
+        info = canonical.lstat()
+        _safe_stat(info, directory=True)
+        if (info.st_dev, info.st_ino) != identities[-1]:
+            raise ChatError('unsafe_path')
+        _directory(canonical)
+        return canonical
+    except (OSError, ValueError, TypeError):
+        raise ChatError('unsafe_path') from None
+
+
 class JsonlWriter:
     def __init__(self, root, channel, *, sync_events=20, sync_seconds=2.0, clock=time.monotonic):
         if type(sync_events) is not int or not 1 <= sync_events <= 1000 or not isinstance(sync_seconds, (int, float)) or not 0 < sync_seconds <= 10:
             raise ChatError('invalid_event')
-        self.root = Path(root).absolute()
-        _directory(self.root)
+        self.root = _canonical_root(root)
         self.channel = validate_channel(channel)
         self.folder = self.root / 'twitch' / self.channel
         _directory(self.root / 'twitch', True); _directory(self.folder, True)
