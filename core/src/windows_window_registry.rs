@@ -174,6 +174,51 @@ impl NativeAdapter {
     }
 }
 
+/// Collects per-window observations, dropping windows that are ineligible
+/// (`Ok(None)`) or that fail natively. A single foreign window that vanishes,
+/// denies access or reports a degenerate rect must not hide every other window;
+/// identity checks stay fail-closed per window. Only `IdentityExhausted` is
+/// global and still aborts.
+#[allow(dead_code)]
+fn collect_eligible<T, I, F>(items: I, mut observe: F) -> Result<Vec<T>, WindowError>
+where
+    I: IntoIterator<Item = usize>,
+    F: FnMut(usize) -> Result<Option<T>, WindowError>,
+{
+    let mut out = Vec::new();
+    for item in items {
+        match observe(item) {
+            Ok(Some(value)) => out.push(value),
+            Ok(None) => {}
+            Err(WindowError::IdentityExhausted) => return Err(WindowError::IdentityExhausted),
+            Err(_) => {}
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod collect_eligible_tests {
+    use super::{collect_eligible, WindowError};
+
+    #[test]
+    fn one_failing_window_does_not_hide_the_others() {
+        let got = collect_eligible(0..5usize, |i| match i {
+            1 => Err(WindowError::NativeFailure),
+            3 => Ok(None),
+            _ => Ok(Some(i)),
+        })
+        .unwrap();
+        assert_eq!(got, vec![0, 2, 4]);
+    }
+
+    #[test]
+    fn identity_exhaustion_still_aborts() {
+        let got = collect_eligible(0..3usize, |i| if i == 1 { Err(WindowError::IdentityExhausted) } else { Ok(Some(i)) });
+        assert_eq!(got, Err(WindowError::IdentityExhausted));
+    }
+}
+
 #[cfg(windows)]
 pub struct NativeAdapter {
     store: native_identity::WitnessStore,
@@ -234,10 +279,16 @@ impl NativeAdapter {
         if ctx.overflow {
             return Err(WindowError::NativeFailure);
         }
-        let mut observations = Vec::with_capacity(ctx.hwnds.len());
-        for raw in ctx.hwnds {
+        let store = &mut self.store;
+        let observations = collect_eligible(ctx.hwnds, |raw| {
             let hwnd = HWND(raw as *mut core::ffi::c_void);
-            let (cookie, process_birth, pid, executable) = self.store.observe(hwnd)?;
+            // Hidden helper windows (often zero-sized or owned by other
+            // integrity levels) are never capture candidates; skip them before
+            // touching identity so one of them cannot empty the whole list.
+            if unsafe { !IsWindowVisible(hwnd).as_bool() } {
+                return Ok(None);
+            }
+            let (cookie, process_birth, pid, executable) = store.observe(hwnd)?;
             let title = read_title(hwnd)?;
             let class = read_class(hwnd)?;
             let rect = read_rect(hwnd)?;
@@ -247,11 +298,11 @@ impl NativeAdapter {
                     IsIconic(hwnd).as_bool(),
                 )
             };
-            let again = self.store.observe(hwnd)?;
+            let again = store.observe(hwnd)?;
             if again != (cookie, process_birth, pid, executable.clone()) {
                 return Err(WindowError::NativeFailure);
             }
-            observations.push(Observation {
+            Ok(Some(Observation {
                 key: WindowKey::Native(raw),
                 witness: cookie,
                 process_birth,
@@ -263,8 +314,8 @@ impl NativeAdapter {
                 visible,
                 minimized,
                 layout: String::new(),
-            });
-        }
+            }))
+        })?;
         registry.reconcile(observations)
     }
 }
