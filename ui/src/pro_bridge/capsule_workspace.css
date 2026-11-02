@@ -1,0 +1,68 @@
+/* Uses only the existing parent token adapter; both themes flow through it. */
+.capsule-workspace {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  min-width: 0;
+  color: var(--fg);
+  background: var(--bg);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+}
+.capsule-workspace h2,
+.capsule-workspace h3,
+.capsule-workspace h4,
+.capsule-workspace p { margin: 0; overflow-wrap: anywhere; }
+.capsule-workspace h2 { font-size: var(--text-xl); }
+.capsule-workspace h3 { font-size: var(--text-lg); }
+.capsule-workspace h4 { font-size: var(--text-sm); }
+.capsule-workspace__header,
+.capsule-workspace__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.capsule-workspace__header { justify-content: space-between; }
+.capsule-workspace__card,
+.capsule-workspace__confirmation {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: var(--cafe-structure-semantic-border-width) solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.capsule-workspace__feeds { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.capsule-workspace__feed {
+  display: grid;
+  align-content: start;
+  flex: 1 1 var(--cafe-structure-component-app-shell-palette-width);
+  min-width: 0;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: var(--cafe-structure-semantic-border-width) solid var(--border-soft);
+  border-radius: var(--radius-md);
+}
+.capsule-workspace__notice,
+.capsule-workspace__identity,
+.capsule-workspace__absence { color: var(--muted); }
+.capsule-workspace__identity { font-family: var(--font-mono); font-size: var(--text-xs); }
+.capsule-workspace__absence { padding: var(--space-4) 0; }
+.capsule-workspace button {
+  font: inherit;
+  color: var(--accent-on);
+  background: var(--accent);
+  border: var(--cafe-structure-semantic-border-width) solid var(--accent);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+}
+.capsule-workspace button:hover:enabled { background: var(--accent-hover); border-color: var(--accent-hover); }
+.capsule-workspace button:focus-visible {
+  outline: var(--cafe-structure-semantic-focus-ring-width) solid var(--accent);
+  outline-offset: var(--space-1);
+}
+.capsule-workspace button:disabled {
+  background: var(--surface-warm);
+  border-color: var(--border);
+  color: var(--meta);
+  cursor: not-allowed;
+}
+.capsule-workspace__confirmation { border-color: var(--accent); }

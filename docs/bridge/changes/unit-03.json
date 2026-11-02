@@ -1,0 +1,67 @@
+{
+  "id": "PRO-03",
+  "base_commit": "f1e874050e305645a90e64267e50f8625daae9bc",
+  "patch_sha256": "d091b5f75fd55083b1bacffe241473a7af9352c7ac8aec8001b637090f419e2d",
+  "paths": [
+    "ui/src/pro_bridge/CapsuleWorkspace.vue",
+    "ui/src/pro_bridge/capsule_workspace.js",
+    "ui/src/pro_bridge/capsule_workspace.css",
+    "tests/security/pro_capsule_workspace.test.js"
+  ],
+  "tests_written": {
+    "file": "tests/security/pro_capsule_workspace.test.js",
+    "count": 27,
+    "validator": 4,
+    "component": 23,
+    "coverage": [
+      "closed schemas and uint64 strings",
+      "truthful cards and five exact events",
+      "explicit Confirm and Reject",
+      "pending receipt cycle and double click",
+      "unavailable runtime and missing bindings",
+      "stale render and modal callbacks",
+      "exact identities, generation rollback and tombstones",
+      "in-place binding tamper and unmount"
+    ]
+  },
+  "tests_run": [
+    {
+      "command": "node --test-name-pattern=validator tests/security/pro_capsule_workspace.test.js",
+      "status": "pass",
+      "passed": 4,
+      "failed": 0
+    },
+    {
+      "command": "node tests/security/pro_capsule_workspace.test.js",
+      "status": "blocked",
+      "passed": 4,
+      "failed": 23,
+      "reason": "Cannot find module 'vue/compiler-sfc'",
+      "component_execution": "pending"
+    },
+    {
+      "command": "node --check (authored component script, validator and test)",
+      "status": "pass"
+    },
+    {
+      "command": "git apply --check /tmp/cafe-pro-03.patch; apply and byte-compare all four files",
+      "status": "pass"
+    }
+  ],
+  "scope": "unverified_proposal",
+  "ci": {
+    "status": "pending_transport",
+    "baseline": {
+      "commit": "f1e874050e305645a90e64267e50f8625daae9bc",
+      "run_id": 41369756476,
+      "url": "https://github.com/oguirado/cafe/actions/runs/41369756476",
+      "status": "failure",
+      "job": "verify (windows-latest)",
+      "stage": "Gate router",
+      "case": "router_qualification",
+      "failing_selection": "tests/test_T9_gates.py",
+      "reason": "nonpassing, empty or unverifiable test selection",
+      "pre_existing": true
+    }
+  }
+}
