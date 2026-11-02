@@ -1,0 +1,123 @@
+{
+  "id": "PRO-07",
+  "base_commit": "f1e874050e305645a90e64267e50f8625daae9bc",
+  "patch_sha256": "b7a7c95ad1d5b79a8fcb3d9918354cdf73b4617a6988551b322e983a60aed128",
+  "paths": [
+    "connectors/cafe/mcp_server.py",
+    "tests/integration/test_mcp_server.py",
+    "tests/integration/test_mcp_bridge_dispatch.py"
+  ],
+  "tests_written": [
+    {
+      "path": "tests/integration/test_mcp_server.py",
+      "tests": [
+        "test_initialize_tools_and_ping_are_real_stdio_peer",
+        "test_fifteen_tool_schemas_are_closed_and_readonly",
+        "test_original_descriptors_and_protocol_limits_are_unchanged"
+      ]
+    },
+    {
+      "path": "tests/integration/test_mcp_bridge_dispatch.py",
+      "tests": [
+        "test_constructor_adds_only_optional_readonly_provider",
+        "test_exact_listing_stays_closed_even_with_explicit_control",
+        "test_absent_modules_fail_closed_without_breaking_original_queries",
+        "test_missing_group_does_not_disable_available_groups",
+        "test_runtime_routes_only_to_read_model_and_never_reads_chat_or_controls",
+        "test_no_provider_never_claims_an_empty_runtime_success",
+        "test_chat_readers_use_single_validated_scan_and_preserve_unknown_clocks",
+        "test_statistics_signature_gets_one_materialized_validated_iterable",
+        "test_extra_parameters_and_invalid_page_arguments_fail_before_dispatch",
+        "test_utc_calendar_offset_and_reversed_interval_rejected",
+        "test_unknown_tools_and_extra_rpc_parameters_keep_original_codes",
+        "test_interval_order_uses_exact_nanoseconds_not_strings_or_microseconds",
+        "test_opaque_cursor_and_epoch_errors_are_delegated_without_rebuilding_model",
+        "test_cross_filter_and_invalid_cursor_errors_preserved",
+        "test_malformed_result_is_closed_and_exception_text_is_absent",
+        "test_paginated_output_cannot_exceed_requested_or_default_limit",
+        "test_page_cannot_claim_complete_while_emitting_a_next_cursor",
+        "test_closed_dependency_errors_never_become_empty_success",
+        "test_runtime_projection_rejects_extra_private_fields_and_non_json_values",
+        "test_statistics_rejects_invalid_counts_metadata_and_private_extra_fields",
+        "test_dependency_reported_incomplete_statistics_cannot_claim_completeness",
+        "test_recognized_chat_event_cannot_bypass_canonical_clock_validation",
+        "test_recording_clock_strings_remain_canonical_and_null_is_unknown",
+        "test_corrupt_and_torn_scan_keeps_statistics_but_never_exact_completeness",
+        "test_dependency_cannot_mutate_authoritative_scan_or_hide_corruption",
+        "test_scan_byte_and_file_caps_cannot_be_reported_complete",
+        "test_scan_closes_on_failure_and_does_not_expose_private_exception",
+        "test_oversized_read_result_preserves_cap_and_scan_with_typed_error",
+        "test_duplicate_keys_and_non_json_numbers_are_parse_errors_then_recover",
+        "test_guide_tool_and_resource_roundtrip_have_same_flat_shape",
+        "test_guide_step_errors_and_unknown_resource_keep_flat_closed_shape",
+        "test_guide_paths_do_not_read_chat_open_network_or_invoke_effects",
+        "test_malformed_guide_cannot_close_live_markers_or_emit_private_extra_fields",
+        "test_oversized_guide_keeps_original_transport_cap",
+        "test_lone_surrogate_guide_content_fails_closed_for_tool_and_resource"
+      ]
+    }
+  ],
+  "tests_run": [
+    {
+      "command": "python -B -m unittest discover -s tests/integration -p 'test_mcp_server.py'",
+      "scope": "immutable_base",
+      "tests": 31,
+      "result": "pass"
+    },
+    {
+      "command": "python -B -m unittest discover -s tests/integration -p 'test_mcp_server.py'",
+      "scope": "proposal",
+      "tests": 32,
+      "result": "pass"
+    },
+    {
+      "command": "python -B -m unittest discover -s tests/integration -p 'test_mcp_bridge_dispatch.py' -v",
+      "scope": "proposal_contract_doubles",
+      "tests": 35,
+      "result": "pass"
+    },
+    {
+      "command": "python -B -m unittest discover -s tests/integration -p 'test_mcp_control*.py'",
+      "scope": "immutable_base",
+      "tests": 40,
+      "result": "environment_limited",
+      "failure_entries": 13,
+      "errors": 1,
+      "reason": "Local socket operations are restricted; test_strict_frame_size raises PermissionError: [Errno 1] Operation not permitted."
+    },
+    {
+      "command": "python -B -m unittest discover -s tests/integration -p 'test_mcp_control*.py'",
+      "scope": "proposal",
+      "tests": 40,
+      "result": "integration_blocked",
+      "failure_entries": 15,
+      "errors": 1,
+      "new_failures": [
+        "test_tools_hidden_by_default",
+        "test_tools_listed_with_control_plane"
+      ],
+      "reason": "The same baseline socket restrictions remain. Two additional old listing assertions require six/ten tools and conflict with the required exact fifteen; their file is outside the write set."
+    },
+    {
+      "check": "Original helper source segments compared to immutable base, including DataReader, validators, original descriptors and framing",
+      "result": "pass",
+      "changed_helpers": []
+    }
+  ],
+  "scope": "unverified_proposal",
+  "checks": {
+    "proposal": "not_pushed_at_manifest_creation",
+    "baseline": {
+      "commit": "f1e874050e305645a90e64267e50f8625daae9bc",
+      "run_url": "https://github.com/oguirado/cafe/actions/runs/41372699114",
+      "conclusion": "failure",
+      "ubuntu": "success",
+      "windows": "failure at Gate router (pre-existing)",
+      "secret_scan": "success"
+    },
+    "integration_blockers": [
+      "Two out-of-scope control listing assertions conflict with the frozen fifteen-tool contract.",
+      "Actual dependency integration and live acceptance remain pending."
+    ]
+  }
+}
