@@ -1,0 +1,105 @@
+{
+  "id": "PRO-06",
+  "base_commit": "f1e874050e305645a90e64267e50f8625daae9bc",
+  "patch_sha256": "24ad3e26aaa5e30caedd51d4afbf4394c66c46bd4786ba503e92885afc25714f",
+  "paths": [
+    "ui/src/bridge/control.vue",
+    "ui/src/bridge/control_schema.js",
+    "tests/security/bridge_control_schema.test.js"
+  ],
+  "scope": "unverified_proposal",
+  "tests_written": [
+    "schema: all four operations return a detached closed view and preserve namespaces",
+    "schema: missing, malformed, duplicate-list and nonclosed views fail without partial output",
+    "schema: numeric millisecond deadlines reject unknown, unsafe and expired values",
+    "schema: accessors, hidden keys and throwing or revoked proxies fail with a fixed result",
+    "component: actual SFC has only the closed props and emits and explicit controls",
+    "component: every operation and binding role renders and emits only a proposal identifier",
+    "component: duplicate clicks, reentrant listeners and competing decisions are coalesced",
+    "component: rejection remains explicit and single-use when native availability is lost",
+    "component: deadline is rechecked before a click even without a timer or repaint",
+    "component: invalid current clocks never confirm",
+    "component: an observed expiry stays inhibited after a local clock rollback",
+    "component: unavailable, unknown and lost runtime never appear as empty capsules",
+    "component: unknown, duplicate, missing and oversized pending identity collections fail closed",
+    "component: forged Set size and duplicate-producing iterators cannot invent pending membership",
+    "component: malformed views never display untrusted content or emit a decision",
+    "component: hostile view descriptors produce fixed unavailable text without logging exceptions",
+    "component: already decided identifiers cannot emit again after another modal",
+    "component: replacing modal identity permanently kills obsolete handlers, including A to B to A",
+    "component: same-id content changes kill old closures before the next render",
+    "component: transient reactive changes cannot revive saved handlers before paint",
+    "component: reentrant validation cannot revive a handler invalidated during its own click",
+    "component: pending membership is checked again against in-place removal",
+    "component: stale views and event-carried identities cannot redirect consent",
+    "component: timers, backdrop and Escape never decide; unmounted handlers stay dead",
+    "component: mounting, rendering and clicks never access native, storage, network or capture surfaces"
+  ],
+  "tests_run": [
+    {
+      "command": "node --check tests/security/bridge_control_schema.test.js",
+      "status": "pass"
+    },
+    {
+      "command": "node --check --input-type=module (authored SFC script on stdin)",
+      "status": "pass"
+    },
+    {
+      "command": "node --test --test-isolation=none --test-name-pattern='^schema:' tests/security/bridge_control_schema.test.js",
+      "status": "pass",
+      "tests": 4,
+      "passed": 4,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "command": "node --test --test-isolation=none tests/security/bridge_control_schema.test.js",
+      "status": "blocked",
+      "tests": 25,
+      "passed": 4,
+      "failed": 21,
+      "skipped": 0,
+      "reason": "Cannot find module 'vue'",
+      "component_execution": "not_run",
+      "packages_installed": false
+    },
+    {
+      "command": "git diff --check",
+      "status": "pass"
+    },
+    {
+      "command": "git apply --check, then apply and byte comparison in a clean worktree at the immutable base",
+      "status": "pass",
+      "paths": 3
+    },
+    {
+      "command": "python -B tools/publication_lint.py",
+      "status": "pass",
+      "findings": 0
+    },
+    {
+      "command": "python -B tools/claims_check.py",
+      "status": "pass",
+      "findings": 0
+    }
+  ],
+  "ci": {
+    "status": "not_observed_for_delivery",
+    "baseline": {
+      "commit": "f1e874050e305645a90e64267e50f8625daae9bc",
+      "run_url": "https://github.com/oguirado/cafe/actions/runs/41372699114",
+      "status": "failure",
+      "linux": "success",
+      "secret_scan": "success",
+      "windows": "failure",
+      "failed_step": "Gate router",
+      "failed_selection": "tests/test_T9_gates.py",
+      "preexisting": true
+    }
+  },
+  "limitations": [
+    "The local environment lacks the already-declared Vue dependency.",
+    "An isolated node --test invocation on this host reported a file-level pass without executing named tests; only nonisolated named-test evidence is counted.",
+    "No native approval, execution, recorder, file, OBS, emission or MCP-control acceptance is claimed."
+  ]
+}
