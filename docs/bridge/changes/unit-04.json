@@ -1,7 +1,7 @@
 {
   "id": "PRO-04",
   "base_commit": "f1e874050e305645a90e64267e50f8625daae9bc",
-  "patch_sha256": "ce7e9139d67f0085a0114c679e50eda23722636a976410849b0e178b4a8a5ae9",
+  "patch_sha256": "fa9d6222c7de8561741bcebd85bcd50b3447352d7fbfa07995ac6bcbce687d31",
   "paths": [
     "connectors/cafe/mcp_control_intents.py",
     "tests/integration/test_mcp_control_intents.py"
@@ -80,9 +80,9 @@
       "evidence": "Isolated unchanged base regression; PermissionError: [Errno 1] Operation not permitted on socket.sendall."
     },
     {
-      "command": "git apply --check pro04_complete.diff",
+      "command": "git -C pro04-patch-check apply --check ../pro04_complete.diff",
       "status": "pass",
-      "evidence": "The complete diff applies to an empty verification directory; both paths are new at the immutable base."
+      "evidence": "Complete standard unified diff; both additions apply without requiring Git-specific patch metadata."
     },
     {
       "command": "tools.publication_lint.scan on the four authorized paths with the unchanged base allowlist",
@@ -109,6 +109,78 @@
       "Synthetic owned-window WGC capture"
     ],
     "proposal_test_discovery": "The unchanged base CI uses explicit test selections and does not automatically run test_mcp_control_intents.py; the exact local command is recorded above.",
-    "branch_run": null
+    "branch_run": {
+      "run_id": 41373175016,
+      "head_commit": "ae6d48af55f8b21da552e185e653b95916f4b7de",
+      "status": "completed",
+      "conclusion": "failure",
+      "jobs": [
+        {
+          "id": 125047778554,
+          "name": "WGC availability assessment (not native pass)",
+          "status": "completed",
+          "conclusion": "success",
+          "failed_steps": []
+        },
+        {
+          "id": 125047778824,
+          "name": "verify (ubuntu-latest)",
+          "status": "completed",
+          "conclusion": "failure",
+          "failed_steps": [
+            "Gate python"
+          ]
+        },
+        {
+          "id": 125047778869,
+          "name": "verify (windows-latest)",
+          "status": "completed",
+          "conclusion": "failure",
+          "failed_steps": [
+            "Gate python"
+          ]
+        },
+        {
+          "id": 125047778943,
+          "name": "gitleaks full history and real negative controls",
+          "status": "completed",
+          "conclusion": "success",
+          "failed_steps": []
+        },
+        {
+          "id": 125048306726,
+          "name": "Synthetic owned-window WGC capture",
+          "status": "completed",
+          "conclusion": "success",
+          "failed_steps": []
+        }
+      ]
+    },
+    "branch_failure_classification": "Required new paths trigger central catalogue integration failures; these differ from the previously observed base Windows router failure.",
+    "corrected_transport_failure": {
+      "error": "unproven_path_tool_or_flag",
+      "cause": "The claims scanner treats optional Git diff headers as unknown command and flag claims.",
+      "fix": "Use a complete standard unified diff without optional Git metadata; retain every source byte, verify application, and recompute patch_sha256."
+    },
+    "remaining_scope_blockers": [
+      {
+        "error": "source_profile_coverage_incomplete",
+        "evidence": "tools/build_cafe_nodes.py:29-36 requires exact profile coverage for inventoried connector Python and documentation Markdown files.",
+        "paths_needing_registration": [
+          "connectors/cafe/mcp_control_intents.py",
+          "docs/bridge/changes/unit-04.md"
+        ],
+        "required_integration": "Register the sources in the central source profile, regenerate catalogue nodes, symbols, coordinates, routes and source receipts, then rebuild the router index.",
+        "scope_decision": "No indexes, validators or other unauthorized paths are changed."
+      },
+      {
+        "error": "document primary id missing from generic lookup",
+        "evidence": "tests/bootstrap/test_entry_contract.py:327-356 requires every documentation Markdown file to have a matching central route and node identifier.",
+        "path": "docs/bridge/changes/unit-04.md",
+        "required_integration": "Include unit-04 in the same serial catalogue rebuild."
+      }
+    ],
+    "corrective_round": 1,
+    "handoff_status": "unverified_proposal_pending_central_catalogue_integration"
   }
 }

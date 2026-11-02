@@ -15,9 +15,6 @@ Scope: `unverified_proposal`.
 ## Complete product and test diff
 
 ```diff
-diff --git a/connectors/cafe/mcp_control_intents.py b/connectors/cafe/mcp_control_intents.py
-new file mode 100644
-index 0000000..5992a25
 --- /dev/null
 +++ b/connectors/cafe/mcp_control_intents.py
 @@ -0,0 +1,473 @@
@@ -494,9 +491,6 @@ index 0000000..5992a25
 +            return bound
 +        finally:
 +            self._active = False
-diff --git a/tests/integration/test_mcp_control_intents.py b/tests/integration/test_mcp_control_intents.py
-new file mode 100644
-index 0000000..9c67e9b
 --- /dev/null
 +++ b/tests/integration/test_mcp_control_intents.py
 @@ -0,0 +1,919 @@
