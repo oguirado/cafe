@@ -1,0 +1,159 @@
+{
+  "unit": "PRO-09",
+  "base_commit": "803f06de934dc5ff95f7d655e9dfeeebc05da03d",
+  "delivery_branch": "bridge/pro-09-delivery",
+  "delivery_kind": "patch_artifacts_only",
+  "code_applied_in_delivery": false,
+  "patch_format": "git_diff_binary_full_index",
+  "patch_bytes": "Exact copies of the previously delivered mandatory.diff and optional.diff; no author headers or byte normalization.",
+  "patches": [
+    {
+      "file": "unit-09-mandatory.patch",
+      "sha256": "eb7e09faa475cfd535944b3f10092422715dc191d4207546a54e703f439d22d1",
+      "bytes": 205204,
+      "base_commit": "803f06de934dc5ff95f7d655e9dfeeebc05da03d",
+      "head_commit": "f20ee3cb090a3eaa1ca823373d5a1f4e780030f0",
+      "source_commits": [
+        "54ec64e5a2133dfb89151dbf70d5f17c66bc8c23",
+        "f20ee3cb090a3eaa1ca823373d5a1f4e780030f0"
+      ],
+      "paths": [
+        "connectors/cafe/mcp_control.py",
+        "connectors/cafe/mcp_organizer.py",
+        "connectors/cafe/mcp_server.py",
+        "core/src/control_intents.rs",
+        "core/src/discord_windows.rs",
+        "core/src/main.rs",
+        "core/src/operator_protocol.rs",
+        "core/src/organizer.rs",
+        "core/src/runtime_effects.rs",
+        "core/src/runtime_main.rs",
+        "core/src/runtime_recording.rs",
+        "core/src/windows_window_registry.rs",
+        "core/tests/organizer.rs",
+        "docs/bridge/CODEX_ORGANIZER.md",
+        "docs/schemas/organizer_operator_ops.v1.json",
+        "docs/schemas/organizer_request.v1.json",
+        "tests/integration/test_mcp_organizer.py"
+      ],
+      "parts": [
+        "unit-09-mandatory.patch"
+      ]
+    },
+    {
+      "file": "unit-09-optional.patch",
+      "sha256": "d896619f570cda55236d70e192285b56bf7dc0dedcae5b5d28b9570032dc2a18",
+      "bytes": 19871,
+      "base_commit": "f20ee3cb090a3eaa1ca823373d5a1f4e780030f0",
+      "head_commit": "71346d5971228f1a45d95b81676300e42ac7d929",
+      "source_commits": [
+        "71346d5971228f1a45d95b81676300e42ac7d929"
+      ],
+      "paths": [
+        "core/src/organizer.rs",
+        "core/src/runtime_main.rs",
+        "core/src/runtime_recording.rs",
+        "core/src/windows_window_registry.rs",
+        "core/tests/organizer.rs",
+        "docs/bridge/CODEX_ORGANIZER.md"
+      ],
+      "parts": [
+        "unit-09-optional.patch"
+      ]
+    }
+  ],
+  "paths": [
+    "connectors/cafe/mcp_control.py",
+    "connectors/cafe/mcp_organizer.py",
+    "connectors/cafe/mcp_server.py",
+    "core/src/control_intents.rs",
+    "core/src/discord_windows.rs",
+    "core/src/main.rs",
+    "core/src/operator_protocol.rs",
+    "core/src/organizer.rs",
+    "core/src/runtime_effects.rs",
+    "core/src/runtime_main.rs",
+    "core/src/runtime_recording.rs",
+    "core/src/windows_window_registry.rs",
+    "core/tests/organizer.rs",
+    "docs/bridge/CODEX_ORGANIZER.md",
+    "docs/schemas/organizer_operator_ops.v1.json",
+    "docs/schemas/organizer_request.v1.json",
+    "tests/integration/test_mcp_organizer.py"
+  ],
+  "delivery_paths": [
+    "docs/bridge/changes/unit-09-mandatory.patch",
+    "docs/bridge/changes/unit-09-optional.patch",
+    "docs/bridge/changes/unit-09.json"
+  ],
+  "tests_scope": "Checks previously executed against the implementation commits, not hosted CI and not execution of the artifact-only delivery tree.",
+  "tests_executed": [
+    {
+      "name": "mandatory_rust",
+      "command": "cargo test --locked --all-targets",
+      "exit_code": 0,
+      "passed": 328,
+      "failed": 0,
+      "ignored": 0,
+      "targets": 13
+    },
+    {
+      "name": "optional_rust",
+      "command": "cargo test --locked --all-targets",
+      "exit_code": 0,
+      "passed": 329,
+      "failed": 0,
+      "ignored": 0,
+      "targets": 13
+    },
+    {
+      "name": "mandatory_windows",
+      "command": "cargo check --locked --target x86_64-pc-windows-msvc --all-targets",
+      "exit_code": 0,
+      "native_execution": false
+    },
+    {
+      "name": "optional_windows",
+      "command": "cargo check --locked --target x86_64-pc-windows-msvc --all-targets",
+      "exit_code": 0,
+      "native_execution": false
+    },
+    {
+      "name": "mcp_python",
+      "command": "python3 -m unittest discover -s tests/integration -p 'test_mcp*.py' -q",
+      "exit_code": 0,
+      "passed": 97,
+      "new_organizer_tests": 26
+    },
+    {
+      "name": "four_synthetic_feeds",
+      "command": "python verify_four_feeds.py (complete harness in CODEX_ORGANIZER.md)",
+      "exit_code": 0,
+      "passed": 1,
+      "native_recording": false
+    }
+  ],
+  "validation": {
+    "diffs_match_source_commits": true,
+    "protected_registry_prefix_unchanged": true,
+    "window_pairing_test_unchanged": true,
+    "native_windows_execution": false,
+    "native_recording_e2e": "PENDING-LIVE"
+  },
+  "privacy_review": {
+    "personal_filesystem_paths_found": false,
+    "personal_names_or_email_addresses_found": false,
+    "real_credentials_or_private_tokens_found": false,
+    "personal_or_routable_ip_addresses_found": false,
+    "non_personal_literals": [
+      "One 127.0.0.1 loopback literal appears in unchanged context already present at base_commit.",
+      "Authentication values and window tokens in test fixtures are synthetic.",
+      "Example filesystem paths are synthetic, not operator filesystem paths."
+    ]
+  },
+  "ci": {
+    "commit_message_contains_skip_ci": true,
+    "hosted_ci_requested": false,
+    "pull_request_requested": false
+  }
+}

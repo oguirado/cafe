@@ -1,0 +1,240 @@
+diff --git a/core/src/organizer.rs b/core/src/organizer.rs
+index 7bdae366bc7c8350d84f00b896059494b947a821..2b05b0c9d686785c0cb765960970c085113a062a 100644
+--- a/core/src/organizer.rs
++++ b/core/src/organizer.rs
+@@ -223,18 +223,14 @@ fn select_popouts(views: &[WindowView], tokens: Option<&[String]>, classify: fn(
+         .cloned().collect::<Vec<_>>();
+     if selected.is_empty() || tokens.is_some_and(|tokens| tokens.len() != selected.len()) { return Err("no_discord_windows"); }
+     if selected.len() > MAX_CAPSULES { return Err("unavailable"); }
+-    for view in &selected {
+-        if views.iter().filter(|other| other.visible && !other.minimized && other.executable == view.executable && other.class == view.class && other.title == view.title).count() != 1 {
+-            return Err("window_titles_identical");
+-        }
+-    }
++    // OPTIONAL: exact observed handles may be proposed despite equal descriptors.
+     Ok(selected)
+ }
+ 
+ /// Re-resolve the exact observation at click time. Classification is checked
+ /// separately by the authority; this helper cannot authorize a window.
+ pub(crate) fn resolve_frozen_window(windows: &WindowRegistry, frozen: &WindowView) -> Result<WindowView, &'static str> {
+-    let view = windows.resolve(&frozen.handle, frozen.generation).map_err(|error| match error {
++    let view = windows.resolve_exact_for_capture(&frozen.handle, frozen.generation).map_err(|error| match error {
+         WindowError::AmbiguousDescriptor => "window_titles_identical", _ => "window_unavailable",
+     })?;
+     if view != *frozen { return Err("window_changed"); }
+@@ -257,13 +253,13 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn selected_popouts_are_frozen_and_descriptor_ambiguity_is_distinct() {
++    fn selected_popouts_are_frozen_and_optional_duplicate_selection_stays_exact() {
+         let mut registry = WindowRegistry::new(Clock(7));
+         let views = registry.refresh_fixtures(&[fixture("one", "Synthetic one"), fixture("two", "Synthetic two")]).unwrap();
+         let selected = select_popouts(&views, Some(&[window_token(&views[1])]), |_| DiscordWindowClass::Popout).unwrap();
+         assert_eq!(selected, vec![views[1].clone()]);
+         let duplicate = registry.refresh_fixtures(&[fixture("one", "Synthetic one"), fixture("two", "Synthetic one")]).unwrap();
+-        assert_eq!(select_popouts(&duplicate, None, |_| DiscordWindowClass::Popout).unwrap_err(), "window_titles_identical");
++        assert_eq!(select_popouts(&duplicate, None, |_| DiscordWindowClass::Popout).unwrap().len(), 2);
+     }
+ 
+     #[test]
+diff --git a/core/src/runtime_main.rs b/core/src/runtime_main.rs
+index 420d15f824023bfe8ab8ac147e4f8dfda618f9db..39396e3aae5bd18a6a1a4ad194bb859fa6a19cbf 100644
+--- a/core/src/runtime_main.rs
++++ b/core/src/runtime_main.rs
+@@ -124,6 +124,9 @@ fn organizer_structure(runtime:&mut ControlRuntime<ControlCommandSender>,id:&str
+  runtime.journal_for_media_actor().append_control(&id,envelope).map(|_|()).map_err(|_|"disk_write_failed")
+ }
+ fn pair_observed(runtime:&mut ControlRuntime<ControlCommandSender>,windows:&WindowRegistry,book:&mut PairingBook,bindings:&Arc<std::sync::RwLock<Vec<crate::capsule_pairing::Binding>>>,view:&crate::windows_window_registry::WindowView,capsule_id:&str,id:&str)->Result<(),&'static str>{
++ // OPTIONAL: the existing pairing API sees only the exact approved identity.
++ let exact=windows.for_capture(&view.handle,view.generation).map_err(|_|"window_unavailable")?;
++ let windows=&exact;
+  let id=id.replace('.',"-");
+  let state=runtime.capsule_snapshot();let capsule=state.capsules.get(capsule_id).ok_or("unavailable")?;
+  let next=state.highest_generation.0.checked_add(1).ok_or("unavailable")?;
+@@ -284,10 +287,13 @@ fn mutate(request:OperatorRequest,runtime:&mut ControlRuntime<ControlCommandSend
+    if runtime.known_control_request(&request.request_id){return result("rejected","request_id_conflict");}
+    let matching=windows.snapshots().into_iter().filter(|view|serde_json::to_value(&view.handle).ok()==Some(json!(window_token))).collect::<Vec<_>>();
+    if matching.len()!=1{return result("rejected","window_token_unknown_or_ambiguous");}
++   // OPTIONAL: manual pairing shares exact handle/generation admission; OBS
++   // always retains the authority's full, unique-descriptor registry.
++   let exact=match windows.for_capture(&matching[0].handle,window_generation){Ok(exact)=>exact,Err(_)=>return result("rejected","pair_window_unavailable")};let pairing_windows=&exact;
+    let request_pair=PairRequest{request_id:request.request_id.clone(),authority_epoch:epoch,expected_revision:state.revision,capsule_id,person_label,feed_id,role,window:matching[0].handle.clone(),window_generation,layout_revision,crop:Crop{x:crop.x,y:crop.y,width:crop.width,height:crop.height}};
+-   let proposal=match book.propose(&state,windows,request_pair){Ok(value)=>value,Err(error)=>return result("rejected",pair_rejection_code(&error))};
++   let proposal=match book.propose(&state,pairing_windows,request_pair){Ok(value)=>value,Err(error)=>return result("rejected",pair_rejection_code(&error))};
+    if runtime.journal_for_media_actor().append_control(&request.request_id,proposal.envelope().clone()).is_err(){return result("rejected","pair_not_durable");}
+-   if book.commit_proposed(proposal,&runtime.capsule_snapshot(),windows).is_err(){return result("blocked","pair_reconfirmation_required");}
++   if book.commit_proposed(proposal,&runtime.capsule_snapshot(),pairing_windows).is_err(){return result("blocked","pair_reconfirmation_required");}
+    match bindings.write(){Ok(mut shared)=>*shared=book.bindings(),Err(_)=>return result("blocked","binding_state_unavailable")};result("committed","window_paired")
+   },
+   OperatorBody::SetFolder{folder}=>serde_json::to_value(runtime.handle_operator_folder(&request.request_id,epoch,request.expected_revision,PathBuf::from(folder))).unwrap_or_else(|_|result("blocked","reply_encoding_failed")),
+@@ -327,7 +333,7 @@ async fn execute_effect(job:&crate::control_intents::ActorControlJob,authority:&
+  let capsule=match &job.action{ActorControlAction::StartRecording{capsule,..}|ActorControlAction::StopRecording(capsule)|ActorControlAction::SendToObs(capsule)=>capsule,_=>return interrupted};
+  let Some(actual)=current.capsules.get(&capsule.capsule_id) else{return interrupted;};
+  if !job.matches_current_capsule(current.authority_epoch,actual)||!job.matches_current_bindings(&book.bindings())||job.window_bindings.len()!=actual.feeds.len(){*failure=Some("window_unavailable");return interrupted;}
+- for binding in &job.window_bindings {let view=match windows.resolve(&binding.window,binding.window_generation){Ok(view)=>view,Err(crate::windows_window_registry::WindowError::AmbiguousDescriptor)=>{*failure=Some("window_titles_identical");return interrupted;},Err(_)=>{*failure=Some("window_unavailable");return interrupted;}};if view.layout_revision!=binding.layout_revision{*failure=Some("window_unavailable");return interrupted;}}
++ for binding in &job.window_bindings {let resolved=if matches!(&job.action,ActorControlAction::StartRecording{..}){windows.resolve_exact_for_capture(&binding.window,binding.window_generation)}else{windows.resolve(&binding.window,binding.window_generation)};let view=match resolved{Ok(view)=>view,Err(crate::windows_window_registry::WindowError::AmbiguousDescriptor)=>{*failure=Some("window_titles_identical");return interrupted;},Err(_)=>{*failure=Some("window_unavailable");return interrupted;}};if view.layout_revision!=binding.layout_revision{*failure=Some("window_unavailable");return interrupted;}}
+  match &job.action{
+   ActorControlAction::StartRecording{capsule,folder}=>{
+    if engine.status().iter().any(|live|live.capsule_id==capsule.capsule_id){return interrupted;}
+diff --git a/core/src/runtime_recording.rs b/core/src/runtime_recording.rs
+index 660ca796bc60ed3f75940eb821da457a9dd68db1..546ce2607aa254274c2f127ef072be38ac5979f4 100644
+--- a/core/src/runtime_recording.rs
++++ b/core/src/runtime_recording.rs
+@@ -4,7 +4,7 @@ use std::{cell::Cell,path::{Path,PathBuf,Component},time::{Duration,Instant},syn
+ use crate::{authority_journal::Journal,capsule_registry::Clock,capsule_pairing::Binding,
+  capture_frame_pool::{FramePool,PoolLimits,OwnedFrame,BorrowedFrame},capture_health::{CaptureState,HealthPolicy},
+  capture_pipeline::{CapturePipeline,FrameSource},windows_graphics_capture::{NativeCapture,ObservedCaptureConfig,CaptureError,trace_stage,initialize_trace},
+- windows_window_registry::{WindowRegistry,NativeAdapter},ffmpeg_recorder::{self,Encoder,EncoderUse,VideoProfile,Recorder,RecordingPlan}};
++ windows_window_registry::{WindowRegistry,WindowHandle,NativeAdapter},ffmpeg_recorder::{self,Encoder,EncoderUse,VideoProfile,Recorder,RecordingPlan}};
+ 
+ const MAX_FRAME_WIDTH:u32=3840;
+ const MAX_FRAME_HEIGHT:u32=2160;
+@@ -49,7 +49,7 @@ impl ExternalFfmpeg {
+ 
+ /// Crop is applied to owned CPU copies after capture, never in the callback.
+ /// It retains the first observed frame until the recorder starts.
+-pub(crate) struct RecordingSource {capture:NativeCapture,first:Option<OwnedFrame>,pool:Arc<FramePool>,crop:crate::capsule_pairing::Crop,failed:bool}
++pub(crate) struct RecordingSource {capture:NativeCapture,first:Option<OwnedFrame>,pool:Arc<FramePool>,crop:crate::capsule_pairing::Crop,failed:bool,window:WindowHandle,window_generation:Clock}
+ fn crop_frame(pool:&Arc<FramePool>,frame:&OwnedFrame,crop:crate::capsule_pairing::Crop)->Result<OwnedFrame,&'static str>{
+  if crop.width==0 || crop.height==0 || crop.x.checked_add(crop.width).is_none_or(|v|v>frame.width()) || crop.y.checked_add(crop.height).is_none_or(|v|v>frame.height()){return Err("observed_crop_outside_frame");}
+  let start=(crop.y as usize).checked_mul(frame.packed_stride()).and_then(|v|v.checked_add(crop.x as usize*4)).ok_or("observed_crop_overflow")?;
+@@ -57,7 +57,15 @@ fn crop_frame(pool:&Arc<FramePool>,frame:&OwnedFrame,crop:crate::capsule_pairing
+ }
+ impl FrameSource for RecordingSource {
+  fn take_latest(&mut self)->Option<OwnedFrame>{let frame=self.first.take().or_else(||self.capture.take_latest())?;match crop_frame(&self.pool,&frame,self.crop){Ok(copy)=>Some(copy),Err(_)=>{self.failed=true;None}}}
+- fn state(&self,registry:&WindowRegistry)->CaptureState{if self.failed{CaptureState::SourceFailed}else{self.capture.poll_state(registry)}}
++ fn state(&self,registry:&WindowRegistry)->CaptureState{
++  if self.failed{return CaptureState::SourceFailed;}
++  // OPTIONAL: refresh exact identity before every native poll. Live permit
++  // checks still validate the HWND/process/lifetime witness independently.
++  match registry.for_capture(&self.window,self.window_generation){
++   Ok(exact)=>self.capture.poll_state(&exact),
++   Err(_)=>self.capture.poll_state(registry),
++  }
++ }
+  fn stop(&mut self)->Result<(),CaptureError>{self.first.take();self.capture.stop()}
+ }
+ 
+@@ -97,6 +105,9 @@ fn first_frame_failure(state: CaptureState) -> Option<&'static str> {
+ pub(crate) async fn build_feed(approved:ffmpeg_recorder::Preflight,binding:&Binding,effect_id:&str,windows:&WindowRegistry,adapter:&mut NativeAdapter,folder:&Path,journal:&mut Journal)->Result<CapturePipeline<RecordingSource>,&'static str>{
+  if !cfg!(windows){return Err("native_capture_unsupported");}
+  if effect_id.is_empty() || effect_id.len()>96 || !effect_id.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'-'||b==b'_'){return Err("recording_effect_invalid");}
++ // OPTIONAL: scope only capture construction; OBS never receives this view.
++ let exact=windows.for_capture(&binding.window,binding.window_generation).map_err(|_|"window_unavailable")?;
++ let windows=&exact;
+  let view=windows.resolve(&binding.window,binding.window_generation).map_err(|error|match error{crate::windows_window_registry::WindowError::AmbiguousDescriptor=>"window_titles_identical",_=>"window_unavailable"})?;
+  if binding.layout_revision!=view.layout_revision{return Err("window_layout_changed");}
+  // Native start re-observes its capture-item size and rejects any race or
+@@ -120,7 +131,7 @@ pub(crate) async fn build_feed(approved:ffmpeg_recorder::Preflight,binding:&Bind
+   trace_stage("recorder_ready");
+   Ok((first,pool,recorder))
+  }.await;
+- match construction{Ok((first,pool,recorder))=>Ok(CapturePipeline::new_live(RecordingSource{capture,first:Some(first),pool,crop:binding.crop,failed:false},recorder)),Err(code)=>{trace_stage("capture_failed");let _=capture.stop();Err(code)}}
++ match construction{Ok((first,pool,recorder))=>Ok(CapturePipeline::new_live(RecordingSource{capture,first:Some(first),pool,crop:binding.crop,failed:false,window:binding.window.clone(),window_generation:binding.window_generation},recorder)),Err(code)=>{trace_stage("capture_failed");let _=capture.stop();Err(code)}}
+ }
+ 
+ fn recorder_start_failure(error:ffmpeg_recorder::RecorderError)->&'static str{
+diff --git a/core/src/windows_window_registry.rs b/core/src/windows_window_registry.rs
+index 328f0553abf7804845338e02e3e7df0d6fa8c20b..a1f8a43def9b818b75b29b55c9902f1103b1d3a4 100644
+--- a/core/src/windows_window_registry.rs
++++ b/core/src/windows_window_registry.rs
+@@ -227,6 +227,27 @@ mod preview_projection_tests {
+     }
+ }
+ 
++// OPTIONAL: exact identity selection for pairing/capture only; PENDING-LIVE.
++// OBS continues to receive the full registry and its unique-descriptor rule.
++impl WindowRegistry {
++    pub(crate) fn resolve_exact_for_capture(&self, handle: &WindowHandle, generation: Clock) -> Result<WindowView, WindowError> {
++        let entry = self.entries.values().find(|entry| &entry.view.handle == handle && entry.view.generation == generation).ok_or(WindowError::StaleWindow)?;
++        if !entry.view.visible || entry.view.minimized { return Err(WindowError::Unavailable); }
++        Ok(entry.view.clone())
++    }
++
++    /// Narrow adapter for existing pairing/capture APIs. The selected entry's
++    /// native witness is retained unchanged; no descriptor or token is forged.
++    /// Construct afresh from the authority's live registry for every check.
++    pub(crate) fn for_capture(&self, handle: &WindowHandle, generation: Clock) -> Result<Self, WindowError> {
++        self.resolve_exact_for_capture(handle, generation)?;
++        let (key, entry) = self.entries.iter().find(|(_, entry)| &entry.view.handle == handle && entry.view.generation == generation).ok_or(WindowError::StaleWindow)?;
++        let mut entries = BTreeMap::new();
++        entries.insert(key.clone(), entry.clone());
++        Ok(Self { epoch: self.epoch, next: self.next, entries })
++    }
++}
++
+ // BEGIN MUSE ADAPTER — native enumeration only; identity logic stays in Codex fragments above.
+ #[cfg(not(windows))]
+ pub struct NativeAdapter {
+diff --git a/core/tests/organizer.rs b/core/tests/organizer.rs
+index 2e1140faa6cf0642c25948276793b39d518eda87..0e4fe8c3f0d304d900b19cbd7dd22054f93356d2 100644
+--- a/core/tests/organizer.rs
++++ b/core/tests/organizer.rs
+@@ -237,3 +237,31 @@ pub(crate) fn assert_four_feed_failure_isolation() {
+         assert_eq!(journal.records().len(), 4, "abort must never publish media");
+     });
+ }
++
++#[test]
++fn optional_exact_capture_adapter_keeps_full_registry_descriptor_refusal() {
++    use crate::windows_window_registry::{FixtureWindow, Rect, WindowError, WindowRegistry};
++    use crate::capsule_registry::{Registry, Envelope, Command, Role, Outcome, SCHEMA};
++    use crate::capsule_pairing::{PairingBook, PairRequest, Crop};
++    let fixture = |slot: &str| FixtureWindow { slot: slot.into(), incarnation: 1, process_id: 77,
++        process_birth: 1, executable: "Discord.exe".into(), title: "Synthetic identical".into(), class: "Synthetic".into(),
++        rect: Rect { x: 0, y: 0, width: 320, height: 200 }, visible: true, minimized: false, layout: "one".into() };
++    let mut windows = WindowRegistry::new(Clock(77));
++    let views = windows.refresh_fixtures(&[fixture("one"), fixture("two")]).unwrap();
++    assert_eq!(windows.resolve(&views[0].handle, views[0].generation), Err(WindowError::AmbiguousDescriptor));
++    let exact = windows.for_capture(&views[0].handle, views[0].generation).unwrap();
++    assert_eq!(exact.snapshots(), vec![views[0].clone()]);
++    assert_eq!(exact.resolve(&views[0].handle, views[0].generation).unwrap(), views[0]);
++    assert!(exact.resolve(&views[1].handle, views[1].generation).is_err());
++    let mut authority = Registry::new(Clock(77));
++    assert_eq!(authority.apply(Envelope { schema: SCHEMA.into(), kind: "intent".into(), request_id: "create-synthetic".into(),
++        authority_epoch: Clock(77), expected_revision: Clock(0), body: Command::CreateCapsule { capsule_id: "slot-1".into(), person_label: "slot-1".into(), generation: Clock(1) } }).state, Outcome::Admitted);
++    let request = PairRequest { request_id: "pair-synthetic".into(), authority_epoch: Clock(77), expected_revision: Clock(1), capsule_id: "slot-1".into(), person_label: "slot-1".into(), feed_id: "feed-1".into(), role: Role::Game,
++        window: views[0].handle.clone(), window_generation: views[0].generation, layout_revision: views[0].layout_revision, crop: Crop { x: 0, y: 0, width: 320, height: 200 } };
++    let mut book = PairingBook::new();
++    assert!(book.pair(&mut authority, &exact, request).is_ok());
++    assert_eq!(windows.resolve(&views[0].handle, views[0].generation), Err(WindowError::AmbiguousDescriptor));
++    let mut changed = fixture("one"); changed.incarnation = 2;
++    windows.refresh_fixtures(&[changed, fixture("two")]).unwrap();
++    assert!(windows.for_capture(&views[0].handle, views[0].generation).is_err());
++}
+diff --git a/docs/bridge/CODEX_ORGANIZER.md b/docs/bridge/CODEX_ORGANIZER.md
+index 89b9eabac90c2fbae6a5dc072fffa937103f99b2..c7f795f587e7533711aa0a0cb1b9756a65832e9a 100644
+--- a/docs/bridge/CODEX_ORGANIZER.md
++++ b/docs/bridge/CODEX_ORGANIZER.md
+@@ -191,11 +191,15 @@ proposal: allowlisted executables therefore remain `Unknown`. This is an
+ explicit live-measurement gate, not an invented Discord heuristic.
+ 
+ The security-owned identity regions and the existing ambiguous-window test
+-remain unchanged. The default unique-descriptor resolver rejects ambiguous
+-same-title windows with `window_titles_identical` at pairing/start boundaries.
+-An optional, isolated last commit can introduce exact-handle/generation capture
+-resolution outside those regions. It requires measurement and operator approval
+-before integration. OBS retains unique-descriptor resolution.
++remain unchanged. The mandatory commits retain the unique-descriptor refusal
++`window_titles_identical` at pairing/start boundaries. The isolated last commit,
++`OPTIONAL: exact-handle resolve for capture` (with `[skip ci]` in its message), adds an exact
++handle/generation resolver outside those regions and gives pairing/capture APIs
++a registry scoped to that one unchanged identity. Capture health polling obtains
++a fresh scope each time; its native lifetime checks remain in place. This
++optional commit requires measurement and operator approval before integration.
++OBS and preview descriptor eligibility retain the full unique-descriptor rule;
++the optional capture path does not authorize a broader OBS selection.
+ 
+ ## Durable action attribution
+ 
+@@ -243,7 +247,7 @@ write list before that contract is complete.
+   session. There is no software-encoder fallback. Slow native startup may delay
+   operator input despite ticking existing feeds during asynchronous preparation;
+   local input is revisited between setup jobs rather than after a whole batch.
+-  interruptible native startup is a separate runtime-owner integration gate.
++  Interruptible native startup is a separate runtime-owner integration gate.
+ - **Full trial reuse remains an owner dependency:** `ffmpeg_recorder.rs` keeps a
+   private, non-Clone `Preflight` consumed by `start_ready`. The allowed resource
+   patch sizes pools from observed geometry and caches the successful hardware
