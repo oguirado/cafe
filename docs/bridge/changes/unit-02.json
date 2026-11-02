@@ -76,9 +76,97 @@
     "dependency_installation": false
   },
   "ci": {
-    "status": "not_yet_observed_for_proposal",
+    "evaluated_commit": "9b2dd67c7ef97159cc530a755d41de600ee6a30a",
+    "run_id": 41372269202,
+    "status": "completed",
+    "conclusion": "failure",
+    "jobs": [
+      {
+        "job_id": 125045060859,
+        "name": "WGC availability assessment (not native pass)",
+        "conclusion": "success",
+        "failed_steps": []
+      },
+      {
+        "job_id": 125045061146,
+        "name": "verify (ubuntu-latest)",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Gate python"
+        ]
+      },
+      {
+        "job_id": 125045061175,
+        "name": "verify (windows-latest)",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Gate python"
+        ]
+      },
+      {
+        "job_id": 125045061178,
+        "name": "gitleaks full history and real negative controls",
+        "conclusion": "success",
+        "failed_steps": []
+      },
+      {
+        "job_id": 125045605201,
+        "name": "Synthetic owned-window WGC capture",
+        "conclusion": "success",
+        "failed_steps": []
+      }
+    ],
+    "bootstrap_results": {
+      "linux": {
+        "tests": 342,
+        "failures": 6,
+        "errors": 8
+      },
+      "windows": {
+        "tests": 342,
+        "failures": 6,
+        "errors": 8
+      }
+    },
+    "failure_classification": "Mandated new files are incompatible with unchanged repository integration policies under the closed write set.",
+    "pre_existing_red_ci": false,
+    "baseline_evidence": {
+      "commit": "f1e874050e305645a90e64267e50f8625daae9bc",
+      "run_id": 41372020406,
+      "linux_all_gates": "success",
+      "windows_python_gate": "success"
+    },
+    "blockers": [
+      {
+        "code": "non_english_or_unreviewed_filename",
+        "count": 2,
+        "paths": [
+          "connectors/cafe/mcp_jsonl_stats.py",
+          "tests/integration/test_mcp_jsonl_stats.py"
+        ],
+        "policy": "tools/publication_lint.py",
+        "reason": "The existing filename vocabulary does not include stats; both filenames are mandated by this task.",
+        "required_change": "Validator vocabulary or mandated filenames; both changes are prohibited."
+      },
+      {
+        "code": "document primary id missing from generic lookup",
+        "path": "docs/bridge/changes/unit-02.md",
+        "policy": "tests/bootstrap/test_entry_contract.py",
+        "reason": "Every new docs Markdown path requires lookup registration.",
+        "required_change": "catalogue/routes.tsv and associated indexes; index changes are prohibited."
+      },
+      {
+        "code": "source_profile_coverage_incomplete",
+        "policy": "tools/build_cafe_nodes.py",
+        "reason": "New connector and documentation paths require source-profile coverage before node extraction.",
+        "required_change": "catalogue/source_profile.json and generated indexes; index changes are prohibited."
+      }
+    ],
+    "action": "Recorded the observed failures without changing indexes, validators, workflows, dependencies, or any other unauthorized path. No behavioral statistics failure was observed.",
     "new_stats_test_auto_discovered": false,
-    "discovery_evidence": "The immutable base tools/run_ci.py enumerates named integration files and does not include test_mcp_jsonl_stats.py.",
-    "anticipated_inherited_constraint": "The existing publication filename vocabulary lacks stats; both mandated new filenames conflict with that unchanged validator. Awaiting remote observation."
+    "new_stats_test_run_remotely": false,
+    "discovery_evidence": "The existing tools/run_ci.py selects named integration files and omits test_mcp_jsonl_stats.py. Both verification jobs stopped at Gate python before Gate integration.",
+    "evidence_scope": "This completed run evaluates the product and test contents. The subsequent evidence commit changes only this JSON report.",
+    "development_python": "3.12.3"
   }
 }
