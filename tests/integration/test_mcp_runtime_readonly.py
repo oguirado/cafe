@@ -420,7 +420,7 @@ class ReadModelTests(unittest.TestCase):
                  dict(CHAT, to='2025-11-20T17:00:00Z'),
                  dict(CHAT, **{'from': '2025-02-30T18:00:00Z'}),
                  dict(CHAT, **{'from': '2025-11-20T18:00:00+00:00'}),
-                 dict(CHAT, **{'from': '2025-11-20T18:00:00.1234567890Z'}),
+                 dict(CHAT, **{'from': FROM[:-1] + '.' + '1' * 10 + 'Z'}),
                  dict(CHAT, **{'from': '2025-11-20T18:00:00Z\n'})]
         for args in cases:
             self.assert_error(self.model.execute('messages_between', args), 'invalid_arguments')

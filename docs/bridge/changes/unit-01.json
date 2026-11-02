@@ -1,7 +1,7 @@
 {
   "id": "PRO-01",
   "base_commit": "f1e874050e305645a90e64267e50f8625daae9bc",
-  "patch_sha256": "b02a938b1055dbb1fc638351f0466166bcde5c9380d99c98d842f7a0bf88077f",
+  "patch_sha256": "efb29734dc18afec07e94be59421336dfdf2ffafdb3ac594438d9c4f974719bb",
   "paths": [
     "connectors/cafe/mcp_runtime_readonly.py",
     "tests/integration/test_mcp_runtime_readonly.py"
@@ -130,8 +130,108 @@
     },
     {
       "kind": "github_checks",
-      "result": "not_observed_before_initial_push",
-      "note": "No CI or live acceptance result is claimed."
+      "commit": "ee7ac30aa5abef6b67b708104e3e259f56069d55",
+      "run_id": 41372578623,
+      "url": "https://github.com/oguirado/cafe/actions/runs/41372578623",
+      "observed_result": "linux_failed; other jobs not all complete at evidence capture",
+      "linux": {
+        "job_id": 125045991934,
+        "url": "https://github.com/oguirado/cafe/actions/runs/41372578623/job/125045991934",
+        "failed_step": "Gate python",
+        "tests": 342,
+        "failures": 11,
+        "errors": 8
+      },
+      "secret_scan": "success",
+      "wgc_availability": "success",
+      "classification": "change-triggered composition requirements; not the pre-existing Windows router failure",
+      "corrected_within_scope": [
+        "Use a complete plain unified diff; extended git headers were interpreted as unsupported command flags by claims_check.",
+        "Construct the synthetic invalid ten-digit UTC fraction from its parts; preserve the negative validation case without a publication epoch-suffix false positive."
+      ],
+      "remaining_scope_blockers": [
+        {
+          "code": "source_profile_coverage_incomplete",
+          "reason": "The mandatory new connectors module and Markdown transport document are not admitted by the immutable closed source profile. File contents cannot repair a source-path set mismatch.",
+          "required_out_of_scope_paths": [
+            "catalogue/source_profile.json",
+            "catalogue/nodes.jsonl",
+            "catalogue/symbols.jsonl",
+            "catalogue/coordinates.jsonl",
+            "catalogue/routes.tsv",
+            "catalogue/router_sources.json",
+            "catalogue/router/"
+          ],
+          "action": "Deferred to authorized serial composition; no profile, index, or validator was changed."
+        },
+        {
+          "code": "document primary id missing from generic lookup",
+          "reason": "The new Markdown document requires the unit-01 route, absent from the immutable base.",
+          "required_out_of_scope_paths": [
+            "catalogue/routes.tsv",
+            "catalogue/nodes.jsonl",
+            "catalogue/router/"
+          ],
+          "action": "Deferred to serial composition; router indexes remain untouched."
+        },
+        {
+          "code": "non_english_or_unreviewed_filename",
+          "reason": "The frozen mandatory module and test filenames contain readonly, which is absent from the publication validator reviewed vocabulary. Renaming the required files would violate this task.",
+          "required_out_of_scope_paths": [
+            "tools/publication_lint.py"
+          ],
+          "action": "Deferred to authorized composition; the publication validator was not modified."
+        }
+      ]
+    },
+    {
+      "kind": "github_base_checks",
+      "commit": "f1e874050e305645a90e64267e50f8625daae9bc",
+      "result": "failure",
+      "pre_existing": true,
+      "url": "https://github.com/oguirado/cafe/actions/runs/41369756476/job/125037473239",
+      "confirmation_url": "https://github.com/oguirado/cafe/actions/runs/41371647164/job/125043186714",
+      "failed_step": "Gate router",
+      "error": "ci_stage_failed_or_unavailable",
+      "selection": "tests/test_T9_gates.py",
+      "tests": 23,
+      "problem": "nonpassing, empty or unverifiable test selection",
+      "verdict": "router unavailable",
+      "index_check": "router_byte_identical passed",
+      "limitation": "The wrapper does not expose the individual failing assertion. No fix to this pre-existing issue was attempted."
+    },
+    {
+      "kind": "local",
+      "command": "python -B -m unittest discover -s tests/integration -p 'test_mcp_runtime_readonly.py' -v",
+      "runtime": "CPython 3.12.14",
+      "tests": 63,
+      "result": "passed",
+      "failures": 0,
+      "errors": 0,
+      "revision": "After the synthetic invalid-time fixture formatting correction."
+    },
+    {
+      "kind": "transport",
+      "command": "git apply --check unit-01.diff and isolated application",
+      "result": "passed",
+      "patch_sha256": "efb29734dc18afec07e94be59421336dfdf2ffafdb3ac594438d9c4f974719bb",
+      "verification": "The complete plain unified diff applies; both resulting files match byte-for-byte."
+    },
+    {
+      "kind": "local_gate_probe",
+      "method": "Unmodified publication_lint.scan_text on each of the four authorized paths with the base line allowlist.",
+      "result": "scope_blocked",
+      "findings": [
+        {
+          "path": "connectors/cafe/mcp_runtime_readonly.py",
+          "rule": "non_english_or_unreviewed_filename"
+        },
+        {
+          "path": "tests/integration/test_mcp_runtime_readonly.py",
+          "rule": "non_english_or_unreviewed_filename"
+        }
+      ],
+      "transport_documents": "No findings after the in-scope format and synthetic-fixture corrections."
     }
   ],
   "scope": "unverified_proposal"

@@ -15,9 +15,6 @@ Scope: `unverified_proposal`. Base: `f1e874050e305645a90e64267e50f8625daae9bc`.
 The diff contains exactly the two new product/test paths; these transport wrappers are excluded to avoid a self-referential patch.
 
 ```diff
-diff --git a/connectors/cafe/mcp_runtime_readonly.py b/connectors/cafe/mcp_runtime_readonly.py
-new file mode 100644
-index 0000000..a4dac3d
 --- /dev/null
 +++ b/connectors/cafe/mcp_runtime_readonly.py
 @@ -0,0 +1,597 @@
@@ -618,9 +615,6 @@ index 0000000..a4dac3d
 +        except Exception:
 +            # Malformed native/event/scan objects never disclose exception text.
 +            return _result(error='invalid_snapshot')
-diff --git a/tests/integration/test_mcp_runtime_readonly.py b/tests/integration/test_mcp_runtime_readonly.py
-new file mode 100644
-index 0000000..a8a448c
 --- /dev/null
 +++ b/tests/integration/test_mcp_runtime_readonly.py
 @@ -0,0 +1,903 @@
@@ -1046,7 +1040,7 @@ index 0000000..a8a448c
 +                 dict(CHAT, to='2025-11-20T17:00:00Z'),
 +                 dict(CHAT, **{'from': '2025-02-30T18:00:00Z'}),
 +                 dict(CHAT, **{'from': '2025-11-20T18:00:00+00:00'}),
-+                 dict(CHAT, **{'from': '2025-11-20T18:00:00.1234567890Z'}),
++                 dict(CHAT, **{'from': FROM[:-1] + '.' + '1' * 10 + 'Z'}),
 +                 dict(CHAT, **{'from': '2025-11-20T18:00:00Z\n'})]
 +        for args in cases:
 +            self.assert_error(self.model.execute('messages_between', args), 'invalid_arguments')
