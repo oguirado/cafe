@@ -46,11 +46,29 @@
     {
       "command": "git apply --check /tmp/cafe-pro-03.patch; apply and byte-compare all four files",
       "status": "pass"
+    },
+    {
+      "command": "git apply --check docs/bridge/changes/unit-03.md",
+      "status": "pass"
+    },
+    {
+      "command": "Cafe CI / verify (ubuntu-latest) / Gate python",
+      "status": "fail",
+      "run_id": 41372420859,
+      "job_id": 125045512833,
+      "tests": 342,
+      "failures": 11,
+      "errors": 8
+    },
+    {
+      "command": "Cafe CI / Gate node / tests/security/pro_capsule_workspace.test.js",
+      "status": "not_run",
+      "reason": "Gate python failed before Gate node"
     }
   ],
   "scope": "unverified_proposal",
   "ci": {
-    "status": "pending_transport",
+    "status": "failure_scope_blocked",
     "baseline": {
       "commit": "f1e874050e305645a90e64267e50f8625daae9bc",
       "run_id": 41369756476,
@@ -62,6 +80,44 @@
       "failing_selection": "tests/test_T9_gates.py",
       "reason": "nonpassing, empty or unverifiable test selection",
       "pre_existing": true
-    }
+    },
+    "source_commit": "bdd5db50fb8ab81588f0b7adf2f88b00e0940a9a",
+    "run_id": 41372420859,
+    "url": "https://github.com/oguirado/cafe/actions/runs/41372420859",
+    "observed_job": {
+      "name": "verify (ubuntu-latest)",
+      "id": 125045512833,
+      "stage": "Gate python",
+      "conclusion": "failure"
+    },
+    "format_correction": {
+      "issue": "unproven_path_tool_or_flag",
+      "change": "Store the exact complete diff as raw patch text, without a Markdown code fence. No patch bytes or tests changed.",
+      "verification": "git apply --check passes on the transport itself",
+      "ci_verification": "pending"
+    },
+    "change_induced_blockers": [
+      {
+        "rule": "non_english_or_unreviewed_filename",
+        "paths": [
+          "ui/src/pro_bridge/CapsuleWorkspace.vue",
+          "ui/src/pro_bridge/capsule_workspace.js",
+          "ui/src/pro_bridge/capsule_workspace.css",
+          "tests/security/pro_capsule_workspace.test.js"
+        ],
+        "reason": "All four exact paths are mandated by PRO-03. Their hashes match the publication gate findings. Renaming them or changing publication policy is outside this write set."
+      },
+      {
+        "rule": "source_profile_coverage_incomplete",
+        "reason": "Router source-profile coverage rejects the new source paths. Router indexes and validators are forbidden edits."
+      },
+      {
+        "rule": "document primary id missing from generic lookup",
+        "path": "docs/bridge/changes/unit-03.md",
+        "reason": "The new transport document lacks a generic document lookup entry. Router index edits are forbidden."
+      }
+    ],
+    "native_execution": "unverified",
+    "component_execution": "pending; approved Vue/compiler unavailable locally and CI Node gate skipped"
   }
 }

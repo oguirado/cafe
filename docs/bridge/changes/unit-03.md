@@ -1,6 +1,5 @@
 # PRO-03 — Capsule Workspace P1
 
-```diff
 diff --git a/ui/src/pro_bridge/CapsuleWorkspace.vue b/ui/src/pro_bridge/CapsuleWorkspace.vue
 new file mode 100644
 index 0000000..18bff78
@@ -948,7 +947,6 @@ index 0000000..fca4406
 +    } finally { m.done(); }
 +  }
 +});
-```
 
 ## Assumptions
 
