@@ -10,6 +10,84 @@
 //! [`CaptureHealth`]: crate::capture_health::CaptureHealth
 //! [`CapturePermit`]: crate::windows_window_registry::CapturePermit
 
+// The native callback only reads this initialized sink and performs try_send.
+// Ordinary records reserve one slot in the process budget for a loss marker.
+static TRACE_EVENTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static TRACE_SINK: std::sync::OnceLock<Option<std::sync::mpsc::SyncSender<&'static str>>> = std::sync::OnceLock::new();
+static TRACE_LOST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static TRACE_MARKER_QUEUED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn write_trace_record(writer: &mut impl std::io::Write, stage: &'static str) {
+    let prefix = b"CAFE_TRACE:";
+    let mut line = [0u8; 64];
+    let end = prefix.len() + stage.len();
+    if end >= line.len() { return; }
+    line[..prefix.len()].copy_from_slice(prefix);
+    line[prefix.len()..end].copy_from_slice(stage.as_bytes());
+    line[end] = b'\n';
+    let _ = writer.write_all(&line[..=end]);
+}
+
+// A queued marker can be lost to backpressure; the writer also checks TRACE_LOST
+// after each received record. Neither path promises complete tracing.
+fn note_trace_loss(sender: &std::sync::mpsc::SyncSender<&'static str>) {
+    use std::sync::atomic::Ordering;
+    TRACE_LOST.store(true, Ordering::Relaxed);
+    if TRACE_MARKER_QUEUED.compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed).is_ok()
+        && sender.try_send("native_trace_limit").is_err() {
+        TRACE_MARKER_QUEUED.store(false, Ordering::Relaxed);
+    }
+}
+
+fn drain_trace(receiver: std::sync::mpsc::Receiver<&'static str>, mut writer: impl std::io::Write) {
+    use std::sync::atomic::Ordering;
+    let mut marker_written = false;
+    while let Ok(stage) = receiver.recv() {
+        if stage == "native_trace_limit" {
+            if marker_written { continue; }
+            marker_written = true;
+        }
+        write_trace_record(&mut writer, stage);
+        if !marker_written && TRACE_LOST.load(Ordering::Relaxed) {
+            marker_written = true;
+            write_trace_record(&mut writer, "native_trace_limit");
+        }
+    }
+}
+
+pub(crate) fn initialize_trace() {
+    TRACE_SINK.get_or_init(|| {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(32);
+        let spawned = std::thread::Builder::new().name("cafe-trace".into()).spawn(move || {
+            drain_trace(receiver, std::io::stderr());
+        });
+        match spawned { Ok(_) => Some(sender), Err(_) => None }
+    });
+}
+
+pub(crate) fn trace_stage(stage: &'static str) {
+    use std::sync::atomic::Ordering;
+    if !matches!(stage,
+        "none" | "effect_received" | "encoder_preflight_begin" | "encoder_preflight_ok" |
+        "capture_begin" | "capture_started" | "first_frame_wait" | "first_frame_ready" |
+        "capture_failed" | "recorder_begin" | "recorder_ready" | "callback_first" |
+        "permit_failed" | "content_size_failed" | "content_resize" | "source_clock_failed" |
+        "surface_failed" | "texture_failed" | "texture_resize" | "gpu_map_begin" |
+        "gpu_map_ok" | "pool_failed" | "frame_close_failed" | "frame_admitted" |
+        "health_rejected" | "capture_stop_begin" | "capture_stop_end" | "native_trace_limit"
+    ) { return; }
+    let Some(Some(sender)) = TRACE_SINK.get() else { return; };
+    if stage == "native_trace_limit" { note_trace_loss(sender); return; }
+    if TRACE_EVENTS.fetch_update(Ordering::Relaxed, Ordering::Relaxed,
+        |used| if used < 255 { Some(used + 1) } else { None }).is_err() {
+        note_trace_loss(sender);
+        return;
+    }
+    if sender.try_send(stage).is_err() {
+        note_trace_loss(sender);
+    }
+}
+
 use crate::capsule_registry::Clock;
 use crate::capture_frame_pool::{OwnedFrame, PoolError, PoolLimits};
 use crate::capture_health::{BorderStatus, CaptureState, HealthError, HealthPolicy};
@@ -122,6 +200,10 @@ impl NativeCapture {
     }
 
     pub fn take_latest(&self) -> Option<OwnedFrame> {
+        None
+    }
+
+    pub fn content_size(&self) -> Option<(u32, u32)> {
         None
     }
 
@@ -238,6 +320,8 @@ struct SharedState {
     context: windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
     staging: windows::Win32::Graphics::Direct3D11::ID3D11Resource,
     last_observation: Clock,
+    content_baseline: Option<(u32, u32)>,
+    trace_first_callback: bool,
 }
 
 #[cfg(windows)]
@@ -321,11 +405,16 @@ fn handle_frame(
 
     let close_guard = FrameCloseGuard::new(frame);
     let mut state = lock_shared(shared);
+    let trace_first = state.trace_first_callback;
+    state.trace_first_callback = false;
+    if trace_first { trace_stage("callback_first"); }
     if device_removed_reason(&state.device) {
+        trace_stage("capture_failed");
         state.latest.take(); state.health.event(CaptureEvent::DeviceLost); return;
     }
 
     if let Err(error) = state.permit.check() {
+        trace_stage("permit_failed");
         report_identity_failure(&mut state.health, error);
         return;
     }
@@ -333,23 +422,30 @@ fn handle_frame(
     let size = match frame.ContentSize() {
         Ok(size) => size,
         Err(_) => {
+            trace_stage("content_size_failed");
             note_device_or_source(&mut state);
             return;
         }
     };
-    if size.Width != state.width as i32 || size.Height != state.height as i32 {
-        state.health.event(CaptureEvent::Resized);
-        return;
+    match crate::capture_health::admit_content_size((state.width, state.height), state.content_baseline, (size.Width, size.Height)) {
+        Some(content) => state.content_baseline = Some(content),
+        None => {
+            trace_stage("content_resize");
+            state.health.event(CaptureEvent::Resized);
+            return;
+        }
     }
 
     let duration = match frame.SystemRelativeTime() {
         Ok(span) => span.Duration,
         Err(_) => {
+            trace_stage("source_clock_failed");
             note_device_or_source(&mut state);
             return;
         }
     };
     if duration < 0 {
+        trace_stage("source_clock_failed");
         state.health.event(CaptureEvent::SourceFailed);
         return;
     }
@@ -358,6 +454,7 @@ fn handle_frame(
     let observed_at = match qpc_now() {
         Ok(now) => now,
         Err(_) => {
+            trace_stage("source_clock_failed");
             state.health.event(CaptureEvent::SourceFailed);
             return;
         }
@@ -366,6 +463,7 @@ fn handle_frame(
     let texture = match frame_surface_texture(frame) {
         Ok(texture) => texture,
         Err(_) => {
+            trace_stage("surface_failed");
             note_device_or_source(&mut state);
             return;
         }
@@ -376,16 +474,19 @@ fn handle_frame(
         texture.GetDesc(&mut desc);
     }
     if desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM || desc.SampleDesc.Count != 1 {
+        trace_stage("texture_failed");
         state.health.event(CaptureEvent::SourceFailed);
         return;
     }
     if desc.Width != state.width || desc.Height != state.height {
+        trace_stage("texture_resize");
         state.health.event(CaptureEvent::Resized);
         return;
     }
     let source: windows::Win32::Graphics::Direct3D11::ID3D11Resource = match texture.cast() {
         Ok(resource) => resource,
         Err(_) => {
+            trace_stage("texture_failed");
             state.health.event(CaptureEvent::SourceFailed);
             return;
         }
@@ -399,14 +500,17 @@ fn handle_frame(
         RowPitch: 0,
         DepthPitch: 0,
     };
+    if trace_first { trace_stage("gpu_map_begin"); }
     if unsafe {
         state.context.Map(&state.staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
     }
     .is_err()
     {
+        trace_stage("texture_failed");
         note_device_or_source(&mut state);
         return;
     }
+    if trace_first { trace_stage("gpu_map_ok"); }
     let map_guard = MapGuard {
         context: state.context.clone(),
         resource: state.staging.clone(),
@@ -417,11 +521,13 @@ fn handle_frame(
     let map_len = match row_pitch.checked_mul(height) {
         Some(len) => len,
         None => {
+            trace_stage("texture_failed");
             state.health.event(CaptureEvent::SourceFailed);
             return;
         }
     };
     if mapped.pData.is_null() || row_pitch == 0 || map_len == 0 {
+        trace_stage("texture_failed");
         state.health.event(CaptureEvent::SourceFailed);
         return;
     }
@@ -440,10 +546,12 @@ fn handle_frame(
     }) {
         Ok(owned) => owned,
         Err(PoolError::Exhausted) => {
+            trace_stage("pool_failed");
             state.health.event(CaptureEvent::Backpressure);
             return;
         }
         Err(_) => {
+            trace_stage("pool_failed");
             state.health.event(CaptureEvent::SourceFailed);
             return;
         }
@@ -452,11 +560,13 @@ fn handle_frame(
     // Release every borrowed native resource before admission or publish.
     drop(map_guard);
     if close_guard.finish().is_err() {
+        trace_stage("frame_close_failed");
         state.health.event(CaptureEvent::SourceFailed);
         return;
     }
 
     if let Err(error) = state.permit.check() {
+        trace_stage("permit_failed");
         report_identity_failure(&mut state.health, error);
         return;
     }
@@ -472,6 +582,9 @@ fn handle_frame(
             state.last_observation = observed_at;
         }
         state.latest = Some(owned);
+        if trace_first { trace_stage("frame_admitted"); }
+    } else {
+        trace_stage("health_rejected");
     }
 }
 
@@ -568,6 +681,7 @@ impl NativeCapture {
     /// Sample checked native geometry; existing start obtains its own fresh
     /// identity permit and checks the size again. A race rejects, never guesses.
     pub async fn start_observed(registry:&WindowRegistry,adapter:&mut NativeAdapter,handle:WindowHandle,generation:Clock,config:ObservedCaptureConfig)->Result<Self,CaptureError> {
+        initialize_trace();
         let observed={
             let _apartment=ApartmentGuard::initialize()?;
             let permit=registry.capture_permit(&handle,generation,adapter)?;
@@ -583,6 +697,7 @@ impl NativeCapture {
         generation: Clock,
         config: CaptureConfig,
     ) -> Result<Self, CaptureError> {
+        initialize_trace();
         use windows::Graphics::Capture::{Direct3D11CaptureFramePool, GraphicsCaptureSession};
         use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
         use windows::Graphics::DirectX::DirectXPixelFormat;
@@ -703,6 +818,8 @@ impl NativeCapture {
             context,
             staging,
             last_observation: observed,
+            content_baseline: None,
+            trace_first_callback: true,
         }));
 
         let frame_shared = std::sync::Arc::clone(&shared);
@@ -719,6 +836,7 @@ impl NativeCapture {
                 Err(_) => {
                     let mut state = lock_shared(&frame_shared);
                     if device_removed_reason(&state.device) {
+                        trace_stage("capture_failed");
                         state.health.event(CaptureEvent::DeviceLost);
                     }
                 }
@@ -771,9 +889,11 @@ impl NativeCapture {
     pub fn take_latest(&self) -> Option<OwnedFrame> {
         let mut state = lock_shared(&self.shared);
         if device_removed_reason(&state.device) {
+            trace_stage("capture_failed");
             state.latest.take(); state.health.event(CaptureEvent::DeviceLost);
         }
         if let Err(error) = state.permit.check() {
+            trace_stage("permit_failed");
             state.latest.take();
             report_identity_failure(&mut state.health, error);
             return None;
@@ -781,22 +901,32 @@ impl NativeCapture {
         state.latest.take()
     }
 
+    /// Observed content baseline inside the pooled capture texture, if a frame
+    /// has been admitted. Read-only accessor for full-window margin trimming.
+    pub fn content_size(&self) -> Option<(u32, u32)> {
+        lock_shared(&self.shared).content_baseline
+    }
+
     /// Rechecks the live permit, the registry identity, and health against an
     /// actual QPC timestamp. Never reports healthy from a stale cache.
     pub fn poll_state(&self, registry: &WindowRegistry) -> CaptureState {
         let mut state = lock_shared(&self.shared);
         if device_removed_reason(&state.device) {
+            trace_stage("capture_failed");
             state.latest.take(); state.health.event(CaptureEvent::DeviceLost);
         }
         if let Err(error) = state.permit.check() {
+            trace_stage("permit_failed");
             report_identity_failure(&mut state.health, error);
         }
         if let Err(error) = registry.resolve(&self.handle, self.generation) {
+            trace_stage("permit_failed");
             report_identity_failure(&mut state.health, error);
         }
         let now = match qpc_now() {
             Ok(now) => now,
             Err(_) => {
+                trace_stage("source_clock_failed");
                 state.health.event(CaptureEvent::SourceFailed);
                 state.last_observation
             }
@@ -819,6 +949,7 @@ impl NativeCapture {
     }
 
     fn shutdown(&mut self) -> Result<(), CaptureError> {
+        trace_stage("capture_stop_begin");
         let mut failed = false;
         let frame_token = self.frame_token.take();
         let closed_token = self.closed_token.take();
@@ -840,6 +971,7 @@ impl NativeCapture {
         let mut state = lock_shared(&self.shared);
         state.latest.take();
         state.health.event(CaptureEvent::Closed);
+        trace_stage("capture_stop_end");
         if failed { Err(CaptureError::Device) } else { Ok(()) }
     }
 }

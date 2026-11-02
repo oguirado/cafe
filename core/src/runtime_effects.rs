@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use crate::authority_journal::Journal;
 use crate::capture_pipeline::{CapturePipeline, FrameSource, PipelineError};
-use crate::ffmpeg_recorder::{RecorderCounters, RecordingReceipt, RecordingState};
+use crate::ffmpeg_recorder::{RecorderCounters, RecorderError, RecordingReceipt, RecordingState};
 use crate::windows_window_registry::WindowRegistry;
 
 /// Manager failures. Explicit per rejection; tick/stop/abort carry the
@@ -87,13 +87,43 @@ pub(crate) struct FeedStatus {
 pub(crate) struct CapsuleStatus {
     pub capsule_id: String,
     pub state: CapsuleState,
+    pub reason: Option<&'static str>,
     pub feeds: Vec<FeedStatus>,
 }
 
 /// One admitted batch: manager state plus its live pipelines.
 struct Capsule<S: FrameSource> {
     state: CapsuleState,
+    reason: Option<&'static str>,
     feeds: BTreeMap<String, CapturePipeline<S>>,
+}
+
+/// Closed public diagnostic vocabulary. Unknown adapter text never escapes to
+/// state, logs or MCP. Encoder session exhaustion needs native evidence; a
+/// generic failed encoder is deliberately not diagnosed as a session limit.
+pub(crate) fn recording_reason(code: &str) -> &'static str {
+    match code {
+        "encoder_session_limit" => "encoder_session_limit",
+        "capture_start_unavailable" => "capture_start_unavailable",
+        "window_unavailable" => "window_unavailable",
+        "window_titles_identical" => "window_titles_identical",
+        "folder_not_authorized" => "folder_not_authorized",
+        "disk_write_failed" => "disk_write_failed",
+        "encoder_unavailable" => "encoder_unavailable",
+        "capture_source_unavailable" => "capture_source_unavailable",
+        "recording_capacity_exceeded" => "recording_capacity_exceeded",
+        _ => "recording_interrupted",
+    }
+}
+
+fn pipeline_reason(error: PipelineError) -> &'static str {
+    match error {
+        PipelineError::Source => "capture_source_unavailable",
+        PipelineError::Recorder(RecorderError::WriteFailed | RecorderError::DiskFull) => "disk_write_failed",
+        PipelineError::Recorder(RecorderError::InvalidPath) => "folder_not_authorized",
+        PipelineError::Recorder(RecorderError::BlockedEncoder | RecorderError::Spawn) => "encoder_unavailable",
+        _ => "recording_interrupted",
+    }
 }
 
 /// Generic runtime manager over concrete pipelines.
@@ -183,6 +213,7 @@ impl<S: FrameSource> RuntimeEffects<S> {
             capsule_id,
             Capsule {
                 state: CapsuleState::Running,
+                reason: None,
                 feeds: map,
             },
         );
@@ -223,6 +254,7 @@ impl<S: FrameSource> RuntimeEffects<S> {
             }
             if let Some(err) = failed {
                 capsule.state = CapsuleState::Interrupted;
+                capsule.reason = Some(pipeline_reason(err));
                 for key in &keys {
                     if Some(key) == failed_key.as_ref() {
                         continue;
@@ -274,6 +306,9 @@ impl<S: FrameSource> RuntimeEffects<S> {
                 Err(err) => {
                     if let Some(capsule) = self.capsules.get_mut(capsule_id) {
                         capsule.state = CapsuleState::Interrupted;
+                        // Retain the original cause if this capsule had already
+                        // failed; a later stop must not replace it with Stopped.
+                        capsule.reason.get_or_insert(pipeline_reason(err));
                         for remaining in keys.iter().skip(index + 1) {
                             if let Some(pipeline) = capsule.feeds.get_mut(remaining) {
                                 let _ = pipeline.abort().await;
@@ -305,6 +340,7 @@ impl<S: FrameSource> RuntimeEffects<S> {
                 }
             }
             capsule.state = CapsuleState::Interrupted;
+            capsule.reason.get_or_insert("recording_interrupted");
         }
         match first_err {
             Some(err) => Err(EngineError::Abort(err)),
@@ -331,6 +367,7 @@ impl<S: FrameSource> RuntimeEffects<S> {
                 CapsuleStatus {
                     capsule_id: capsule_id.clone(),
                     state: capsule.state,
+                    reason: capsule.reason,
                     feeds,
                 }
             })
@@ -343,5 +380,30 @@ impl<S: FrameSource> RuntimeEffects<S> {
 async fn abort_incoming<S: FrameSource>(feeds: Vec<(String, CapturePipeline<S>)>) {
     for (_, mut pipeline) in feeds {
         let _ = pipeline.abort().await;
+    }
+}
+
+#[cfg(test)]
+mod reason_tests {
+    use super::*;
+
+    #[test]
+    fn public_recording_reasons_are_closed_and_have_no_adapter_payload() {
+        for code in ["encoder_session_limit", "capture_start_unavailable", "window_unavailable",
+            "window_titles_identical", "folder_not_authorized", "disk_write_failed"] {
+            assert_eq!(recording_reason(code), code);
+        }
+        for code in ["SYNTHETIC_PRIVATE_DATA", "disk_write_failed:SYNTHETIC_PRIVATE_DATA", ""] {
+            assert_eq!(recording_reason(code), "recording_interrupted");
+        }
+    }
+
+    #[test]
+    fn recorder_causes_do_not_invent_encoder_session_evidence() {
+        assert_eq!(pipeline_reason(PipelineError::Recorder(RecorderError::DiskFull)), "disk_write_failed");
+        assert_eq!(pipeline_reason(PipelineError::Recorder(RecorderError::WriteFailed)), "disk_write_failed");
+        assert_eq!(pipeline_reason(PipelineError::Recorder(RecorderError::BlockedEncoder)), "encoder_unavailable");
+        assert_eq!(pipeline_reason(PipelineError::Recorder(RecorderError::ChildExit)), "recording_interrupted");
+        assert_eq!(pipeline_reason(PipelineError::Source), "capture_source_unavailable");
     }
 }

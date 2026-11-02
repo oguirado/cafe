@@ -50,7 +50,7 @@ pub enum PoolError {
 /// and recycled; the hot path performs no heap allocation.
 pub struct FramePool {
     limits: PoolLimits,
-    free: Mutex<Vec<Vec<u8>>>,
+    free: Mutex<Vec<Vec<u8>>>, _reservation: FrameReservation,
 }
 
 impl FramePool {
@@ -68,7 +68,7 @@ impl FramePool {
             .slots
             .checked_mul(limits.max_frame_bytes)
             .ok_or(PoolError::ArithmeticOverflow)?;
-        let mut free = Vec::new();
+        let reservation = FrameReservation::new(limits.slots.checked_mul(limits.max_frame_bytes).ok_or(PoolError::ArithmeticOverflow)?)?; let mut free = Vec::new();
         free.try_reserve_exact(limits.slots).map_err(|_| PoolError::FrameTooLarge)?;
         for _ in 0..limits.slots {
             let mut slot = Vec::new();
@@ -78,7 +78,7 @@ impl FramePool {
         }
         Ok(Arc::new(FramePool {
             limits,
-            free: Mutex::new(free),
+            free: Mutex::new(free), _reservation: reservation,
         }))
     }
 
@@ -228,4 +228,40 @@ impl std::fmt::Debug for OwnedFrame {
             .field("source_time", &self.source_time)
             .finish()
     }
+}
+
+// Bound all live Rust frame-pool allocations, including leased frames retained
+// by the pipe writer. The reservation is released only with the final pool Arc.
+const LIVE_FRAME_BYTES_LIMIT: usize = 2 * 1024 * 1024 * 1024;
+static LIVE_FRAME_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+struct FrameReservation { bytes: usize }
+fn reserve_frame_bytes(counter: &std::sync::atomic::AtomicUsize, bytes: usize, limit: usize) -> Result<(), PoolError> {
+ use std::sync::atomic::Ordering;
+ if bytes==0 { return Err(PoolError::ZeroLimits); }
+ let mut previous=counter.load(Ordering::Acquire);
+ loop {
+  let next=previous.checked_add(bytes).ok_or(PoolError::ArithmeticOverflow)?;
+  if next>limit { return Err(PoolError::FrameTooLarge); }
+  match counter.compare_exchange_weak(previous,next,Ordering::AcqRel,Ordering::Acquire) { Ok(_)=>return Ok(()),Err(actual)=>previous=actual }
+ }
+}
+impl FrameReservation {
+ fn new(bytes: usize) -> Result<Self,PoolError> { reserve_frame_bytes(&LIVE_FRAME_BYTES,bytes,LIVE_FRAME_BYTES_LIMIT)?; Ok(Self{bytes}) }
+}
+impl Drop for FrameReservation {
+ fn drop(&mut self) { LIVE_FRAME_BYTES.fetch_sub(self.bytes,std::sync::atomic::Ordering::AcqRel); }
+}
+#[cfg(test)] mod buffer_admission_tests {
+ use super::*;use std::sync::atomic::{AtomicUsize,Ordering};
+ #[test]fn aggregate_bound_and_overflow_fail_before_allocation(){
+  let counter=AtomicUsize::new(0);assert_eq!(reserve_frame_bytes(&counter,0,8),Err(PoolError::ZeroLimits));assert_eq!(counter.load(Ordering::Acquire),0);
+  reserve_frame_bytes(&counter,5,8).unwrap();assert_eq!(reserve_frame_bytes(&counter,4,8),Err(PoolError::FrameTooLarge));assert_eq!(counter.load(Ordering::Acquire),5);reserve_frame_bytes(&counter,3,8).unwrap();assert_eq!(counter.load(Ordering::Acquire),8);
+  let counter=AtomicUsize::new(usize::MAX);assert_eq!(reserve_frame_bytes(&counter,1,usize::MAX),Err(PoolError::ArithmeticOverflow));assert_eq!(counter.load(Ordering::Acquire),usize::MAX);
+ }
+ #[test]fn simultaneous_reservations_cannot_overbook(){
+  let counter=AtomicUsize::new(0);let wins=std::thread::scope(|scope|{let a=scope.spawn(||reserve_frame_bytes(&counter,6,8).is_ok());let b=scope.spawn(||reserve_frame_bytes(&counter,6,8).is_ok());usize::from(a.join().unwrap())+usize::from(b.join().unwrap())});assert_eq!(wins,1);assert_eq!(counter.load(Ordering::Acquire),6);
+ }
+ #[test]fn pool_charge_survives_until_its_last_owned_frame(){
+  let pool=FramePool::new(PoolLimits{slots:1,max_frame_bytes:16,max_width:2,max_height:2}).unwrap();let frame=pool.copy_from(BorrowedFrame{data:&[0;16],width:2,height:2,source_stride:8,source_time:Clock(1)}).unwrap();let weak=Arc::downgrade(&pool);drop(pool);assert!(weak.upgrade().is_some());drop(frame);assert!(weak.upgrade().is_none());
+ }
 }

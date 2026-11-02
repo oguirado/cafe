@@ -111,6 +111,17 @@ def document_locations(root, path, data):
     return locations
 
 
+def encode_receipt(receipt):
+    def pair(k, v):
+        return C.canonical({k: v})[1:-2]
+    if not isinstance(receipt, dict) or set(receipt) != {'corpus', 'families', 'metadata', 'node_schema_sha256', 'profile_sha256', 'schema', 'sources', 'tools'} or not isinstance(receipt['sources'], dict):
+        raise C.ContractError('invalid_source_receipt')
+    head = C.canonical({k: receipt[k] for k in ('corpus', 'families', 'metadata', 'node_schema_sha256', 'profile_sha256', 'schema')})[:-2]
+    sources = b',\n'.join(pair(k, v) for k, v in sorted(receipt['sources'].items()))
+    tools = C.canonical({'tools': receipt['tools']})[1:]
+    return head + b',"sources":{' + (b'\n' + sources + b'\n' if sources else b'') + b'},' + tools
+
+
 def compose(root, inventory):
     profile = read_profile(root, inventory)
     reports = extraction_reports(root, profile, inventory)
@@ -178,7 +189,7 @@ def compose(root, inventory):
                'node_schema_sha256': C.sha(C.raw(root, C.NODE_SCHEMA)),
                'metadata': {path: C.sha(C.raw(root, path)) for path in ['Cargo.toml', 'catalogue/ownership.json', 'catalogue/protocol.json']}, 'sources': dict(sorted(source_hashes.items())),
                'tools': {path: C.sha(C.raw(root, path)) for path in C.TOOLS}, 'families': dict(sorted(families.items()))}
-    return {C.NODES: C.jsonl(nodes), C.SYMBOLS: C.jsonl(symbols), C.COORDS: C.jsonl(coordinates), C.ROUTES: routes, C.RECEIPT: C.canonical(receipt)}
+    return {C.NODES: C.jsonl(nodes), C.SYMBOLS: C.jsonl(symbols), C.COORDS: C.jsonl(coordinates), C.ROUTES: routes, C.RECEIPT: encode_receipt(receipt)}
 
 
 def enforce_admitted_symbols(root, products):

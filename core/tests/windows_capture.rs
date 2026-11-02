@@ -128,8 +128,15 @@ fn repeated_or_backward_source_clock_cannot_refresh_health() {
 }
 
 #[test]
+fn presentation_lead_within_bound_is_admitted() {
+    let mut h = health();
+    assert!(h.admit_frame(7,2,2,Clock(130_100),Clock(100)).is_ok());
+    assert_eq!(h.status(Clock(101)), CaptureState::Healthy);
+}
+
+#[test]
 fn future_stale_and_regressing_arrivals_never_report_healthy() {
-    for (source,arrival) in [(101,100),(90,100),(89,100)] {
+    for (source,arrival) in [(1_000_101,100),(90,100),(89,100)] {
         let mut h = health();
         assert_eq!(h.admit_frame(7,2,2,Clock(source),Clock(arrival)), Err(HealthError::StaleSource));
         assert_eq!(h.status(Clock(arrival)), CaptureState::Frozen);
@@ -170,6 +177,17 @@ fn closed_and_device_lost_are_terminal_despite_later_events() {
         assert_eq!(h.admit_frame(7,2,2,Clock(102),Clock(103)), Err(HealthError::Terminal));
         assert_eq!(h.status(Clock(103)), expected);
     }
+}
+
+#[test]
+fn content_smaller_than_item_is_a_baseline_and_only_later_change_is_a_resize() {
+    use capture_health::admit_content_size as admit;
+    assert_eq!(admit((870,488), None, (856,481)), Some((856,481)));
+    assert_eq!(admit((870,488), Some((856,481)), (856,481)), Some((856,481)));
+    assert_eq!(admit((870,488), Some((856,481)), (800,481)), None);
+    assert_eq!(admit((870,488), None, (871,488)), None);
+    assert_eq!(admit((870,488), None, (0,481)), None);
+    assert_eq!(admit((870,488), None, (856,-1)), None);
 }
 
 #[test]

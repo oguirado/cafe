@@ -119,7 +119,8 @@ impl ControlCommandSender {
 impl ControlEffects for ControlCommandSender {
     fn dispatch(&mut self,command:ControlDispatch<'_>,_journal:&mut Journal)->DispatchOutcome {
         let mut job=command.into_owned();
-        let capsule=match &job.action {ActorControlAction::SetFolder(_)=>None,ActorControlAction::StartRecording{capsule,..}|ActorControlAction::StopRecording(capsule)|ActorControlAction::SendToObs(capsule)=>Some(capsule)};
+        // Stopping is cleanup of an owned session, even after its window closes.
+        let capsule=match &job.action {ActorControlAction::SetFolder(_)|ActorControlAction::StopRecording(_)=>None,ActorControlAction::StartRecording{capsule,..}|ActorControlAction::SendToObs(capsule)=>Some(capsule)};
         if let Some(capsule)=capsule {
             if capsule.feeds.is_empty(){return DispatchOutcome::Interrupted;}
             let Ok(bindings)=self.bindings.read() else{return DispatchOutcome::Interrupted;};
@@ -147,12 +148,12 @@ pub(crate) struct ControlReceipt { schema: &'static str, op: ControlOperation, e
 pub(crate) struct ControlReply { pub request_id: String, pub state: ControlState, pub revision: Clock, pub error: Option<&'static str>, pub receipt: Option<ControlReceipt> }
 
 // Private Rust-only origin. No Deserialize/Serialize or external constructor.
-enum AdmissionPeer<'a> { Broker(&'a AuthenticatedBrokerPeer), Operator(Clock) }
+enum AdmissionPeer<'a> { Broker(&'a AuthenticatedBrokerPeer), Operator(Clock), Organizer(Clock) }
 impl AdmissionPeer<'_> {
-    fn identity(&self)->&str {match self {Self::Broker(peer)=>peer.identity(),Self::Operator(_)=>"operator"}}
-    fn epoch(&self)->u64 {match self {Self::Broker(peer)=>peer.epoch(),Self::Operator(epoch)=>epoch.0}}
-    fn is_live(&self)->bool {match self {Self::Broker(peer)=>peer.is_live(),Self::Operator(_)=>true}}
-    fn authorized(&self)->bool {match self {Self::Broker(peer)=>peer.identity()=="broker",Self::Operator(_)=>true}}
+    fn identity(&self)->&str {match self {Self::Broker(peer)=>peer.identity(),Self::Operator(_)=>"operator",Self::Organizer(_)=>"organizer"}}
+    fn epoch(&self)->u64 {match self {Self::Broker(peer)=>peer.epoch(),Self::Operator(epoch)|Self::Organizer(epoch)=>epoch.0}}
+    fn is_live(&self)->bool {match self {Self::Broker(peer)=>peer.is_live(),Self::Operator(_)|Self::Organizer(_)=>true}}
+    fn authorized(&self)->bool {match self {Self::Broker(peer)=>peer.identity()=="broker",Self::Operator(_)|Self::Organizer(_)=>true}}
 }
 struct Confirmation { fingerprint: String, identity: String, expires: Instant }
 struct Historic { intent: ControlIntentRecord, outcome: Option<(ControlResultRecord, Clock)>, in_flight: bool }
@@ -162,6 +163,8 @@ pub(crate) struct ControlRuntime<E: ControlEffects> {
     journal: Journal, epoch: Clock, effects: E, roots: Vec<PathBuf>,
     confirmations: BTreeMap<String, Confirmation>, history: BTreeMap<String, Historic>,
     selected_folder: Option<ApprovedFolder>, pending_folders: BTreeMap<String,ApprovedFolder>, poisoned: bool,
+    // Only a successful private native folder selection changes the root.
+    selected_root: Option<ApprovedFolder>, pending_roots: BTreeMap<String,ApprovedFolder>,
 }
 
 fn identifier(value: &str) -> bool { !value.is_empty() && value.len()<=96 && value.as_bytes()[0].is_ascii_alphanumeric() && value.bytes().all(|b|b.is_ascii_alphanumeric()||b"_.:-".contains(&b)) }
@@ -186,6 +189,24 @@ fn canonical_folder(path: &Path) -> Result<PathBuf, &'static str> {
     Ok(canonical)
 }
 
+// Keep every Windows ancestor non-renamable during mkdir. Revalidating a path
+// after mkdir alone would detect a junction swap only after the side effect.
+#[cfg(windows)]
+fn guard_folder_chain(path:&Path)->Result<Vec<std::fs::File>,&'static str>{
+    use std::os::windows::fs::{OpenOptionsExt,MetadataExt};
+    let mut guards=Vec::new();
+    for part in path.ancestors().collect::<Vec<_>>().into_iter().rev(){
+        let file=std::fs::OpenOptions::new().read(true).share_mode(0x1)
+            .custom_flags(0x0200_0000|0x0020_0000).open(part).map_err(|_|"folder_not_authorized")?;
+        let metadata=file.metadata().map_err(|_|"folder_not_authorized")?;
+        if !metadata.is_dir()||metadata.file_attributes()&0x400!=0{return Err("folder_not_authorized");}
+        guards.push(file);
+    }
+    Ok(guards)
+}
+#[cfg(not(windows))]
+fn guard_folder_chain(_path:&Path)->Result<Vec<std::fs::File>,&'static str>{Ok(Vec::new())}
+
 impl<E: ControlEffects> ControlRuntime<E> {
     pub(crate) fn open(journal: Journal, epoch: Clock, effects: E, allowed_roots: &[PathBuf]) -> Result<Self, &'static str> {
         if epoch.0==0 || journal.authority_epoch()!=epoch || allowed_roots.is_empty() { return Err("control_configuration_invalid"); }
@@ -209,7 +230,7 @@ impl<E: ControlEffects> ControlRuntime<E> {
         }
         // Folder plaintext and confirmation tokens are intentionally not restored.
         // An interrupted or previously active effect is never automatically redispatched.
-        Ok(Self{journal,epoch,effects,roots,confirmations:BTreeMap::new(),history,selected_folder:None,pending_folders:BTreeMap::new(),poisoned:false})
+        Ok(Self{journal,epoch,effects,roots,confirmations:BTreeMap::new(),history,selected_folder:None,pending_folders:BTreeMap::new(),poisoned:false,selected_root:None,pending_roots:BTreeMap::new()})
     }
     #[cfg(test)]
     pub(crate) fn expire_confirmations_for_test(&mut self) { for value in self.confirmations.values_mut() { value.expires=Instant::now(); } }
@@ -226,9 +247,17 @@ impl<E: ControlEffects> ControlRuntime<E> {
         if expected!=self.revision(){return self.reply(id,ControlState::Rejected,Some("stale_revision"));}
         let canonical=match canonical_folder(&path){Ok(value)=>value,Err(code)=>return self.reply(id,ControlState::Rejected,Some(code))};
         if !self.roots.contains(&canonical){if self.roots.len()>=16{return self.reply(id,ControlState::Blocked,Some("folder_selection_capacity"));}self.roots.push(canonical.clone());}
-        self.handle_operator(id,epoch,expected,ControlAction::SetFolder(canonical))
+        let root=ApprovedFolder{canonical:canonical.clone()};
+        let reply=self.handle_operator(id,epoch,expected,ControlAction::SetFolder(canonical));
+        match reply.state {
+            ControlState::Pending=>{self.pending_roots.insert(format!("ctl.{}",sha256_hex(id.as_bytes())),root);},
+            ControlState::Committed=>self.selected_root=Some(root),
+            _=>{},
+        }
+        reply
     }
     pub(crate) fn folder_configured(&self)->bool{self.selected_folder.is_some()}
+    pub(crate) fn organizer_root(&self)->Option<ApprovedFolder>{self.selected_root.clone()}
     pub(crate) fn known_control_request(&self,id:&str)->bool{self.history.contains_key(id)||self.journal.has_service_configuration(id)}
     pub(crate) fn accepts_configuration(&self)->bool{!self.poisoned}
     pub(crate) fn revision(&self) -> Clock { self.journal.records().last().map_or(Clock(0),|r|r.sequence) }
@@ -264,11 +293,11 @@ impl<E: ControlEffects> ControlRuntime<E> {
         self.confirm_at(identity,request_id,action,ttl,Instant::now())
     }
     fn confirm_at(&mut self, identity:&str, request_id:&str, action:ControlAction, ttl:Duration, now:Instant) -> Result<OperatorConfirmation,&'static str> {
-        if identity!="broker" {return Err("confirmation_denied");}
+        if !matches!(identity,"broker"|"organizer") {return Err("confirmation_denied");}
         self.issue_confirmation(identity,request_id,action,ttl,now)
     }
     fn issue_confirmation(&mut self, identity:&str, request_id:&str, action:ControlAction, ttl:Duration, now:Instant) -> Result<OperatorConfirmation,&'static str> {
-        if self.poisoned || !matches!(identity,"broker"|"operator") || !identifier(request_id) || ttl.is_zero() || ttl>MAX_CONFIRMATION_TTL || self.known_control_request(request_id) { return Err("confirmation_denied"); }
+        if self.poisoned || !matches!(identity,"broker"|"operator"|"organizer") || !identifier(request_id) || ttl.is_zero() || ttl>MAX_CONFIRMATION_TTL || self.known_control_request(request_id) { return Err("confirmation_denied"); }
         let normalized=self.normalized(&action)?;
         self.confirmations.retain(|_,c|c.expires>now);
         if self.confirmations.len()>=MAX_PENDING_CONFIRMATIONS { return Err("confirmation_capacity"); }
@@ -306,6 +335,56 @@ impl<E: ControlEffects> ControlRuntime<E> {
         self.handle_admitted(AdmissionPeer::Operator(epoch),&wire,now)
     }
     pub(crate) fn handle(&mut self, peer:&AuthenticatedBrokerPeer, value:&Value) -> ControlReply { self.handle_at(peer,value,Instant::now()) }
+    /// Trusted native-plan path only. Remote schemas cannot choose this origin,
+    /// issue approvals, change configuration or broaden the confirmed scope.
+    pub(crate) fn handle_organizer(&mut self,id:&str,epoch:Clock,action:ControlAction)->ControlReply {
+        if epoch!=self.epoch || !matches!(&action,ControlAction::StartRecording(_)|ControlAction::StopRecording(_)) {
+            return self.reply(id,ControlState::Rejected,Some("confirmation_denied"));
+        }
+        let wire=match self.confirm_for_operator("organizer",id,action,MAX_CONFIRMATION_TTL) {
+            Ok(approval)=>approval.into_private_wire(),
+            Err(code)=>return self.reply(id,ControlState::Rejected,Some(code)),
+        };
+        self.handle_admitted(AdmissionPeer::Organizer(epoch),&wire,Instant::now())
+    }
+
+    /// After one native click, journal the folder intent before creating the
+    /// single child directory. The picker root is frozen across proposal/click.
+    /// Existing canonical-root/reparse checks run before and after creation.
+    pub(crate) fn select_organizer_subfolder(&mut self,id:&str,root:&ApprovedFolder,name:&str)->Result<(),&'static str> {
+        let bytes=name.as_bytes();
+        if bytes.is_empty() || bytes.len()>64 || !bytes[0].is_ascii_alphanumeric()
+            || !bytes.iter().all(|byte|byte.is_ascii_alphanumeric()||b" _-".contains(byte)) {return Err("folder_name_invalid");}
+        if self.poisoned || !identifier(id) || self.known_control_request(id) {return Err("unavailable");}
+        if self.selected_root.as_ref().is_none_or(|selected|selected.path()!=root.path()) {return Err("folder_not_authorized");}
+        let parent=root.revalidate()?.to_path_buf();
+        let child=parent.join(name);
+        let effect_id=format!("ctl.{}",sha256_hex(id.as_bytes()));
+        let args=canonical_bytes(&json!({"root_sha256":sha256_hex(parent.to_string_lossy().as_bytes()),"folder_name":name})).map_err(|_|"unavailable")?;
+        let record=ControlIntentRecord{request_id:id.into(),identity_sha256:sha256_hex(b"organizer"),operation:ControlOperation::SetFolder,args_sha256:sha256_hex(&args),capsule_id:None,expected_revision:self.revision(),effect_id:effect_id.clone()};
+        if self.journal.append_confirmed_intent(record.clone()).is_err(){self.poisoned=true;return Err("disk_write_failed");}
+        self.history.insert(id.into(),Historic{intent:record,outcome:None,in_flight:true});
+        let admitted=(||{
+            let _guards=guard_folder_chain(&parent)?;
+            root.revalidate()?;
+            match std::fs::symlink_metadata(&child) {
+                Ok(_)=>{},
+                Err(error) if error.kind()==std::io::ErrorKind::NotFound=>std::fs::create_dir(&child).map_err(|_|"disk_write_failed")?,
+                Err(_)=>return Err("folder_not_authorized"),
+            }
+            let canonical=canonical_folder(&child)?;
+            if canonical.parent()!=Some(parent.as_path()) || root.revalidate()?!=parent {return Err("folder_not_authorized");}
+            Ok(ApprovedFolder{canonical})
+        })();
+        match admitted {
+            Ok(folder)=>{
+                self.pending_folders.insert(effect_id.clone(),folder);
+                let reply=self.complete_from_actor(&effect_id,ActorCompletion::Applied);
+                if reply.state==ControlState::Committed {Ok(())} else {Err("disk_write_failed")}
+            },
+            Err(code)=>{let _=self.complete_from_actor(&effect_id,ActorCompletion::Interrupted);Err(code)},
+        }
+    }
     fn handle_at(&mut self, peer:&AuthenticatedBrokerPeer, value:&Value, now:Instant) -> ControlReply {
         self.handle_admitted(AdmissionPeer::Broker(peer),value,now)
     }
@@ -376,8 +455,10 @@ impl<E: ControlEffects> ControlRuntime<E> {
         let receipt=match self.journal.append_confirmed_result(result.clone()) { Ok(receipt)=>receipt,Err(_)=>{self.poisoned=true;return self.reply(&id,ControlState::Interrupted,Some("result_not_durable"));} };
         let prior=self.history.get_mut(&id).expect("durable intent invariant");prior.outcome=Some((result,receipt.sequence()));prior.in_flight=false;
         let folder=self.pending_folders.remove(effect_id);
+        let root=self.pending_roots.remove(effect_id);
         if !applied { return self.reply(&id,ControlState::Interrupted,Some("effect_interrupted")); }
         if folder.is_some() { self.selected_folder=folder; }
+        if root.is_some() { self.selected_root=root; }
         ControlReply{request_id:id,state:ControlState::Committed,revision:receipt.sequence(),error:None,receipt:Some(ControlReceipt{schema:"cafe.control_receipt.v1",op:operation,effect_id:effect_id.into()})}
     }
 }
@@ -410,6 +491,16 @@ impl ActorControlRequest {
         let response=runtime.handle(&self.peer,&self.intent);
         let _=self.reply.try_send(serde_json::to_value(response).unwrap_or_else(|_|json!({"error":"control_actor_unavailable"})));
     }
+    /// The broker can only submit the closed proposal/query schema. A revoked
+    /// or timed-out peer cannot create even a pending plan in the authority.
+    pub(crate) fn execute_with_organizer<E:ControlEffects,F>(self,runtime:&mut ControlRuntime<E>,organizer:F)
+    where F:FnOnce(&mut ControlRuntime<E>,&Value,&AuthenticatedBrokerPeer)->Value {
+        if self.intent.get("schema").and_then(Value::as_str)!=Some("cafe.organizer.v1") {self.execute_on(runtime);return;}
+        let response=if self.peer.is_live() && self.peer.identity()=="broker" && self.peer.epoch()==runtime.epoch.0 {
+            organizer(runtime,&self.intent,&self.peer)
+        } else {json!({"request_id":"invalid","error":"unavailable","data":null})};
+        let _=self.reply.try_send(response);
+    }
 }
 /// Used by the offloaded broker callback; waits only within the explicit admission budget.
 pub(crate) struct ControlActorClient { sender:tokio::sync::mpsc::Sender<ActorControlRequest>, wait:Duration }
@@ -431,5 +522,75 @@ impl ControlHandler for ControlActorClient {
             Ok(response) if Instant::now()<deadline=>response,
             _=>{active.store(false,Ordering::Release);json!({"error":"control_actor_reply_unavailable"})},
         }
+    }
+}
+
+#[cfg(test)]
+mod organizer_authority_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize,Ordering};
+    static NEXT:AtomicUsize=AtomicUsize::new(0);
+    struct Temporary(PathBuf);
+    impl Temporary {
+        fn new()->Self{let path=std::env::temp_dir().join(format!("cafe-organizer-control-{}-{}",std::process::id(),NEXT.fetch_add(1,Ordering::Relaxed)));std::fs::create_dir(&path).unwrap();Self(path)}
+    }
+    impl Drop for Temporary{fn drop(&mut self){let _=std::fs::remove_dir_all(&self.0);}}
+    struct Immediate;
+    impl ControlEffects for Immediate{fn dispatch(&mut self,command:ControlDispatch<'_>,_:&mut Journal)->DispatchOutcome{if matches!(command,ControlDispatch::SetFolder{..}){DispatchOutcome::Applied}else{DispatchOutcome::Interrupted}}}
+    fn immediate(root:&Path)->ControlRuntime<Immediate>{ControlRuntime::open(Journal::open(&root.join("authority.journal"),"synthetic",Clock(77)).unwrap(),Clock(77),Immediate,&[root.to_path_buf()]).unwrap()}
+
+    #[test]
+    fn organizer_folder_requires_native_root_and_retains_it_after_child_selection(){
+        let temp=Temporary::new();let mut runtime=immediate(&temp.0);
+        assert!(runtime.organizer_root().is_none());
+        let reply=runtime.handle_operator_folder("native-root",Clock(77),runtime.revision(),temp.0.clone());assert_eq!(reply.state,ControlState::Committed);
+        let root=runtime.organizer_root().unwrap();
+        for name in ["../escape","a/b","a\\b","C:escape","..",""]{assert_eq!(runtime.select_organizer_subfolder("bad-folder",&root,name),Err("folder_name_invalid"));}
+        runtime.select_organizer_subfolder("organizer.synthetic.folder",&root,"Session 1").unwrap();
+        assert!(temp.0.join("Session 1").is_dir());assert_eq!(runtime.organizer_root().unwrap().path(),root.path());
+        assert_eq!(runtime.selected_folder.as_ref().unwrap().path(),root.path().join("Session 1"));
+        let records=runtime.journal.records();let intent=&records[records.len()-2];let outcome=&records[records.len()-1];
+        assert_eq!(intent.kind,"confirmed_control_intent");assert_eq!(intent.payload["identity_sha256"],sha256_hex(b"organizer"));
+        assert_eq!(outcome.payload["state"],"committed");
+        let wire=serde_json::to_string(&records).unwrap();assert!(!wire.contains(&temp.0.to_string_lossy().to_string()));
+        assert!(!wire.contains("Session 1"));
+    }
+    #[test]
+    fn changed_root_or_non_directory_child_never_gets_authorized(){
+        let temp=Temporary::new();let other=Temporary::new();let mut runtime=immediate(&temp.0);
+        runtime.handle_operator_folder("root-one",Clock(77),runtime.revision(),temp.0.clone());let frozen=runtime.organizer_root().unwrap();
+        std::fs::write(temp.0.join("Occupied"),b"synthetic").unwrap();
+        assert_eq!(runtime.select_organizer_subfolder("organizer.file",&frozen,"Occupied"),Err("folder_not_authorized"));
+        runtime.handle_operator_folder("root-two",Clock(77),runtime.revision(),other.0.clone());
+        assert_eq!(runtime.select_organizer_subfolder("organizer.changed",&frozen,"Session"),Err("folder_not_authorized"));
+        assert!(!temp.0.join("Session").exists());assert!(!other.0.join("Session").exists());
+    }
+    #[test]
+    fn folder_intent_flush_failure_precedes_directory_creation(){
+        let temp=Temporary::new();let mut runtime=immediate(&temp.0);runtime.handle_operator_folder("root",Clock(77),runtime.revision(),temp.0.clone());let root=runtime.organizer_root().unwrap();
+        runtime.journal.inject_durability_fault(crate::authority_journal::DurabilityFault::File);
+        assert_eq!(runtime.select_organizer_subfolder("organizer.flush",&root,"NoEffect"),Err("disk_write_failed"));assert!(!temp.0.join("NoEffect").exists());
+    }
+    #[test]
+    fn organizer_scope_cannot_select_obs_or_configuration(){
+        let temp=Temporary::new();let mut runtime=immediate(&temp.0);
+        for action in [ControlAction::SendToObs("synthetic".into()),ControlAction::SetFolder(temp.0.clone())]{
+            assert_eq!(runtime.handle_organizer("organizer.denied",Clock(77),action).error,Some("confirmation_denied"));
+        }
+        assert!(runtime.journal.records().is_empty());
+    }
+    #[test]
+    fn stopped_window_needs_no_live_binding_and_interrupted_outcome_stays_durable(){
+        let temp=Temporary::new();let path=temp.0.join("authority.journal");let mut journal=Journal::open(&path,"synthetic",Clock(77)).unwrap();
+        journal.append_control("create",crate::capsule_registry::Envelope{schema:crate::capsule_registry::SCHEMA.into(),kind:"intent".into(),request_id:"create".into(),authority_epoch:Clock(77),expected_revision:Clock(0),body:crate::capsule_registry::Command::CreateCapsule{capsule_id:"synthetic".into(),person_label:"slot-1".into(),generation:Clock(1)}}).unwrap();
+        let (sender,mut receiver)=tokio::sync::mpsc::channel(2);let bindings=Arc::new(RwLock::new(Vec::new()));
+        let mut runtime=ControlRuntime::open(journal,Clock(77),ControlCommandSender::new(sender,bindings.clone()),&[temp.0.clone()]).unwrap();
+        let reply=runtime.handle_organizer("organizer.stop",Clock(77),ControlAction::StopRecording("synthetic".into()));assert_eq!(reply.state,ControlState::Pending);
+        let job=receiver.try_recv().unwrap();assert!(job.window_bindings.is_empty());
+        let outcome=runtime.complete_from_actor(&job.effect_id,ActorCompletion::Interrupted);assert_eq!(outcome.state,ControlState::Interrupted);assert!(outcome.receipt.is_none());
+        let records=runtime.journal.records();assert_eq!(records[1].payload["identity_sha256"],sha256_hex(b"organizer"));assert_eq!(records[2].payload["state"],"interrupted");
+        drop(runtime);
+        let (sender,mut receiver)=tokio::sync::mpsc::channel(2);let reopened=Journal::open(&path,"synthetic",Clock(77)).unwrap();let mut runtime=ControlRuntime::open(reopened,Clock(77),ControlCommandSender::new(sender,bindings),&[temp.0.clone()]).unwrap();
+        assert_ne!(runtime.handle_organizer("organizer.stop",Clock(77),ControlAction::StopRecording("synthetic".into())).state,ControlState::Pending);assert!(receiver.try_recv().is_err());
     }
 }

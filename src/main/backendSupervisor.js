@@ -77,6 +77,8 @@
  * @property {number} [maxLineBytes] Default 4096.
  * @property {number} [maxQueueBytes] Default 16384, must be >= maxLineBytes + 1.
  * @property {(chunk: Uint8Array) => void} [onStderr] Optional stderr observer.
+ * @property {(status: SupervisorStatus) => void} [onStatus] Host-only sanitized trace source.
+ * @property {(op: unknown) => void} [onIntent] Host-only accepted intent observer.
  */
 
 const CONTROL_SCHEMA = 'cafe.operator.v1';
@@ -247,6 +249,7 @@ function createBackendSupervisor(options) {
     throw new Error('createBackendSupervisor requires onStderr to be a function');
   }
   const onStderr = options.onStderr;
+  if (options.onStatus !== undefined && typeof options.onStatus !== 'function' || options.onIntent !== undefined && typeof options.onIntent !== 'function') throw new Error('invalid host trace observer');
 
   /** @type {'starting'|'available'|'unavailable'} */
   let availability = 'starting';
@@ -295,15 +298,25 @@ function createBackendSupervisor(options) {
     return projection;
   }
 
+  /** Main keeps source bindings; the renderer's projection never contains them.
+   * @param {SupervisorStatus} status @returns {SupervisorStatus} */
+  function rendererStatus(status) {
+    const copy = /** @type {SupervisorStatus} */ (deepCloneJson(status));
+    if (isPlainObject(copy.state)) delete /** @type {Record<string, unknown>} */ (copy.state).preview_sources;
+    deepFreeze(copy);
+    return copy;
+  }
+
   /**
    * @returns {void}
    */
   function notify() {
     const projection = getStatus();
+    try { options.onStatus?.(projection); } catch {}
     const current = Array.from(listeners);
     for (const listener of current) {
       try {
-        listener(projection);
+        listener(rendererStatus(projection));
       } catch {
         // A failing listener must not break other subscribers.
       }
@@ -356,7 +369,7 @@ function createBackendSupervisor(options) {
   function handle(caller, method, payload) {
     authorize(caller);
     if (method === 'getSnapshot') {
-      return getStatus();
+      return rendererStatus(getStatus());
     }
     if (method === 'submitIntent') {
       return submitIntent(payload);
@@ -427,6 +440,7 @@ function createBackendSupervisor(options) {
     if (waitingDrain) {
       writeQueue.push({ text: line, bytes: newBytes });
       writeQueueBytes += newBytes;
+      try { options.onIntent?.(/** @type {Record<string, unknown>} */ (envelope.body).op); } catch {}
       return { queued: true };
     }
     let accepted = true;
@@ -441,6 +455,7 @@ function createBackendSupervisor(options) {
       // never resend it.
       waitingDrain = true;
     }
+    try { options.onIntent?.(/** @type {Record<string, unknown>} */ (envelope.body).op); } catch {}
     return { queued: true };
   }
 
@@ -456,7 +471,7 @@ function createBackendSupervisor(options) {
     }
     listeners.add(listener);
     try {
-      listener(getStatus());
+      listener(rendererStatus(getStatus()));
     } catch {
       // Immediate-emission failures must not break subscribe.
     }

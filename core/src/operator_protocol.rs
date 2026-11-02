@@ -34,6 +34,9 @@ pub(crate) enum OperatorBody {
     ConfigureFfmpeg{path:String,sha256:String},
     ConfigureObs{port:u16,password:PasswordChoice},
     ConfigureTwitch{channel:String},
+    OrganizerPlanConfirm{plan_id:String},
+    OrganizerPlanReject{plan_id:String},
+    SetAutoAnchor{enabled:bool},
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -54,6 +57,8 @@ impl OperatorBody {
         Self::ConfigureFfmpeg{path,sha256}=>bounded(path,4096)&&sha256.len()==64&&sha256.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b)),
         Self::ConfigureObs{port,..}=>*port>0,
         Self::ConfigureTwitch{channel}=>!channel.is_empty()&&channel.len()<=25&&channel.bytes().all(|b|b.is_ascii_lowercase()||b.is_ascii_digit()||b==b'_'),
+        Self::OrganizerPlanConfirm{plan_id}|Self::OrganizerPlanReject{plan_id}=>identifier(plan_id),
+        Self::SetAutoAnchor{..}=>true,
     }}
 }
 /// Only closed syntax/length is checked here. Main MUST check epoch/revision,

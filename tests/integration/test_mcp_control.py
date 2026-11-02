@@ -283,9 +283,9 @@ class ControlTest(unittest.TestCase):
         server = mcp.Server(self.root)
         initialize(server)
         tools = server.handle(request('tools/list'))['result']['tools']
-        self.assertEqual(len(tools), 6)
-        self.assertEqual({item['name'] for item in tools},
-                         set(mcp._TOOL_ARGUMENTS))
+        self.assertEqual(len(tools), 15)
+        names = {item['name'] for item in tools}
+        self.assertTrue(set(ctl.CONTROL_TOOLS).isdisjoint(names))
         good = {'select_capsule': {'capsule_id': CAPSULE},
                 'start_recording': {'request_id': 'req-1'}}
         for name, args in good.items():
@@ -298,7 +298,7 @@ class ControlTest(unittest.TestCase):
         server = mcp.Server(self.root, control=self.plane())
         initialize(server)
         tools = server.handle(request('tools/list'))['result']['tools']
-        self.assertEqual(len(tools), 10)
+        self.assertEqual(len(tools), 19)
         by_name = {item['name']: item for item in tools}
         for name in ctl.CONTROL_TOOLS:
             with self.subTest(name=name):

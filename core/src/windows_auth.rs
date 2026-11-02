@@ -30,6 +30,21 @@ pub(crate) fn owner_sid()->Result<String,String>{
     unsafe{text.to_string()}.map_err(|_|"rendezvous_owner_failed".into())
 }
 
+/// Another server instance of an existing rendezvous, for the control broker's next MCP client.
+/// Never the first instance, so it cannot be mistaken for a fresh, unowned name.
+pub(crate) fn next_instance(nonce:&str)->Result<NamedPipeServer,String>{
+    let sid=owner_sid()?;
+    let sddl:Vec<u16>=format!("O:{sid}D:P(A;OICI;FA;;;{sid})").encode_utf16().chain(Some(0)).collect();
+    let mut descriptor=PSECURITY_DESCRIPTOR::default();
+    unsafe{ConvertStringSecurityDescriptorToSecurityDescriptorW(PCWSTR(sddl.as_ptr()),1,&mut descriptor,None)}.map_err(|_|"rendezvous_acl_failed")?;
+    let _allocation=Allocation(descriptor.0);
+    let mut attrs=SECURITY_ATTRIBUTES{nLength:size_of::<SECURITY_ATTRIBUTES>() as u32,lpSecurityDescriptor:descriptor.0,bInheritHandle:false.into()};
+    let address=format!("{0}{0}.{0}pipe{0}cafe-broker-{nonce}",'\\');
+    // SAFETY: descriptor/attributes outlive CreateNamedPipeW inside Tokio.
+    unsafe{ServerOptions::new().first_pipe_instance(false).reject_remote_clients(true).max_instances(4)
+        .create_with_security_attributes_raw(&address,(&mut attrs as *mut SECURITY_ATTRIBUTES).cast())}
+        .map_err(|_|"rendezvous_bind_failed".to_owned())
+}
 pub(crate) fn rendezvous(dir:&Path,nonce:&str)->Result<NamedPipeServer,String>{
     let sid=owner_sid()?;
     // Protected DACL: current account only, full access, inherited by metadata.
@@ -47,7 +62,7 @@ pub(crate) fn rendezvous(dir:&Path,nonce:&str)->Result<NamedPipeServer,String>{
         let address=format!("{0}{0}.{0}pipe{0}{name}",'\\');
         // SAFETY: descriptor/attributes outlive CreateNamedPipeW inside Tokio.
         // First instance prevents impersonating an already-created server name.
-        let pipe=unsafe{ServerOptions::new().first_pipe_instance(true).reject_remote_clients(true).max_instances(1)
+        let pipe=unsafe{ServerOptions::new().first_pipe_instance(true).reject_remote_clients(true).max_instances(4)
             .create_with_security_attributes_raw(&address,(&mut attrs as *mut SECURITY_ATTRIBUTES).cast())}
             .map_err(|_|"rendezvous_bind_failed")?;
         let metadata=serde_json::json!({"schema":"cafe.rendezvous.endpoint.v1","pipe_name":name,"authority_pid":std::process::id()});

@@ -97,3 +97,12 @@ fn failed_source_abort_still_interrupts_its_own_recorder(){runtime().block_on(as
  assert!(matches!(pipeline.abort().await,Err(capture_pipeline::PipelineError::Source)));assert_eq!(pipeline.recorder_state(),RecordingState::Interrupted);
  assert!(pipeline.stop(&mut journal).await.is_err());assert_eq!(journal.records().len(),1);assert!(!tmp.0.join("segment.mkv").exists());
 });}
+
+#[test]
+fn nonblocking_tick_never_claims_queued_bytes_before_ack(){runtime().block_on(async{
+ let tmp=Scratch::new();let mut journal=Journal::open(&tmp.0.join("authority.journal"),"synthetic",Clock(1)).unwrap();let now=Instant::now();
+ let recorder=Recorder::test_with_child("drain",&tmp.0,plan(),profile(),&mut journal,now).unwrap();let mut pipeline=CapturePipeline::new_live(source(CaptureState::Healthy,true,false),recorder);let registry=WindowRegistry::new(Clock(1));
+ assert_eq!(pipeline.tick(&registry,now).await.unwrap(),Tick::Idle);assert_eq!(pipeline.recorder_counters().written_frames,0);assert_eq!(journal.records().len(),1);
+ tokio::time::timeout(Duration::from_secs(1),async{loop{let _=pipeline.tick(&registry,now).await.unwrap();if pipeline.recorder_counters().written_frames==1{break;}tokio::task::yield_now().await;}}).await.expect("confirmed writer should finish");
+ assert_eq!(pipeline.recorder_counters().written_bytes,1024);pipeline.abort().await.unwrap();assert!(pipeline.stop(&mut journal).await.is_err());assert_eq!(journal.records().len(),1);assert!(!tmp.0.join("segment.mkv").exists());
+});}

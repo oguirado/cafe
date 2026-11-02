@@ -248,22 +248,39 @@ impl BrokerAuthority {
             uds
         };
         #[cfg(windows)]
-        let mut pipe=windows_auth::rendezvous(dir,&hex(&entropy()?))?;
+        let pipe_nonce=hex(&entropy()?);
+        #[cfg(windows)]
+        let mut pipe=windows_auth::rendezvous(dir,&pipe_nonce)?;
         let key=Arc::new(Mutex::new(Some(secret)));let effects=Arc::new(AtomicU64::new(0));
         let live=Arc::new(AtomicBool::new(true));let control_mode=control.is_some();
         let bootstrap=tokio::spawn(async move{
             let value=json!({"schema":"cafe.rendezvous.v1","host":"127.0.0.1","port":port,"epoch":epoch.to_string(),"identity":"broker","secret":hex(&secret)});
             #[cfg(unix)]
             {
-                let accepted=if control_mode{uds.accept().await.ok()}else{tokio::time::timeout(Duration::from_secs(30),uds.accept()).await.ok().and_then(Result::ok)};
-                if let Some((mut stream,_))=accepted {let _=write_frame(&mut stream,&value).await;}
+                if control_mode{
+                    // Each new MCP client process fetches its own ticket during this authority's lifetime.
+                    while let Ok((mut stream,_))=uds.accept().await{let _=write_frame(&mut stream,&value).await;}
+                }else{
+                    let accepted=tokio::time::timeout(Duration::from_secs(30),uds.accept()).await.ok().and_then(Result::ok);
+                    if let Some((mut stream,_))=accepted {let _=write_frame(&mut stream,&value).await;}
+                }
             }
             #[cfg(windows)]
             {
-                let connected=if control_mode{pipe.connect().await.is_ok()}else{matches!(tokio::time::timeout(Duration::from_secs(30),pipe.connect()).await,Ok(Ok(())))};
-                if connected && write_frame(&mut pipe,&value).await.is_ok(){
-                    // Keep the server handle alive until the receiver has read.
-                    let _=read_frame(&mut pipe).await;
+                if control_mode{
+                    // Each new MCP client process fetches its own ticket during this authority's lifetime.
+                    while pipe.connect().await.is_ok(){
+                        // The next instance listens before this client is served, so a concurrent client is never refused.
+                        let Ok(next)=windows_auth::next_instance(&pipe_nonce) else{break;};
+                        if write_frame(&mut pipe,&value).await.is_ok(){let _=read_frame(&mut pipe).await;}
+                        pipe=next;
+                    }
+                }else{
+                    let connected=matches!(tokio::time::timeout(Duration::from_secs(30),pipe.connect()).await,Ok(Ok(())));
+                    if connected && write_frame(&mut pipe,&value).await.is_ok(){
+                        // Keep the server handle alive until the receiver has read.
+                        let _=read_frame(&mut pipe).await;
+                    }
                 }
             }
             secret.fill(0);
@@ -278,11 +295,14 @@ impl BrokerAuthority {
                 let mut key_guard=key.lock().await;
                 let Some(secret)=key_guard.as_ref() else{continue;};let input=format!("cafe.broker.auth.v1\nbroker\n{epoch}\n{nonce}");let expected=hmac_sha256(secret,input.as_bytes());
                 if !equal(&expected,&received){continue;}
-                let Some(mut secret)=key_guard.take() else{continue;};secret.fill(0);drop(key_guard);
+                // One-shot brokers burn the secret; the control broker serves one short
+                // connection per MCP call, so it keeps the key for this authority's lifetime.
+                if control.is_none(){let Some(mut secret)=key_guard.take() else{continue;};secret.fill(0);}drop(key_guard);
                 if write_frame(&mut stream,&json!({"authenticated":true})).await.is_err(){continue;}
                 let peer=AuthenticatedBrokerPeer{epoch,live:serving_live.clone(),connection_live:Arc::new(AtomicBool::new(true)),request_live:None,request_deadline:None};
                 if let Some(handler)=control.as_ref(){
-                    serve_control_connection(stream,peer,handler.clone()).await;
+                    // Connections are served one at a time: a stalled client cannot hold the broker.
+                    let _=tokio::time::timeout(Duration::from_secs(15),serve_control_connection(stream,peer,handler.clone())).await;
                     continue;
                 }
                 loop {

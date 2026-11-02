@@ -147,3 +147,9 @@ check, not a Windows PE or native recording acceptance claim. Native packaged
 Windows verification remains pending the operator's PC run.
 
 Authored entry and wrapper: [main.js](../../ui/src/main.js), [App.vue](../../ui/src/App.vue), [cafe.css](../../ui/src/cafe.css). The SFC body is outside the current code-extractor profile and is not claimed as indexed. The privileged renderer resource loader is covered by the explicit JavaScript source profile.
+
+## Capsule workspace trial
+
+The presentation follows the MetaViewer wall/capsule reference at sealed commit `a68bd259b4974c4d8d4492250e5165e0af560011` [CITED: read-only reference snapshot]. The new Cafe adapters are `ui/src/capsule/topbar.vue`, `ui/src/capsule/control.vue`, `ui/src/capsule/grid.vue` and `ui/src/capsule/registry.js`; they use the existing Cafe design tokens and system fonts [CITED: source files]. No MetaViewer process, checkout, settings or native window parenting is reused [CITED: adapter source].
+
+Capsules and recording state come from the existing controller. Slot labels are presentation aliases for the component lifetime; effects retain the authority-issued capsule identity. Pairing uses the original form and controller. Preview transport remains pending; no frame is simulated [CITED: ui/src/App.vue]. The original workspace remains available under Diagnostics [CITED: ui/src/App.vue].

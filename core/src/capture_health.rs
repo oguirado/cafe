@@ -1,6 +1,10 @@
 //! Admission after an owned copy. Policy clocks share one monotonic domain.
 use crate::capsule_registry::Clock;
 
+/// WGC stamps a frame with its expected presentation time, measured up to 13 ms
+/// ahead of QPC on real windows. Lead within this bound (100-ns ticks, 100 ms) is not a future frame.
+const MAX_SOURCE_LEAD: Clock = Clock(1_000_000);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HealthPolicy {
     pub stall_budget: Clock,
@@ -104,8 +108,8 @@ impl CaptureHealth {
             self.state = CaptureState::Frozen;
             return Err(HealthError::Frozen);
         }
-        if source_time.0 > observed_at.0 ||
-            observed_at.0 - source_time.0 >= self.policy.stall_budget.0 {
+        if source_time.0 > observed_at.0.saturating_add(MAX_SOURCE_LEAD.0) ||
+            observed_at.0.saturating_sub(source_time.0) >= self.policy.stall_budget.0 {
             self.state = CaptureState::Frozen;
             return Err(HealthError::StaleSource);
         }
@@ -124,13 +128,26 @@ impl CaptureHealth {
         self.last_observation = Some(now);
         if self.state == CaptureState::Healthy {
             let fresh = match (self.last_source, self.last_arrival) {
-                (Some(source), Some(arrival)) => now.0 >= source.0 && now.0 >= arrival.0 &&
-                    now.0 - source.0 < self.policy.stall_budget.0 &&
+                (Some(source), Some(arrival)) => now.0.saturating_add(MAX_SOURCE_LEAD.0) >= source.0 && now.0 >= arrival.0 &&
+                    now.0.saturating_sub(source.0) < self.policy.stall_budget.0 &&
                     now.0 - arrival.0 < self.policy.stall_budget.0,
                 _ => false,
             };
             if !fresh { self.state = CaptureState::Frozen; }
         }
         self.state
+    }
+}
+
+/// WGC reports a ContentSize smaller than GraphicsCaptureItem.Size for windows
+/// with invisible borders (measured on Chromium windows). The first content
+/// size inside the pooled texture becomes the baseline; only a later change,
+/// or content that no longer fits, is a real resize.
+pub fn admit_content_size(pool: (u32, u32), baseline: Option<(u32, u32)>, content: (i32, i32)) -> Option<(u32, u32)> {
+    let width = u32::try_from(content.0).ok().filter(|n| *n > 0 && *n <= pool.0)?;
+    let height = u32::try_from(content.1).ok().filter(|n| *n > 0 && *n <= pool.1)?;
+    match baseline {
+        Some(first) if first != (width, height) => None,
+        _ => Some((width, height)),
     }
 }

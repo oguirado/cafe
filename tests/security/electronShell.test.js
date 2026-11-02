@@ -113,7 +113,7 @@ test('native IPC authenticates actual sender, current top frame and exact URL be
   frame.url = security.BOOT_URL; frame.detached = true; assert.throws(() => invoke(eventFor(win.webContents)), /DENIED/); frame.detached = false;
   assert.equal(reads, 0); frame.url = security.BOOT_URL;
   assert.equal(invoke(eventFor(win.webContents)).availability, 'unavailable');
-  assert.deepEqual([...f.handlers.keys()].sort(), ['cafe:getSnapshot', 'cafe:submitIntent']);
+  assert.deepEqual([...f.handlers.keys()].sort(), ['cafe:getSnapshot', 'cafe:previewSource', 'cafe:submitIntent']);
   assert.equal(f.handlers.has('cafe:spawn'), false); assert.throws(() => security.admitInvokeChannel('cafe:spawn'));
   remove(); assert.equal(f.handlers.size, 0);
 });
@@ -125,12 +125,12 @@ test('public snapshots preserve decimal clocks and remove native PID/provider er
   for (const value of [9007199254740992, '18446744073709551616', '01']) assert.throws(() => security.publicSnapshot({ ...snapshot(), revision: value }));
 });
 
-test('closed preload has exactly three frozen methods and discards native IPC event', async () => {
+test('closed preload has exactly four frozen methods and discards native IPC event', async () => {
   const ipc = new EventEmitter(); const calls = [];
   ipc.invoke = async (name, ...args) => { calls.push(name); if (name === 'cafe:getSnapshot') assert.equal(args.length, 0); return snapshot(); };
   let exposed;
   const api = preloadSecurity.exposeClosedBridge({ ipcRenderer: ipc, contextBridge: { exposeInMainWorld: (name, value) => { assert.equal(name, 'cafe'); exposed = value; } } });
-  assert.equal(api, exposed); assert.deepEqual(Object.keys(api).sort(), ['getSnapshot', 'onSnapshot', 'submitIntent']); assert.equal(Object.isFrozen(api), true);
+  assert.equal(api, exposed); assert.deepEqual(Object.keys(api).sort(), ['getSnapshot', 'onSnapshot', 'previewSource', 'submitIntent']); assert.equal(Object.isFrozen(api), true);
   assert.equal(api.ipcRenderer, undefined); assert.equal(api.invoke, undefined);
   assert.equal((await api.getSnapshot()).revision, '18446744073709551615');
   let received; const stop = api.onSnapshot((value) => { received = value; }); const nativeEvent = { nativeCapability: true };
@@ -150,7 +150,7 @@ test('bundled sandbox preload loads with electron as the only require capability
   ipc.invoke = async () => vm.runInContext('JSON.parse(snapshotWire)', realm);
   vm.runInContext(bundle, realm, { timeout: 1000 });
   assert.deepEqual(required, ['electron']); assert.equal(Object.isFrozen(facade), true);
-  assert.deepEqual(Object.keys(facade).sort(), ['getSnapshot', 'onSnapshot', 'submitIntent']);
+  assert.deepEqual(Object.keys(facade).sort(), ['getSnapshot', 'onSnapshot', 'previewSource', 'submitIntent']);
   assert.equal((await facade.getSnapshot()).authority_epoch, '9007199254740993');
 });
 
@@ -289,4 +289,212 @@ test('native folder choice is closed and never accepts a renderer path', async (
   const invoke=f.handlers.get('cafe:submitIntent');
   assert.throws(()=>invoke(eventFor(win.webContents),{...request,body:{op:'choose_folder',folder:'renderer-value'}}));assert.equal(choices,0);
   assert.deepEqual(await invoke(eventFor(win.webContents),request),{queued:true});assert.equal(choices,1);assert.deepEqual(submitted[0].body,{op:'set_folder',folder:'native-directory-only'});
+});
+
+test('default output folder is created under Videos/Cafe and sent once per launch without overwriting user choice', async (t) => {
+  const os = require('node:os');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cafe-default-folder-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const videosDir = path.join(root, 'Videos');
+  fs.mkdirSync(videosDir);
+  const f = nativeFixture();
+  f.electron.app.getPath = (name) => {
+    assert.equal(name, 'videos');
+    return videosDir;
+  };
+  const submitted = [];
+  const listeners = new Set();
+  let currentStatus = {
+    availability: 'starting',
+    pid: 42,
+    reason: '',
+    authority_epoch: null,
+    revision: null,
+    state: null,
+    stderrBytes: 0,
+  };
+  const emitStatus = (next) => {
+    currentStatus = next;
+    for (const listener of listeners) listener(currentStatus);
+  };
+  const shell = await createDesktopShell(f.electron, {
+    createBackend: () => ({
+      start: () => currentStatus,
+      dispose: () => { listeners.clear(); },
+      getStatus: () => currentStatus,
+      handle: (_caller, method) => {
+        if (method === 'getSnapshot') return currentStatus;
+        throw new Error('unexpected handle');
+      },
+      subscribe: (_caller, listener) => {
+        listeners.add(listener);
+        listener(currentStatus);
+        return () => { listeners.delete(listener); };
+      },
+      submitHostSelection: (payload) => {
+        submitted.push(payload);
+        return { queued: true };
+      },
+    }),
+  });
+  try {
+    // Still starting -> no folder created or submitted yet
+    assert.equal(submitted.length, 0);
+    assert.equal(fs.existsSync(path.join(videosDir, 'Cafe')), false);
+
+    // First available report with no folder configured -> creates <Videos>/Cafe and sends set_folder once
+    emitStatus({
+      availability: 'available',
+      pid: 42,
+      reason: '',
+      authority_epoch: '9007199254740993',
+      revision: '0',
+      state: { folder_configured: false, capsules: [] },
+      stderrBytes: 0,
+    });
+    const expectedDefault = path.join(videosDir, 'Cafe');
+    assert.equal(fs.statSync(expectedDefault).isDirectory(), true);
+    assert.equal(submitted.length, 1);
+    assert.deepEqual(submitted[0], {
+      schema: 'cafe.operator.v1',
+      kind: 'operator_intent',
+      request_id: 'default-folder',
+      authority_epoch: '9007199254740993',
+      expected_revision: '0',
+      body: { op: 'set_folder', folder: expectedDefault },
+    });
+
+    // Subsequent snapshots and renderer reloads do not send default folder a second time
+    emitStatus({
+      availability: 'available',
+      pid: 42,
+      reason: '',
+      authority_epoch: '9007199254740993',
+      revision: '1',
+      state: { folder_configured: false, capsules: [] },
+      stderrBytes: 0,
+    });
+    const win = shell.getWindow();
+    win.webContents.mainFrame = { url: security.BOOT_URL, detached: false, parent: null };
+    win.webContents.emit('did-finish-load');
+    assert.equal(submitted.length, 1);
+  } finally {
+    shell.dispose();
+  }
+});
+
+test('default folder creation failure keeps manual flow and never overwrites a folder chosen in session', async (t) => {
+  const os = require('node:os');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cafe-default-folder-fallback-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const blockedVideosPath = path.join(root, 'not-a-directory');
+  fs.writeFileSync(blockedVideosPath, 'file blocking mkdir');
+  const manualFolder = path.join(root, 'manual-choice');
+  fs.mkdirSync(manualFolder, { recursive: true });
+
+  const f = nativeFixture();
+  f.electron.app.getPath = () => blockedVideosPath;
+  f.electron.dialog = {
+    showOpenDialog: async () => ({ canceled: false, filePaths: [manualFolder] }),
+  };
+  const submitted = [];
+  let currentStatus = {
+    availability: 'available',
+    pid: 42,
+    reason: '',
+    authority_epoch: '9007199254740993',
+    revision: '0',
+    state: { folder_configured: false, capsules: [] },
+    stderrBytes: 0,
+  };
+  const shell = await createDesktopShell(f.electron, {
+    createBackend: () => ({
+      start: () => currentStatus,
+      dispose: () => {},
+      getStatus: () => currentStatus,
+      handle: () => currentStatus,
+      subscribe: (_caller, listener) => {
+        listener(currentStatus);
+        return () => {};
+      },
+      submitHostSelection: (payload) => {
+        submitted.push(payload);
+        return { queued: true };
+      },
+    }),
+  });
+  try {
+    // Creation failed -> no default folder submitted, manual flow remains usable
+    assert.equal(submitted.length, 0);
+    const win = shell.getWindow();
+    const invoke = f.handlers.get('cafe:submitIntent');
+    const reply = await invoke(eventFor(win.webContents), {
+      schema: 'cafe.operator.v1',
+      kind: 'operator_intent',
+      request_id: 'manual-folder',
+      authority_epoch: '9007199254740993',
+      expected_revision: '0',
+      body: { op: 'choose_folder' },
+    });
+    assert.deepEqual(reply, { queued: true });
+    assert.equal(submitted.length, 1);
+    assert.deepEqual(submitted[0].body, { op: 'set_folder', folder: manualFolder });
+  } finally {
+    shell.dispose();
+  }
+
+  // Also verify: if the user already chose a folder in this session before the first
+  // availability snapshot is delivered, the default folder does not overwrite it.
+  const videosDir2 = path.join(root, 'Videos2');
+  const f2 = nativeFixture();
+  f2.electron.app.getPath = () => videosDir2;
+  f2.electron.dialog = {
+    showOpenDialog: async () => ({ canceled: false, filePaths: [manualFolder] }),
+  };
+  const submitted2 = [];
+  const listeners2 = new Set();
+  const status2 = {
+    availability: 'available',
+    pid: 42,
+    reason: '',
+    authority_epoch: '9007199254740993',
+    revision: '0',
+    state: { folder_configured: false, capsules: [] },
+    stderrBytes: 0,
+  };
+  let statusReady = false;
+  const shell2 = await createDesktopShell(f2.electron, {
+    createBackend: () => ({
+      start: () => status2,
+      dispose: () => { listeners2.clear(); },
+      getStatus: () => (statusReady ? status2 : { ...status2, availability: 'starting', authority_epoch: null, revision: null, state: null }),
+      handle: () => status2,
+      subscribe: (_caller, listener) => {
+        listeners2.add(listener);
+        return () => { listeners2.delete(listener); };
+      },
+      submitHostSelection: (payload) => {
+        submitted2.push(payload);
+        return { queued: true };
+      },
+    }),
+  });
+  try {
+    statusReady = true;
+    const win2 = shell2.getWindow();
+    await f2.handlers.get('cafe:submitIntent')(eventFor(win2.webContents), {
+      schema: 'cafe.operator.v1',
+      kind: 'operator_intent',
+      request_id: 'user-first',
+      authority_epoch: '9007199254740993',
+      expected_revision: '0',
+      body: { op: 'choose_folder' },
+    });
+    assert.equal(submitted2.length, 1);
+    assert.deepEqual(submitted2[0].body, { op: 'set_folder', folder: manualFolder });
+    for (const listener of listeners2) listener(status2);
+    assert.equal(submitted2.length, 1);
+  } finally {
+    shell2.dispose();
+  }
 });

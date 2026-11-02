@@ -30,11 +30,14 @@
  * @property {() => Promise<BridgeStatus>} getSnapshot
  * @property {(intent: unknown) => Promise<unknown>} submitIntent
  * @property {(listener: (status: BridgeStatus) => void) => () => void} onSnapshot
+ * @property {(request: unknown) => Promise<Readonly<Record<string, unknown>>>} previewSource
  */
 
 const GET_SNAPSHOT_CHANNEL = 'cafe:getSnapshot';
 const SUBMIT_INTENT_CHANNEL = 'cafe:submitIntent';
 const SNAPSHOT_CHANNEL = 'cafe:snapshot';
+const PREVIEW_SOURCE_CHANNEL = 'cafe:previewSource';
+const PREVIEW_ERRORS = new Set(['preview_disabled', 'preview_denied', 'preview_unavailable', 'preview_busy', 'no_preview']);
 const U64_MAX = 18446744073709551615n;
 
 /**
@@ -173,6 +176,7 @@ function toBridgeStatus(value) {
     state: stateValue === null ? null : /** @type {object} */ (deepCloneJson(stateValue)),
     stderrBytes: record.stderrBytes,
   };
+  if (isPlainObject(status.state)) delete /** @type {Record<string, unknown>} */ (status.state).preview_sources;
   deepFreeze(status);
   return status;
 }
@@ -211,6 +215,33 @@ function createCafeBridge(transport) {
     return invoke(SUBMIT_INTENT_CHANNEL, intent);
   }
 
+  /** Only a capsule/feed pair is accepted; source identities never cross preload.
+   * @param {unknown} request @returns {Promise<Readonly<Record<string, unknown>>>} */
+  async function previewSource(request) {
+    if (!isPlainObject(request)) return Object.freeze({ ok: false, error: 'preview_denied' });
+    const pair = /** @type {Record<string, unknown>} */ (request);
+    if (Object.keys(pair).sort().join(',') !== 'capsule_id,feed_id'
+        || typeof pair.capsule_id !== 'string' || pair.capsule_id !== pair.capsule_id.trim() || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$/.test(pair.capsule_id)
+        || typeof pair.feed_id !== 'string' || pair.feed_id !== pair.feed_id.trim() || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$/.test(pair.feed_id)) {
+      return Object.freeze({ ok: false, error: 'preview_denied' });
+    }
+    try {
+      const response = await invoke(PREVIEW_SOURCE_CHANNEL, { capsule_id: pair.capsule_id, feed_id: pair.feed_id });
+      if (isPlainObject(response)) {
+        const value = /** @type {Record<string, unknown>} */ (response);
+        const keys = Object.keys(value).sort().join(',');
+        if (keys === 'capsule_id,feed_id,ok' && value.ok === true
+            && value.capsule_id === pair.capsule_id && value.feed_id === pair.feed_id) {
+          return Object.freeze({ ok: true, capsule_id: pair.capsule_id, feed_id: pair.feed_id });
+        }
+        if (keys === 'error,ok' && value.ok === false && typeof value.error === 'string' && PREVIEW_ERRORS.has(value.error)) {
+          return Object.freeze({ ok: false, error: value.error });
+        }
+      }
+    } catch { /* Provider errors are never returned to the renderer. */ }
+    return Object.freeze({ ok: false, error: 'preview_unavailable' });
+  }
+
   /**
    * @param {(status: BridgeStatus) => void} listener
    * @returns {() => void}
@@ -224,7 +255,7 @@ function createCafeBridge(transport) {
     });
   }
 
-  return Object.freeze({ getSnapshot, submitIntent, onSnapshot });
+  return Object.freeze({ getSnapshot, submitIntent, onSnapshot, previewSource });
 }
 
 module.exports = { createCafeBridge };

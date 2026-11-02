@@ -154,6 +154,79 @@ mod native_identity {
 }
 // END CODEX NATIVE IDENTITY
 
+// Preview projection is outside the immutable identity regions. It grants no
+// pairing or capture authority and never synthesizes an HWND from a token.
+impl WindowRegistry {
+    pub(crate) fn preview_source_id(&self, handle: &WindowHandle, generation: Clock, layout_revision: Clock) -> Option<String> {
+        let view = self.resolve(handle, generation).ok()?;
+        if view.layout_revision != layout_revision { return None; }
+        #[cfg(windows)]
+        {
+            let entry = self.entries.values().find(|entry| entry.view.handle == view.handle && entry.view.generation == generation)?;
+            if let WindowKey::Native(raw) = entry.observation.key {
+                if raw != 0 { return Some(format!("window:{raw}:0")); }
+            }
+        }
+        None
+    }
+
+    /// Project only after a fresh native witness check. A cached descriptor is
+    /// insufficient for an Electron source id because HWND values can recycle.
+    /// This checks bound windows only and never discovers/anchors new windows.
+    pub(crate) fn live_preview_source_id(&self,handle:&WindowHandle,generation:Clock,layout_revision:Clock,adapter:&mut NativeAdapter)->Option<String>{
+        #[cfg(windows)]
+        {
+            use windows::Win32::Foundation::HWND;
+            use windows::Win32::UI::WindowsAndMessaging::{IsWindowVisible,IsIconic};
+            let view=self.resolve(handle,generation).ok()?;
+            if view.layout_revision!=layout_revision{return None;}
+            let entry=self.entries.values().find(|entry|entry.view.handle==*handle&&entry.view.generation==generation)?;
+            let raw=match entry.observation.key{WindowKey::Native(raw) if raw!=0=>raw,_=>return None};
+            let hwnd=HWND(raw as *mut core::ffi::c_void);
+            let expected=(entry.observation.witness,entry.observation.process_birth,entry.observation.process_id,entry.observation.executable.clone());
+            if adapter.store.observe(hwnd).ok()?!=expected{return None;}
+            if read_title(hwnd).ok()?!=view.title||read_class(hwnd).ok()?!=view.class||read_rect(hwnd).ok()?!=view.rect{return None;}
+            if !unsafe{IsWindowVisible(hwnd).as_bool()}||unsafe{IsIconic(hwnd).as_bool()}{return None;}
+            if adapter.store.observe(hwnd).ok()?!=expected{return None;}
+            self.preview_source_id(handle,generation,layout_revision)
+        }
+        #[cfg(not(windows))]
+        {let _=(handle,generation,layout_revision,adapter);None}
+    }
+}
+
+#[cfg(test)]
+mod preview_projection_tests {
+    use super::*;
+    #[test]
+    fn fixture_tokens_never_become_native_preview_sources() {
+        let mut registry = WindowRegistry::new(Clock(77));
+        let view = registry.refresh_fixtures(&[FixtureWindow { slot: "123456".into(), incarnation: 1,
+            process_id: 77, process_birth: 1, executable: "Synthetic.exe".into(), title: "Synthetic".into(), class: "Synthetic".into(),
+            rect: Rect { x: 0, y: 0, width: 320, height: 200 }, visible: true, minimized: false, layout: "one".into() }]).unwrap().remove(0);
+        assert!(registry.preview_source_id(&view.handle, view.generation, view.layout_revision).is_none());
+        registry.refresh_fixtures(&[]).unwrap();
+        assert!(registry.preview_source_id(&view.handle, view.generation, view.layout_revision).is_none());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn native_source_projection_requires_current_unique_generation_and_layout() {
+        // Synthetic registry observations only, not a claim of live previews.
+        let mut registry = WindowRegistry::new(Clock(77));
+        let observed = Observation { key: WindowKey::Native(123456), witness: 1, process_birth: 1, process_id: 77,
+            executable: "Synthetic.exe".into(), title: "Synthetic".into(), class: "Synthetic".into(),
+            rect: Rect { x: 0, y: 0, width: 320, height: 200 }, visible: true, minimized: false, layout: "one".into() };
+        let view = registry.reconcile(vec![observed.clone()]).unwrap().remove(0);
+        assert_eq!(registry.preview_source_id(&view.handle, view.generation, view.layout_revision).as_deref(), Some("window:123456:0"));
+        assert!(registry.preview_source_id(&view.handle, Clock(view.generation.0 + 1), view.layout_revision).is_none());
+        assert!(registry.preview_source_id(&view.handle, view.generation, Clock(view.layout_revision.0 + 1)).is_none());
+        let mut duplicate = observed.clone(); duplicate.key = WindowKey::Native(654321);
+        registry.reconcile(vec![observed, duplicate]).unwrap();
+        assert!(registry.preview_source_id(&view.handle, view.generation, view.layout_revision).is_none());
+    }
+}
+
 // BEGIN MUSE ADAPTER — native enumeration only; identity logic stays in Codex fragments above.
 #[cfg(not(windows))]
 pub struct NativeAdapter {

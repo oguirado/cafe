@@ -5,7 +5,7 @@ const rendererAssets = require('./rendererAssets');
 
 const BOOT_URL = 'cafe://app/bootstrap';
 const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; frame-ancestors 'none'; form-action 'none'";
-const INVOKE_CHANNELS = Object.freeze(['cafe:getSnapshot', 'cafe:submitIntent']);
+const INVOKE_CHANNELS = Object.freeze(['cafe:getSnapshot', 'cafe:submitIntent', 'cafe:previewSource']);
 const SNAPSHOT_CHANNEL = 'cafe:snapshot';
 
 /** @param {unknown} value @returns {boolean} */
@@ -60,11 +60,56 @@ function admitInvokeChannel(value) {
   if (!INVOKE_CHANNELS.includes(value)) throw new Error('IPC_CHANNEL_DENIED');
 }
 
+/**
+ * @returns {import('./capture_sources').PreviewController}
+ */
+function unavailablePreviewSources() {
+  return Object.freeze({
+    request: async () => Object.freeze({ ok: false, error: 'preview_unavailable' }),
+    permissionRequest: () => false,
+    permissionCheck: () => false,
+    displayRequest: async (_display, callback) => { try { callback(null); } catch {} },
+    install: (session) => {
+      try {
+        if (typeof session.setDisplayMediaRequestHandler === 'function') {
+          session.setDisplayMediaRequestHandler((_display, callback) => callback(null), { useSystemPicker: false });
+        }
+      } catch { /* The independent permission handlers still deny everything. */ }
+    },
+    dispose: () => {},
+  });
+}
+
+/**
+ * The existing Windows package has a fixed file list. Until integration adds
+ * the optional preview helper, its absence must not prevent the shell from
+ * starting. A missing or faulted helper is explicitly unavailable, never a
+ * successful preview and never a reason to relax the permission boundary.
+ * @param {import('./capture_sources').PreviewOptions} options
+ * @returns {import('./capture_sources').PreviewController}
+ */
+function createPreviewSources(options) {
+  try {
+    const controller = require('./capture_sources').createPreviewSources(options);
+    if (!controller || ['request', 'permissionRequest', 'permissionCheck', 'displayRequest', 'install', 'dispose']
+      .some(method => typeof /** @type {Record<string, unknown>} */ (controller)[method] !== 'function')) {
+      throw new Error('PREVIEW_UNAVAILABLE');
+    }
+    return controller;
+  } catch {
+    return unavailablePreviewSources();
+  }
+}
+
 /** @param {import('electron').Session} session
- * @param {import('./rendererAssets').RendererBundle} [bundle] */
-function hardenSession(session, bundle) {
-  session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  session.setPermissionCheckHandler(() => false);
+ * @param {import('./rendererAssets').RendererBundle} [bundle]
+ * @param {import('./capture_sources').PreviewController} [previews] */
+function hardenSession(session, bundle, previews) {
+  previews?.install(session);
+  session.setPermissionRequestHandler((contents, permission, callback, details) =>
+    callback(previews?.permissionRequest(contents, permission, details) === true));
+  session.setPermissionCheckHandler((contents, permission, origin, details) =>
+    previews?.permissionCheck(contents, permission, origin, details) === true);
   session.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
     callback({ cancel: !isBootstrapUrl(details.url) && !rendererAssets.admitsResource(details.url, bundle) });
   });
@@ -151,9 +196,10 @@ function publicSnapshot(value) {
   let state = null;
   if (value.state !== null) {
     const wire = JSON.stringify(value.state);
-    if (Buffer.byteLength(wire, 'utf8') > 4096) throw new Error('SNAPSHOT_REJECTED');
+    if (Buffer.byteLength(wire, 'utf8') > 65536) throw new Error('SNAPSHOT_REJECTED');
     state = JSON.parse(wire);
     if (typeof state !== 'object' || state === null || Array.isArray(state)) throw new Error('SNAPSHOT_REJECTED');
+    delete state.preview_sources;
   }
   return Object.freeze({ availability: value.availability, pid: null,
     reason: value.availability === 'available' ? 'authority_available' : 'authority_unavailable',
@@ -167,8 +213,16 @@ function publicSnapshot(value) {
  * @param {() => Backend|null} getBackend
  * @param {(window:import('electron').BrowserWindow)=>Promise<{path:string,sha256:string}|null>} [chooseFfmpeg]
  * @param {(window:import('electron').BrowserWindow)=>Promise<{folder:string}|null>} [chooseFolder]
+ * @param {import('./capture_sources').PreviewController} [previews]
  */
-function bindNativeIpc(ipcMain, getWindow, getBackend, chooseFfmpeg, chooseFolder) {
+function bindNativeIpc(ipcMain, getWindow, getBackend, chooseFfmpeg, chooseFolder, previews) {
+  ipcMain.handle('cafe:previewSource', (event, ...args) => {
+    const win = getWindow();
+    if (!win || args.length !== 1) return { ok: false, error: 'preview_denied' };
+    try { admitCaller(event, win.webContents); }
+    catch { return { ok: false, error: 'preview_denied' }; }
+    return previews ? previews.request(event, args[0]) : { ok: false, error: 'preview_disabled' };
+  });
   ipcMain.handle('cafe:getSnapshot', (event, ...args) => {
     const win = getWindow();
     if (!win || args.length !== 0) throw new Error('IPC_REQUEST_REJECTED');
@@ -253,6 +307,7 @@ exports.browserOptions = browserOptions;
 exports.admitCaller = admitCaller;
 exports.admitInvokeChannel = admitInvokeChannel;
 exports.hardenSession = hardenSession;
+exports.createPreviewSources = createPreviewSources;
 exports.hardenWindow = hardenWindow;
 exports.installBootstrapProtocol = installBootstrapProtocol;
 exports.unavailableSnapshot = unavailableSnapshot;

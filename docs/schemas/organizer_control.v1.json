@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cafe.organizer_control.v1",
+  "title": "Proposed private local operator body additions (PENDING-LIVE)",
+  "description": "These bodies belong only to the trusted cafe.operator.v1 stdin envelope. They are never broker or MCP operations.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "organizer_plan_confirm"
+        },
+        "plan_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+        }
+      },
+      "required": [
+        "op",
+        "plan_id"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "organizer_plan_reject"
+        },
+        "plan_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+        }
+      },
+      "required": [
+        "op",
+        "plan_id"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "set_auto_anchor"
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "op",
+        "enabled"
+      ]
+    }
+  ]
+}

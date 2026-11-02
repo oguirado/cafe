@@ -44,6 +44,7 @@ function createPackagedBackend(options) {
   if (!path.isAbsolute(options.resourcesPath) || !path.isAbsolute(options.runtimeRoot)) throw new Error('AUTHORITY_PATH_REJECTED');
   const receiptPath = regular(path.join(options.resourcesPath, 'cafe-build.json'), 128 * 1024 * 1024);
   if (fs.statSync(receiptPath).size > 1024 * 1024) throw new Error('AUTHORITY_RECEIPT_REJECTED');
+  /** @type {Record<string, any>} */
   let receipt;
   try { receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8')); }
   catch { throw new Error('AUTHORITY_RECEIPT_REJECTED'); }
@@ -58,13 +59,51 @@ function createPackagedBackend(options) {
   for (const key of ['SystemRoot', 'WINDIR', 'TEMP', 'TMP']) {
     if (process.env[key] !== undefined) env[key] = process.env[key];
   }
-  return createBackendSupervisor({
+  // Optional native provisioning; selection paths never enter renderer state.
+  const ffmpegSelection = require('./ffmpegSelection');
+  if (receipt.ffmpeg_binary !== undefined) {
+    try {
+      const selected = ffmpegSelection.verifyFfmpegSelection({ ffmpeg_binary: receipt.ffmpeg_binary });
+      env.CAFE_FFMPEG_PATH = selected.file;
+      env.CAFE_FFMPEG_SHA256 = selected.sha256;
+    } catch {
+      env.CAFE_FFMPEG_STARTUP_BLOCKED = '1';
+    }
+  } else {
+    const selected = ffmpegSelection.resolveDefaultFfmpeg(process.env);
+    if (selected !== null) {
+      env.CAFE_FFMPEG_PATH = selected.file;
+      env.CAFE_FFMPEG_SHA256 = selected.sha256;
+    }
+  }
+  // The approved private Python sink pins directories and writes no raw data.
+  function openTraceSink() {
+    const manifestFile = regular(path.join(options.resourcesPath, 'runtime-manifest.json'), 8 * 1024 * 1024);
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    if (manifest.version !== '3.13.16+20261013' || manifest.archive_sha256 !== '7aba3985d4cee1c7cacb963ca6aa08a5d3e695d7f9609d9fabc56f22ddcf5a06') throw new Error('TRACE_RUNTIME_REJECTED');
+    const python = regular(path.join(options.resourcesPath, 'python', 'python.exe'), 128 * 1024 * 1024);
+    if (digest(python) !== '9b0ac461f54e03a8385db26269226acbd68d14df3c9b58fee9866d8a0d996534' || manifest.files?.['python/python.exe']?.sha256 !== '9b0ac461f54e03a8385db26269226acbd68d14df3c9b58fee9866d8a0d996534') throw new Error('TRACE_RUNTIME_REJECTED');
+    for (const name of ['connectors/cafe/logging_storage.py', 'connectors/cafe/runtime_logging.py', 'src/contracts/runtime_logging.json']) {
+      const file = regular(path.join(options.resourcesPath, name), 256 * 1024);
+      if (digest(file) !== receipt.source_files?.[name]) throw new Error('TRACE_SOURCE_REJECTED');
+    }
+    return childProcess.spawn(python, ['-I', '-B', path.join(options.resourcesPath, 'connectors/cafe/logging_storage.py'), '--root', path.join(path.dirname(options.runtimeRoot), 'diagnostics')],
+      {stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true, env});
+  }
+  const trace = require('./runtime_logging').createRuntimeTrace({openSink: openTraceSink, baseCommit: receipt.base_commit, authoritySha256: receipt.authority_sha256});
+  const supervisor = createBackendSupervisor({
     command, args: [], authorizedOrigin: options.authorizedOrigin,
-    getAuthorizedFrame: options.getAuthorizedFrame, maxLineBytes: 4096, maxQueueBytes: 16384,
+    getAuthorizedFrame: options.getAuthorizedFrame, maxLineBytes: 32768, maxQueueBytes: 131072,
+    onStatus: trace.snapshot, onIntent: trace.intent, onStderr: trace.stderr,
     spawn: (executable, args, pipes) => childProcess.spawn(executable, args,
       { ...pipes, env, windowsHide: true }),
-    // Raw stderr is counted by the supervisor, never forwarded/persisted.
+    // Raw stderr is discarded; only schema-approved native stages persist.
   });
+  let started = false;
+  const start = supervisor.start, dispose = supervisor.dispose;
+  supervisor.start = () => {if (!started) {started = true; trace.start();} return start();};
+  supervisor.dispose = () => {try {dispose();} finally {trace.close();}};
+  return supervisor;
 }
 exports.createPackagedBackend = createPackagedBackend;
 

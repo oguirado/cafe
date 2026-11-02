@@ -18,6 +18,15 @@ sys.path.insert(0, str(ROOT / 'connectors'))
 from cafe import mcp_server as mcp
 
 
+CONTRACTED_TOOLS = frozenset({
+    'list_channels_and_days', 'recent_messages', 'search_messages',
+    'top_chatters', 'message_rate', 'session_summary',
+    'list_capsules', 'list_candidate_windows', 'recording_status', 'obs_status',
+    'messages_by_user', 'messages_between', 'chat_statistics', 'chat_activity',
+    'demo_guide',
+})
+
+
 def event(text='hello', login='alice', second=0, day='2000-01-01'):
     return {'schema': 'cafe.chat_event.v1', 'channel': 'test_channel',
             'received_at': {'monotonic_ns': str(second), 'utc': day + 'T00:00:' + str(second).zfill(2) + 'Z'},
@@ -73,16 +82,53 @@ class McpServer(unittest.TestCase):
         self.assertEqual(result.stderr, b'')
         rows = [json.loads(x) for x in result.stdout.splitlines()]
         self.assertEqual([row['id'] for row in rows], [1, 2, 3, 4])
-        self.assertEqual(len(rows[1]['result']['tools']), 6)
+        listed = rows[1]['result']['tools']
+        self.assertEqual({tool['name'] for tool in listed}, CONTRACTED_TOOLS)
+        self.assertEqual(len(listed), 15)
         self.assertEqual(rows[2]['result'], {})
         self.assertEqual([x['text'] for x in rows[3]['result']['structuredContent']['data']], ['second literal', 'third literal'])
 
-    def test_six_tool_schemas_are_closed_and_readonly(self):
+    def test_fifteen_tool_schemas_are_closed_and_readonly(self):
         tools = self.server().handle(request('tools/list'))['result']['tools']
-        self.assertEqual({x['name'] for x in tools}, set(mcp._TOOL_ARGUMENTS))
+        self.assertEqual({x['name'] for x in tools}, CONTRACTED_TOOLS)
+        self.assertEqual(len(tools), 15)
         for tool in tools:
             self.assertIs(tool['inputSchema']['additionalProperties'], False)
             self.assertIs(tool['annotations']['readOnlyHint'], True)
+
+    def test_original_descriptors_and_protocol_limits_are_unchanged(self):
+        channel = {'type': 'string', 'pattern': '^[a-z0-9_]{3,25}$'}
+        limit = {'type': 'integer', 'minimum': 1, 'maximum': 200}
+        definitions = [
+            ('list_channels_and_days', {}, []),
+            ('recent_messages', {'channel': channel, 'limit': limit,
+                                 'since': {'type': 'string', 'maxLength': 30}}, ['channel']),
+            ('search_messages', {'channel': channel,
+                                 'query': {'type': 'string', 'minLength': 1, 'maxLength': 512},
+                                 'limit': limit}, ['channel', 'query']),
+            ('top_chatters', {'channel': channel,
+                             'window_minutes': {'type': 'integer', 'minimum': 1,
+                                                'maximum': 1440}}, ['channel', 'window_minutes']),
+            ('message_rate', {'channel': channel,
+                             'bucket_seconds': {'type': 'integer', 'minimum': 1,
+                                                'maximum': 3600}}, ['bucket_seconds', 'channel']),
+            ('session_summary', {'channel': channel,
+                                 'day': {'type': 'string', 'maxLength': 10}}, ['channel', 'day']),
+        ]
+        expected = [
+            {'name': name, 'description': 'Read-only chat query: ' + name,
+             'inputSchema': {'type': 'object', 'additionalProperties': False,
+                             'properties': properties, 'required': required},
+             'annotations': {'readOnlyHint': True, 'destructiveHint': False,
+                             'idempotentHint': True, 'openWorldHint': False}}
+            for name, properties, required in definitions
+        ]
+        listed = self.server().handle(request('tools/list'))['result']['tools']
+        self.assertEqual(listed[:6], expected)
+        self.assertEqual(mcp.PROTOCOL_VERSION, '2025-11-25')
+        self.assertEqual((mcp.MAX_REQUEST, mcp.MAX_RESPONSE, mcp.MAX_EVENT_LINE,
+                          mcp.MAX_SCAN_BYTES, mcp.MAX_FILES),
+                         (65536, 65536, 131072, 33554432, 4096))
 
     def test_queries_match_handwritten_expected_operations(self):
         data = lambda name, args: self.call(name, args)['result']['structuredContent']['data']

@@ -104,6 +104,11 @@ def _chat_mcp_e2e(root, python, run):
             ('message_rate', {'channel': 'test_channel', 'bucket_seconds': 60}),
             ('session_summary', {'channel': 'test_channel', 'day': day}),
         ]
+        contracted_tools = {name for name, _ in methods} | {
+            'list_capsules', 'list_candidate_windows', 'recording_status', 'obs_status',
+            'messages_by_user', 'messages_between', 'chat_statistics', 'chat_activity',
+            'demo_guide',
+        }
         requests = [{'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {
                         'protocolVersion': '2025-11-25', 'capabilities': {},
                         'clientInfo': {'name': 'cafe-ci', 'version': '1'}}},
@@ -132,7 +137,8 @@ def _chat_mcp_e2e(root, python, run):
         if [value.get('id') for value in responses] != list(range(1, 9)):
             raise ValueError('mcp_actor_response_correlation_failed')
         if (responses[0].get('result', {}).get('protocolVersion') != '2025-11-25' or
-                {value['name'] for value in responses[1]['result']['tools']} != {name for name, _ in methods}):
+                {value['name'] for value in responses[1]['result']['tools']} != contracted_tools or
+                len(responses[1]['result']['tools']) != 15):
             raise ValueError('mcp_actor_negotiation_failed')
         results = []
         for response in responses[2:]:
@@ -157,7 +163,7 @@ def _chat_mcp_e2e(root, python, run):
         if results[5] != expected:
             raise ValueError('mcp_summary_numeric_oracle_failed')
         return {'schema': 'cafe.chat-mcp-e2e.v1', 'producer_messages': 3,
-                'mcp_tools': 6, 'mcp_no_site': True, 'real_loopback_peer': True}
+                'mcp_tools': 15, 'mcp_no_site': True, 'real_loopback_peer': True}
     with tempfile.TemporaryDirectory(prefix='cafe-data-e2e-') as temporary:
         report = asyncio.run(exercise(Path(temporary)))
     if Path(temporary).exists():

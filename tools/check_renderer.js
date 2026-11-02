@@ -15,7 +15,7 @@ function fileIdentity(name) {
   return normal.length > 1 && normal.endsWith('/') && !/^[A-Za-z]:\/$/.test(normal) ? normal.slice(0, -1) : normal;
 }
 
-const BOUNDARY_FILES = ['ui/src/cafe.css', 'ui/src/design/tokens.cafe.css'];
+const BOUNDARY_FILES = ['ui/src/cafe.css', 'ui/src/design/tokens.cafe.css', 'ui/src/workspace.css'];
 const BOUNDARY_DIR = 'ui/src/kit/';
 
 /** Build the checked program inputs. Exported so tests can drive the compilerHost with the
@@ -54,6 +54,15 @@ function createRendererHost(root, content) {
       const dependencyKey = key(dependency);
       if (!dependencyKey.startsWith(rootPrefix)) return undefined;
       const rel = dependencyKey.slice(rootPrefix.length);
+      if ((rel.startsWith('ui/src/capsule/') || rel === 'ui/src/windows.vue') && name.endsWith('.vue')) {
+        if (!fs.statSync(dependency, { throwIfNoEntry: false })?.isFile()) return undefined;
+        const parsed = parse(fs.readFileSync(dependency, 'utf8'), { filename: dependency });
+        if (parsed.errors.length || parsed.descriptor.script?.lang || parsed.descriptor.scriptSetup?.lang || (parsed.descriptor.script && parsed.descriptor.scriptSetup)) throw new Error('AUTHORED_JAVASCRIPT_REQUIRED');
+        const compiled = compileScript(parsed.descriptor, { id: rel });
+        const checked = dependency + '.checked.js';
+        virtual.set(key(checked), compiled.content);
+        return { resolvedFileName: checked, extension: ts.Extension.Js };
+      }
       const allowed = rel.startsWith(allowedDir) || allowedFiles.has(rel);
       if (!allowed || !fs.statSync(dependency, { throwIfNoEntry: false })?.isFile()) return undefined;
       const stub = dependency + '.boundary.js';

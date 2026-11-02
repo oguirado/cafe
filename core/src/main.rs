@@ -51,3 +51,6 @@ mod runtime_recording;
 mod python_connector_supervisor;
 #[allow(dead_code)]
 mod runtime_service_owner;
+
+mod discord_windows;
+mod organizer;

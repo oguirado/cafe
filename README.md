@@ -1,8 +1,27 @@
 # Café
 
-Café is a Windows desktop tool for Twitch streamers, built with OpenAI Codex (Sol 6.1). Rust authority, Python connector fixtures and JavaScript/JSDoc shell modules have development coverage. Production wiring, packaged Electron and real Discord capture acceptance remain pending. This is not a finished application.
+Café is a Windows desktop tool for creators and Twitch streamers, built with OpenAI Codex (Sol 6.1). Guests share on Discord as usual; Café captures popped-out Discord call and desktop windows as capsules with live tile previews, records each feed via Windows Graphics Capture and FFmpeg/NVENC, lets AI assistants propose recording plans over MCP that run only after clicking **Confirm**, sends capsules to OBS, and stores Twitch chat as JSONL over MCP.
 
-Context status: **router available (uncalibrated)**. Uncalibrated warning: no Café parameters have been fitted; `params.json` is absent. `--require-qualified` fails even when structural checks pass. DEV/TEST calibration is after the demo. Never borrow another corpus's parameters. Rebuild after indexed source changes:
+## Verified on Windows (GTX 1060)
+
+- **Discord WGC + NVENC [MEASURED]:** Pop-out captured and recorded to a valid MKV (30 s, 1810 frames, clean stop).
+- **Multi-window [MEASURED]:** Two and four windows at once (Discord pop-out + test windows), ~30 s valid MKVs; still windows keep recording.
+- **Live tile preview [MEASURED]:** Live pop-out preview inside its capsule tile in the packaged app.
+- **AI organizer over MCP [MEASURED]:** Claude Code CLI listed windows and proposed a 60 s plan with a subfolder; after one **Confirm** click Café created the capsule, anchored the pop-out, and recorded a 45 s valid MKV.
+- **Manual UI & MCP resilience [MEASURED]:** One-click **Add window** and **REC**; second MCP client works and survives restarts.
+
+## Known limits
+
+- **Occlusion [MEASURED]:** Fully covering a Discord pop-out makes Discord stop painting it (preview/recording go black). Keep pop-outs visible.
+- **Not yet verified:** Multiple concurrent Discord pop-outs, live OBS connection, and live OpenAI Codex client (same MCP registration).
+
+## Running & MCP registration
+
+Select your recording folder, pop out your Discord call window (not fully covered), and use **Add window** / **REC** or connect an MCP client (`resources\python\python.exe -I -B resources\connectors\cafe_mcp.py`). Tools: `organizer_status`, `list_discord_windows`, `propose_recording_plan`, `propose_stop_all`, `propose_send_to_obs`. Only the operator's **Confirm** click runs actions; the AI never sees secrets. See [MCP organizer](docs/bridge/CODEX_ORGANIZER.md) and [Devpost](submission/DEVPOST.md).
+
+## Router status
+
+Context status: **router available (uncalibrated)**. Uncalibrated warning: no Café parameters have been fitted; `params.json` is absent. `--require-qualified` fails even when structural checks pass. DEV/TEST calibration is after the demo. Rebuild after source changes:
 
 ```sh
 python3 -B tools/build_cafe_nodes.py
@@ -12,11 +31,11 @@ python3 -B tools/resolve_cafe.py 'cafe_core::capsule_registry::decode_envelope'
 python3 -B tools/resolve_cafe.py --route 'capsule registry' --ack-uncalibrated
 ```
 
-The generic `catalogue/routes.tsv` lookup is consumed by `tools/resolve_cafe.py`. It rejects stale source hashes, ambiguous keys and unsafe paths. An uncalibrated shortlist is not permission to edit.
+`catalogue/routes.tsv` lookup is consumed by `tools/resolve_cafe.py`, rejecting stale hashes, ambiguous keys and unsafe paths.
 
-## Development quick start
+## Development & CI
 
-Prerequisites: Rust 1.97.0 with the Windows standard-library target, Python 3.12.3 and Node 24.14.0. These are development tooling versions, not proof of the planned packaged runtimes. The only npm package is TypeScript 5.9.3 as a JavaScript checker; no TypeScript is authored. Tokenizer tooling is pinned in `requirements-ci.txt`; its vocabulary is shipped with license/provenance.
+Prerequisites: Rust 1.97.0, Python 3.12.3, Node 24.14.0, TypeScript 5.9.3 (`checkJs` only; no authored TypeScript), tokenizer in `requirements-ci.txt`.
 
 ```sh
 python3 -m pip install --require-hashes -r requirements-ci.txt
@@ -27,12 +46,4 @@ python3 -B tools/clean_export_test.py
 python3 -B tools/install_pre_push.py
 ```
 
-The clean-export test copies exactly the prepared Git inventory without Git metadata or ignored working material, then runs the Linux CI gate profile. It uses the approved offline Cargo cache and lock-matched Node modules. This is **not** a clean-clone claim. After the operator's first commit, with a clean tree, run `python3 -B tools/verify_clean_clone.py` before push; the guard requires its fresh private Git receipt. Do not bypass the hook.
-
-## CI and native acceptance
-
-The workflow schedules Rust tests and Windows type checks, Python, Node, checkJs, the one-command integration gate, router checks, publication lint and claims on Ubuntu and Windows. The Linux prepared-export profile is tested locally. The hosted Windows runtime matrix is unexecuted here; known Windows IPC/native limitations must fail honestly, never be converted to success.
-
-A separate owned-window WGC job distinguishes actual capture from **not available on hosted runner**. It does not accept live Discord behavior or production timing budgets. Gitleaks is pinned by version/checksum in CI, scans complete history and tests all three credential controls. If its local binary is absent, the scan is pending and the hook blocks; no local download is automatic.
-
-Manual Windows scenarios and receipt template: [acceptance](docs/acceptance/README.md). See [SECURITY](SECURITY.md), [CONTRIBUTING](CONTRIBUTING.md), [conduct](CODE_OF_CONDUCT.md), [router companion](router/companions/router_index.md) and [AGENTS](AGENTS.md). License: [MIT](LICENSE), subject to operator veto before the first push. Repository creation, commits, push and settings need the operator's separate authorization.
+Before push, run `python3 -B tools/verify_clean_clone.py` on a clean committed tree. CI runs Rust, Python, Node, checkJs, integration, router, publication lint, claims, owned-window WGC (**not available on hosted runner** when absent) and Gitleaks scans. See [acceptance](docs/acceptance/README.md), [SECURITY](SECURITY.md), [CONTRIBUTING](CONTRIBUTING.md), [conduct](CODE_OF_CONDUCT.md), [router](router/companions/router_index.md), [AGENTS](AGENTS.md), and [MIT](LICENSE).

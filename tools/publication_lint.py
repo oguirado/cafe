@@ -28,6 +28,7 @@ NAME_WORDS = frozenset('acceptance admission agents allowlist anchor answer app 
 NAME_WORDS = NAME_WORDS | frozenset({'pipeline', 'intents', 'operator', 'effects', 'runtime', 'recording', 'runtimebackend', 'service', 'services', 'owner', 'crop', 'timing'})
 # Reviewed English source names introduced by the D1/D3/D5 composition.
 NAME_WORDS = NAME_WORDS | frozenset({'pins', 'ffmpegselection', 'windowspackage', 'runbook'})
+NAME_WORDS = NAME_WORDS | frozenset({'organizer', 'discord', 'submission', 'devpost', 'video', 'script', 'bridge', 'dispatch', 'chat', 'digest', 'sources', 'codex'})
 FORBIDDEN_NAMES = {'operator.token', 'launch.token', 'auth.json'}
 
 

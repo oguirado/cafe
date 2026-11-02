@@ -3,6 +3,7 @@
 const { createCafeBridge } = require('./cafeBridge');
 const GET = 'cafe:getSnapshot';
 const SUBMIT = 'cafe:submitIntent';
+const PREVIEW = 'cafe:previewSource';
 const SNAPSHOT = 'cafe:snapshot';
 
 /** @param {import('electron').IpcRenderer} ipcRenderer */
@@ -10,7 +11,7 @@ function closedTransport(ipcRenderer) {
   return Object.freeze({
     /** @param {string} channel @param {unknown} [payload] @returns {Promise<unknown>} */
     async invoke(channel, payload) {
-      if (channel !== GET && channel !== SUBMIT) throw new Error('IPC_CHANNEL_DENIED');
+      if (channel !== GET && channel !== SUBMIT && channel !== PREVIEW) throw new Error('IPC_CHANNEL_DENIED');
       if (channel === GET && payload !== undefined) throw new Error('IPC_ARGUMENTS_DENIED');
       try { return channel === GET ? await ipcRenderer.invoke(channel) : await ipcRenderer.invoke(channel, payload); }
       catch { throw new Error('IPC_REQUEST_REJECTED'); }

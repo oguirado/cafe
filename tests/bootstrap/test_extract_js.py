@@ -24,22 +24,23 @@ GOLD = {
         ('SpawnPipeOptions', 'typedef::SpawnPipeOptions', 61),
         ('SpawnFn', 'typedef::SpawnFn', 67),
         ('SupervisorOptions', 'typedef::SupervisorOptions', 71),
-        ('getStatus', 'createBackendSupervisor::getStatus', 280),
-        ('handle', 'createBackendSupervisor::handle', 356),
-        ('subscribe', 'createBackendSupervisor::subscribe', 452),
-        ('start', 'createBackendSupervisor::start', 478),
-        ('dispose', 'createBackendSupervisor::dispose', 522),
-        ('submitHostSelection', 'createBackendSupervisor::submitHostSelection', 807),
-        ('createBackendSupervisor', 'createBackendSupervisor', 810),
+        ('getStatus', 'createBackendSupervisor::getStatus', 283),
+        ('handle', 'createBackendSupervisor::handle', 369),
+        ('subscribe', 'createBackendSupervisor::subscribe', 467),
+        ('start', 'createBackendSupervisor::start', 493),
+        ('dispose', 'createBackendSupervisor::dispose', 537),
+        ('submitHostSelection', 'createBackendSupervisor::submitHostSelection', 822),
+        ('createBackendSupervisor', 'createBackendSupervisor', 825),
     ],
     FILES[1]: [
         ('BridgeTransport', 'typedef::BridgeTransport', 12),
         ('BridgeStatus', 'typedef::BridgeStatus', 18),
         ('CafeBridge', 'typedef::CafeBridge', 29),
-        ('getSnapshot', 'createCafeBridge::getSnapshot', 201),
-        ('submitIntent', 'createCafeBridge::submitIntent', 210),
-        ('onSnapshot', 'createCafeBridge::onSnapshot', 218),
-        ('createCafeBridge', 'createCafeBridge', 230),
+        ('getSnapshot', 'createCafeBridge::getSnapshot', 205),
+        ('submitIntent', 'createCafeBridge::submitIntent', 214),
+        ('previewSource', 'createCafeBridge::previewSource', 220),
+        ('onSnapshot', 'createCafeBridge::onSnapshot', 249),
+        ('createCafeBridge', 'createCafeBridge', 261),
     ],
 }
 PREFIX = {FILES[0]: 'cafe_shell::main::backendSupervisor::',
@@ -90,7 +91,7 @@ class TestJavaScriptExtraction(unittest.TestCase):
         self.assertEqual(report['schema'], 'cafe.js-surface.v1')
         self.assertEqual(report['parser'], {'name':'typescript','version':'5.9.3'})
         self.assertEqual({f['path']: f['symbols'] for f in report['files']}, expected_inventory())
-        self.assertEqual(sum(len(f['symbols']) for f in report['files']), 23)
+        self.assertEqual(sum(len(f['symbols']) for f in report['files']), 24)
         for f in report['files']:
             self.assertEqual(f['source_sha256'], hashlib.sha256((ROOT/f['path']).read_bytes()).hexdigest())
             for row in f['symbols']:
@@ -176,10 +177,13 @@ export const real=1;
         rows = x.extract(ROOT, [path], inventory)['files'][0]['symbols']
         prefix = 'cafe_shell::main::ffmpegSelection::'
         expected = [
-            {'path': path, 'symbol': prefix+'verifyFfmpegSelection::bytes', 'name': 'bytes', 'line': 47, 'process': 'main'},
-            {'path': path, 'symbol': prefix+'verifyFfmpegSelection::file', 'name': 'file', 'line': 47, 'process': 'main'},
-            {'path': path, 'symbol': prefix+'verifyFfmpegSelection::sha256', 'name': 'sha256', 'line': 47, 'process': 'main'},
-            {'path': path, 'symbol': prefix+'verifyFfmpegSelection', 'name': 'verifyFfmpegSelection', 'line': 55, 'process': 'main'},
+            {'path': path, 'symbol': prefix+'verifyFfmpegSelection::bytes', 'name': 'bytes', 'line': 49, 'process': 'main'},
+            {'path': path, 'symbol': prefix+'verifyFfmpegSelection::file', 'name': 'file', 'line': 49, 'process': 'main'},
+            {'path': path, 'symbol': prefix+'verifyFfmpegSelection::sha256', 'name': 'sha256', 'line': 49, 'process': 'main'},
+            {'path': path, 'symbol': prefix+'DEFAULT_FFMPEG_SHA256', 'name': 'DEFAULT_FFMPEG_SHA256', 'line': 107, 'process': 'main'},
+            {'path': path, 'symbol': prefix+'defaultFfmpegCandidates', 'name': 'defaultFfmpegCandidates', 'line': 108, 'process': 'main'},
+            {'path': path, 'symbol': prefix+'resolveDefaultFfmpeg', 'name': 'resolveDefaultFfmpeg', 'line': 109, 'process': 'main'},
+            {'path': path, 'symbol': prefix+'verifyFfmpegSelection', 'name': 'verifyFfmpegSelection', 'line': 110, 'process': 'main'},
         ]
         self.assertEqual(rows, expected)
 
@@ -369,8 +373,8 @@ if __name__=='__main__':unittest.main()
 
 
 # G4 extension: hand transcribed public exports/facades from numbered candidate source.
-G4_GOLD = {'src/main/index.js': [('Backend', 'typedef::Backend', 9), ('DesktopShellOptions', 'typedef::DesktopShellOptions', 13), ('DesktopShellController', 'DesktopShellController', 214), ('createDesktopShell', 'createDesktopShell', 215)], 'src/main/shellSecurity.js': [('show', 'browserOptions::show', 20), ('webPreferences', 'browserOptions::webPreferences', 21), ('availability', 'unavailableSnapshot::availability', 106), ('pid', 'unavailableSnapshot::pid', 106), ('reason', 'unavailableSnapshot::reason', 107), ('authority_epoch', 'unavailableSnapshot::authority_epoch', 107), ('revision', 'unavailableSnapshot::revision', 108), ('state', 'unavailableSnapshot::state', 108), ('stderrBytes', 'unavailableSnapshot::stderrBytes', 108), ('pid', 'ownedChildAdapter::pid', 129), ('stdout', 'ownedChildAdapter::stdout', 129), ('stderr', 'ownedChildAdapter::stderr', 129), ('stdin', 'ownedChildAdapter::stdin', 129), ('on', 'ownedChildAdapter::on', 130), ('kill', 'ownedChildAdapter::kill', 122), ('Backend', 'typedef::Backend', 134), ('availability', 'publicSnapshot::availability', 158), ('pid', 'publicSnapshot::pid', 158), ('reason', 'publicSnapshot::reason', 159), ('authority_epoch', 'publicSnapshot::authority_epoch', 160), ('revision', 'publicSnapshot::revision', 160), ('state', 'publicSnapshot::state', 160), ('stderrBytes', 'publicSnapshot::stderrBytes', 160), ('BOOT_URL', 'BOOT_URL', 247), ('CSP', 'CSP', 248), ('INVOKE_CHANNELS', 'INVOKE_CHANNELS', 249), ('SNAPSHOT_CHANNEL', 'SNAPSHOT_CHANNEL', 250), ('isBootstrapUrl', 'isBootstrapUrl', 251), ('browserOptions', 'browserOptions', 252), ('admitCaller', 'admitCaller', 253), ('admitInvokeChannel', 'admitInvokeChannel', 254), ('hardenSession', 'hardenSession', 255), ('hardenWindow', 'hardenWindow', 256), ('installBootstrapProtocol', 'installBootstrapProtocol', 257), ('unavailableSnapshot', 'unavailableSnapshot', 258), ('ownedChildAdapter', 'ownedChildAdapter', 259), ('publicSnapshot', 'publicSnapshot', 261), ('bindNativeIpc', 'bindNativeIpc', 262), ('publishSnapshot', 'publishSnapshot', 263), ('assertSafeLaunch', 'assertSafeLaunch', 265), ('subscribeBackend', 'subscribeBackend', 266), ('bootRejected', 'bootRejected', 270)], 'src/preload/index.js': [('installPreload', 'installPreload', 19)], 'src/preload/preloadSecurity.js': [('invoke', 'closedTransport::invoke', 12), ('subscribe', 'closedTransport::subscribe', 19), ('closedTransport', 'closedTransport', 39), ('exposeClosedBridge', 'exposeClosedBridge', 40)], 'src/main/runtimeBackend.js': [('createPackagedBackend', 'createPackagedBackend', 69), ('path', 'selectExternalFfmpeg::path', 75), ('sha256', 'selectExternalFfmpeg::sha256', 75), ('selectExternalFfmpeg', 'selectExternalFfmpeg', 77)], 'src/renderer/control.js': [('createControls', 'createControls', 17), ('getState', 'createControls::getState', 24), ('subscribe', 'createControls::subscribe', 66), ('connect', 'createControls::connect', 59), ('dispose', 'createControls::dispose', 67), ('createCapsule', 'createControls::createCapsule', 78), ('refreshWindows', 'createControls::refreshWindows', 80), ('pairWindow', 'createControls::pairWindow', 82), ('chooseFolder', 'createControls::chooseFolder', 89), ('chooseFfmpeg', 'createControls::chooseFfmpeg', 90), ('startRecording', 'createControls::startRecording', 92), ('stopRecording', 'createControls::stopRecording', 94), ('sendToObs', 'createControls::sendToObs', 96), ('configureObs', 'createControls::configureObs', 98), ('configureTwitch', 'createControls::configureTwitch', 100), ('buildDiagnosticReport', 'buildDiagnosticReport', 118), ('schema', 'buildDiagnosticReport::schema', 125), ('bridge', 'buildDiagnosticReport::bridge', 126), ('result_state', 'buildDiagnosticReport::result_state', 127), ('result_code', 'buildDiagnosticReport::result_code', 128), ('capsule_count', 'buildDiagnosticReport::capsule_count', 129), ('paired_feed_count', 'buildDiagnosticReport::paired_feed_count', 130), ('listed_window_count', 'buildDiagnosticReport::listed_window_count', 131), ('minimized_window_count', 'buildDiagnosticReport::minimized_window_count', 132), ('visible_window_count', 'buildDiagnosticReport::visible_window_count', 133), ('readDiagnostics', 'readDiagnostics', 138)]}
-G4_SOURCE_HASHES = {'src/main/index.js': '1a00fe7e66214fce878fe45cd550ccb9adf90294887b0f90bd45cabbc1f14004', 'src/main/shellSecurity.js': 'fea03ba32b858b68c58c48284875c0e8ae677f55f8bf84b933d4f3d787d5b7f0', 'src/preload/index.js': 'de9d0ae6e243e0cad251c8d0f1bf8f86359e3bb7009639fdd0ad3c9349154855', 'src/preload/preloadSecurity.js': '79deb36d57c105ebb15ddcc982911902cea691fd22e97bf4f6e17fd477267342', 'src/main/runtimeBackend.js': '0880ad566bd387fccc45153fe3fd85f6889bd41db89f58b427ce9917a2ed4543', 'src/renderer/control.js': 'c8fd4c7406dc66974bd59c18410c623caad84ac3439aead6b21c4cbb69afa992'}
+G4_GOLD = {'src/main/index.js': [('Backend', 'typedef::Backend', 9), ('DesktopShellOptions', 'typedef::DesktopShellOptions', 13), ('DesktopShellController', 'DesktopShellController', 290), ('createDesktopShell', 'createDesktopShell', 291)], 'src/main/runtimeBackend.js': [('createPackagedBackend', 'createPackagedBackend', 108), ('path', 'selectExternalFfmpeg::path', 114), ('sha256', 'selectExternalFfmpeg::sha256', 114), ('selectExternalFfmpeg', 'selectExternalFfmpeg', 116)], 'src/main/shellSecurity.js': [('show', 'browserOptions::show', 20), ('webPreferences', 'browserOptions::webPreferences', 21), ('availability', 'unavailableSnapshot::availability', 151), ('pid', 'unavailableSnapshot::pid', 151), ('authority_epoch', 'unavailableSnapshot::authority_epoch', 152), ('reason', 'unavailableSnapshot::reason', 152), ('revision', 'unavailableSnapshot::revision', 153), ('state', 'unavailableSnapshot::state', 153), ('stderrBytes', 'unavailableSnapshot::stderrBytes', 153), ('kill', 'ownedChildAdapter::kill', 167), ('pid', 'ownedChildAdapter::pid', 174), ('stderr', 'ownedChildAdapter::stderr', 174), ('stdin', 'ownedChildAdapter::stdin', 174), ('stdout', 'ownedChildAdapter::stdout', 174), ('on', 'ownedChildAdapter::on', 175), ('Backend', 'typedef::Backend', 179), ('availability', 'publicSnapshot::availability', 204), ('pid', 'publicSnapshot::pid', 204), ('reason', 'publicSnapshot::reason', 205), ('authority_epoch', 'publicSnapshot::authority_epoch', 206), ('revision', 'publicSnapshot::revision', 206), ('state', 'publicSnapshot::state', 206), ('stderrBytes', 'publicSnapshot::stderrBytes', 206), ('BOOT_URL', 'BOOT_URL', 301), ('CSP', 'CSP', 302), ('INVOKE_CHANNELS', 'INVOKE_CHANNELS', 303), ('SNAPSHOT_CHANNEL', 'SNAPSHOT_CHANNEL', 304), ('isBootstrapUrl', 'isBootstrapUrl', 305), ('browserOptions', 'browserOptions', 306), ('admitCaller', 'admitCaller', 307), ('admitInvokeChannel', 'admitInvokeChannel', 308), ('hardenSession', 'hardenSession', 309), ('createPreviewSources', 'createPreviewSources', 310), ('hardenWindow', 'hardenWindow', 311), ('installBootstrapProtocol', 'installBootstrapProtocol', 312), ('unavailableSnapshot', 'unavailableSnapshot', 313), ('ownedChildAdapter', 'ownedChildAdapter', 314), ('publicSnapshot', 'publicSnapshot', 316), ('bindNativeIpc', 'bindNativeIpc', 317), ('publishSnapshot', 'publishSnapshot', 318), ('assertSafeLaunch', 'assertSafeLaunch', 320), ('subscribeBackend', 'subscribeBackend', 321), ('bootRejected', 'bootRejected', 325)], 'src/preload/index.js': [('installPreload', 'installPreload', 19)], 'src/preload/preloadSecurity.js': [('invoke', 'closedTransport::invoke', 13), ('subscribe', 'closedTransport::subscribe', 20), ('closedTransport', 'closedTransport', 40), ('exposeClosedBridge', 'exposeClosedBridge', 41)], 'src/renderer/control.js': [('createControls', 'createControls', 44), ('getState', 'createControls::getState', 53), ('connect', 'createControls::connect', 88), ('subscribe', 'createControls::subscribe', 95), ('dispose', 'createControls::dispose', 96), ('createCapsule', 'createControls::createCapsule', 107), ('refreshWindows', 'createControls::refreshWindows', 109), ('pairWindow', 'createControls::pairWindow', 111), ('chooseFolder', 'createControls::chooseFolder', 121), ('chooseFfmpeg', 'createControls::chooseFfmpeg', 122), ('startRecording', 'createControls::startRecording', 124), ('stopRecording', 'createControls::stopRecording', 126), ('sendToObs', 'createControls::sendToObs', 128), ('configureObs', 'createControls::configureObs', 130), ('configureTwitch', 'createControls::configureTwitch', 132), ('confirmOrganizerPlan', 'createControls::confirmOrganizerPlan', 135), ('rejectOrganizerPlan', 'createControls::rejectOrganizerPlan', 141), ('setAutoAnchor', 'createControls::setAutoAnchor', 148), ('removeCapsule', 'createControls::removeCapsule', 154), ('buildDiagnosticReport', 'buildDiagnosticReport', 193), ('schema', 'buildDiagnosticReport::schema', 200), ('bridge', 'buildDiagnosticReport::bridge', 201), ('result_state', 'buildDiagnosticReport::result_state', 202), ('result_code', 'buildDiagnosticReport::result_code', 203), ('capsule_count', 'buildDiagnosticReport::capsule_count', 204), ('paired_feed_count', 'buildDiagnosticReport::paired_feed_count', 205), ('listed_window_count', 'buildDiagnosticReport::listed_window_count', 206), ('minimized_window_count', 'buildDiagnosticReport::minimized_window_count', 207), ('visible_window_count', 'buildDiagnosticReport::visible_window_count', 208), ('readDiagnostics', 'readDiagnostics', 213)]}
+G4_SOURCE_HASHES = {'src/main/index.js': 'ef3bc7d3e8b465b8eaae54916f375095f6ab7b6e497df330f712ff9e5c417a56', 'src/main/runtimeBackend.js': '964a93e6b614238950898049bd71b66cbf7f29d325464d522f66ae6dbd482df0', 'src/main/shellSecurity.js': 'a72930c83ce306935af6200697f2c8423bffbfd24296ec5f83cfaf9d83de28d5', 'src/preload/index.js': 'de9d0ae6e243e0cad251c8d0f1bf8f86359e3bb7009639fdd0ad3c9349154855', 'src/preload/preloadSecurity.js': 'c080b999a7d3bd52ef92aac654601ee42fba5e4b356e977da10d928de029ce1e', 'src/renderer/control.js': 'd678f94c089363a3b8ab356e50c8185d7bfc828c7aa35158e3ee3e5ed93e1d12'}
 
 def g4_expected():
     result={}
@@ -384,7 +388,7 @@ class TestG4HandwrittenJavaScriptSurface(unittest.TestCase):
         inventory,_=q.load_inventory(ROOT,os.environ.get('CAFE_ROUTER_INVENTORY'))
         report=x.extract(ROOT,sorted(G4_GOLD),inventory)
         self.assertEqual({row['path']:row['symbols'] for row in report['files']},g4_expected())
-        self.assertEqual(sum(len(row['symbols']) for row in report['files']),81)
+        self.assertEqual(sum(len(row['symbols']) for row in report['files']),86)
         self.assertEqual({row['path']:row['source_sha256'] for row in report['files']},G4_SOURCE_HASHES)
     def test_removed_named_controller_export_breaks_manual_inventory(self):
         with tempfile.TemporaryDirectory() as directory:

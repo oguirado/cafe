@@ -41,6 +41,7 @@ fn recorder_child_fixture(){
         "slow"=>{std::thread::sleep(Duration::from_secs(3));let _=std::io::copy(&mut std::io::stdin(),&mut std::io::sink());},
         "delay_eof"=>{let _=std::io::copy(&mut std::io::stdin(),&mut std::io::sink());std::thread::sleep(Duration::from_secs(3));},
         "junk"=>{let _=std::io::copy(&mut std::io::stdin(),&mut std::io::sink());std::fs::write("segment.partial.mkv",b"not a video").unwrap();},
+        "three_frames"=>{let mut data=[0u8;3072];std::io::stdin().read_exact(&mut data).unwrap();std::fs::write("three.frames",b"3072").unwrap();let _=std::io::copy(&mut std::io::stdin(),&mut std::io::sink());},
         "drain"=>{let _=std::io::copy(&mut std::io::stdin(),&mut std::io::sink());},
         _=>std::process::exit(23),
     }
@@ -207,3 +208,64 @@ fn parent_preview_hook_uses_same_recorder_and_clears_on_interruption(){runtime()
     assert_eq!(recorder.state(),RecordingState::Interrupted);assert!(recorder.take_preview().is_none());assert!(recorder.stop(&mut journal).await.is_err());
     assert_eq!(journal.records().len(),1);assert_eq!(journal.records()[0].kind,"media_intent");
 });}
+
+#[cfg(unix)]
+#[test]
+fn ready_start_returns_the_live_timeline_and_keeps_durable_receipt(){runtime().block_on(async{
+    let scratch=Scratch::new();let binary=ffmpeg();let p=profile();
+    let approval=preflight(&binary,Encoder::Ffv1,EncoderUse::Development,p,&scratch.0.join("ready-probe.mkv")).await.expect("BLOCKED: real development FFmpeg required");
+    let mut journal=scratch.journal();let before=Instant::now();
+    let (mut recorder,origin)=Recorder::start_ready(approval,&scratch.0,plan(),&mut journal).await.unwrap();
+    assert!(origin>=before && origin<=Instant::now());let pool=pool(p,1);
+    recorder.admit(frame(&pool,p,1,[9,17,23,255]),origin).unwrap();
+    for milliseconds in [0,40,80]{assert!(recorder.pace(origin+Duration::from_millis(milliseconds)).unwrap());assert!(recorder.pump_one().await.unwrap());}
+    let receipt=recorder.stop(&mut journal).await.unwrap();assert_eq!(receipt.frames,3);assert_eq!(recorder.state(),RecordingState::Complete);assert_eq!(journal.records().len(),2);assert_eq!(journal.records()[1].kind,"media_published");
+});}
+
+#[test]
+fn pending_write_is_bounded_and_unconfirmed_frames_never_count(){runtime().block_on(async{
+    let scratch=Scratch::new();let mut journal=scratch.journal();let origin=Instant::now();let mut p=profile();p.width=512;p.height=512;p.queue_capacity=2;p.write_timeout=Duration::from_secs(4);let pool=pool(p,3);
+    let mut recorder=Recorder::test_with_child("slow",&scratch.0,plan(),p,&mut journal,origin).unwrap();
+    recorder.admit(frame(&pool,p,1,[1,2,3,255]),origin).unwrap();assert!(recorder.pace(origin).unwrap());assert!(recorder.begin_pump().unwrap());
+    tokio::task::yield_now().await;
+    assert!(!tokio::time::timeout(Duration::from_millis(200),recorder.poll_pump()).await.expect("poll must not wait on a blocked pipe").unwrap());assert_eq!(recorder.counters().written_frames,0);assert_eq!(recorder.queue_len(),1);
+    recorder.admit(frame(&pool,p,2,[4,5,6,255]),origin+Duration::from_millis(40)).unwrap();assert!(recorder.pace(origin+Duration::from_millis(40)).unwrap());assert_eq!(recorder.queue_len(),2);
+    assert!(matches!(recorder.pace(origin+Duration::from_millis(80)),Err(RecorderError::QueueFull)));assert_eq!(recorder.counters().written_frames,0);
+    recorder.interrupt().await.unwrap();assert!(recorder.stop(&mut journal).await.is_err());assert_eq!(journal.records().len(),1);assert!(!scratch.0.join("segment.mkv").exists());
+});}
+
+#[test]
+fn hardware_input_queue_is_literal_bounded_and_precedes_the_input(){
+ for encoder in [Encoder::Nvenc,Encoder::Amf,Encoder::Qsv]{
+  let args=Recorder::test_argv(profile(),encoder,Path::new("segment.partial.mkv"));let args=args.iter().map(|s|s.to_str().unwrap()).collect::<Vec<_>>();
+  let q=args.iter().position(|s|*s=="-thread_queue_size").unwrap();let input=args.iter().position(|s|*s=="-i").unwrap();assert_eq!(args[q+1],"16");assert!(q<input);assert_eq!(args.iter().filter(|s|**s=="-thread_queue_size").count(),1);assert_eq!(args[args.iter().position(|s|*s=="-c:v").unwrap()+1],encoder.name());
+ }
+}
+
+#[test]
+fn ordered_writer_drains_backlog_without_capture_polling(){runtime().block_on(async{
+ let scratch=Scratch::new();let mut journal=scratch.journal();let origin=Instant::now();let p=profile();let pool=pool(p,4);
+ let mut recorder=Recorder::test_with_child("three_frames",&scratch.0,plan(),p,&mut journal,origin).unwrap();
+ for i in 0..3 {let now=origin+Duration::from_millis(i*40);recorder.admit(frame(&pool,p,i+1,[1,2,3,255]),now).unwrap();assert!(recorder.pace(now).unwrap());}
+ assert!(recorder.begin_pump().unwrap());assert_eq!(recorder.queue_len(),3);assert_eq!(recorder.counters().written_frames,0);
+ let deadline=Instant::now()+Duration::from_secs(2);
+ while !scratch.0.join("three.frames").exists(){assert!(Instant::now()<deadline,"writer must drain without a parent poll per frame");tokio::time::sleep(Duration::from_millis(2)).await;}
+ assert_eq!(std::fs::read(scratch.0.join("three.frames")).unwrap(),b"3072");assert_eq!(recorder.counters().written_frames,0,"receipt counters only advance on collected confirmed acknowledgments");
+ let deadline=Instant::now()+Duration::from_secs(2);while recorder.counters().written_frames<3{recorder.poll_pump().await.unwrap();assert!(Instant::now()<deadline);tokio::task::yield_now().await;}
+ assert_eq!(recorder.counters().written_bytes,3072);assert_eq!(recorder.queue_len(),0);recorder.interrupt().await.unwrap();assert_eq!(journal.records().len(),1);assert!(!scratch.0.join("segment.mkv").exists());
+});}
+
+#[test]
+fn preflight_reprofile_preserves_approval_across_dimensions_and_rejects_modified_binary(){
+    let scratch=Scratch::new();let binary=scratch.0.join("synthetic-ffmpeg.bin");std::fs::write(&binary,b"synthetic-binary-v1").unwrap();
+    let digest=authority_journal::sha256_hex(b"synthetic-binary-v1");
+    let base=ffmpeg_recorder::Preflight::test_synthetic(binary.clone(),digest,Encoder::Nvenc,profile());
+    let mut resized=profile();resized.width=856;resized.height=481;
+    let reprofiled=base.with_profile(resized).unwrap();
+    assert_eq!(reprofiled.encoder(),Encoder::Nvenc);
+    assert_eq!((reprofiled.profile().width,reprofiled.profile().height),(856,481));
+    let mut invalid=resized;invalid.width=0;
+    assert_eq!(base.with_profile(invalid).unwrap_err(),RecorderError::InvalidProfile);
+    std::fs::write(&binary,b"synthetic-binary-v2").unwrap();
+    assert_eq!(base.with_profile(resized).unwrap_err(),RecorderError::ExecutableChanged);
+}

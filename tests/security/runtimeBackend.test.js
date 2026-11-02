@@ -94,3 +94,130 @@ test('external FFmpeg rejects oversize and empty selections before hashing', () 
   fs.truncateSync(file, 512 * 1024 * 1024 + 1);
   assert.throws(() => select(file), /AUTHORITY_FILE_REJECTED/);
 }));
+
+
+test('optional native default is verified and child environment stays pruned', () => fixture((resources, root) => {
+  const api = require('node:child_process'), original = api.spawn;
+  const file = path.join(root, 'synthetic-default.exe'); fs.writeFileSync(file, 'synthetic external choice');
+  const pin = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  const receipt = path.join(resources, 'cafe-build.json'), data = JSON.parse(fs.readFileSync(receipt, 'utf8'));
+  data.ffmpeg_binary = { path: fs.realpathSync.native(file), sha256: pin }; fs.writeFileSync(receipt, JSON.stringify(data));
+  let captured;
+  api.spawn = (_command, _args, options) => { captured = options.env; const child = new EventEmitter(); return Object.assign(child, { pid: undefined, stdout: new EventEmitter(), stderr: new EventEmitter(), stdin: Object.assign(new EventEmitter(), { write: () => true, writableLength: 0 }), kill: () => { throw new Error('unexpected signal'); } }); };
+  try { const supervisor = createPackagedBackend(options(resources, root)); supervisor.start(); supervisor.dispose(); }
+  finally { api.spawn = original; }
+  assert.equal(captured.CAFE_FFMPEG_PATH, data.ffmpeg_binary.path); assert.equal(captured.CAFE_FFMPEG_SHA256, pin);
+  assert.equal(captured.CAFE_FFMPEG_STARTUP_BLOCKED, undefined); assert.equal(captured.NODE_OPTIONS, undefined); assert.equal(captured.OPENAI_API_KEY, undefined); assert.equal(captured.PATH, undefined);
+}));
+test('invalid optional native default remains unconfigured without breaking manual setup', () => fixture((resources, root) => {
+  const api = require('node:child_process'), original = api.spawn;
+  const receipt = path.join(resources, 'cafe-build.json'), data = JSON.parse(fs.readFileSync(receipt, 'utf8'));
+  data.ffmpeg_binary = { path: 'relative.exe', sha256: 'f'.repeat(64) }; fs.writeFileSync(receipt, JSON.stringify(data));
+  let captured;
+  api.spawn = (_command, _args, options) => { captured = options.env; const child = new EventEmitter(); return Object.assign(child, { pid: undefined, stdout: new EventEmitter(), stderr: new EventEmitter(), stdin: Object.assign(new EventEmitter(), { write: () => true, writableLength: 0 }), kill: () => { throw new Error('unexpected signal'); } }); };
+  try { const supervisor = createPackagedBackend(options(resources, root)); supervisor.start(); supervisor.dispose(); }
+  finally { api.spawn = original; }
+  assert.equal(captured.CAFE_FFMPEG_PATH, undefined); assert.equal(captured.CAFE_FFMPEG_SHA256, undefined); assert.equal(captured.CAFE_FFMPEG_STARTUP_BLOCKED, '1');
+}));
+
+test('unconfigured FFmpeg probes default candidates for the approved pin and falls back to manual flow when absent, wrong-hash or symlinked', () => fixture((resources, root) => {
+  const api = require('node:child_process'), originalSpawn = api.spawn;
+  const originalCreateHash = crypto.createHash;
+  const originalLocalAppData = process.env.LOCALAPPDATA;
+  const originalPath = process.env.PATH;
+  const approvedPin = 'c6caa1894d3276556c84b36acc1d219d69f972c0a7525b23f1cad2bdf05c4231';
+  const approvedBytes = Buffer.from('synthetic-approved-default-ffmpeg');
+  const realRoot = fs.realpathSync.native(root);
+  const localAppData = path.join(realRoot, 'localappdata');
+  const localBin = path.join(localAppData, 'Cafe', 'ffmpeg', 'bin');
+  const symlinkDir = path.join(realRoot, 'path-symlink');
+  const pathDir = path.join(realRoot, 'path-valid');
+  const targetDir = path.join(realRoot, 'target-dir');
+  fs.mkdirSync(localBin, { recursive: true });
+  fs.mkdirSync(symlinkDir, { recursive: true });
+  fs.mkdirSync(pathDir, { recursive: true });
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  crypto.createHash = function (algorithm) {
+    const real = originalCreateHash.call(crypto, algorithm);
+    const chunks = [];
+    const update = real.update.bind(real);
+    const digest = real.digest.bind(real);
+    real.update = (chunk, ...rest) => {
+      chunks.push(Buffer.from(chunk));
+      return update(chunk, ...rest);
+    };
+    real.digest = (encoding) => {
+      if (encoding === 'hex' && Buffer.concat(chunks).equals(approvedBytes)) {
+        return approvedPin;
+      }
+      return digest(encoding);
+    };
+    return real;
+  };
+
+  /** @returns {NodeJS.ProcessEnv} */
+  const runAndCaptureEnv = () => {
+    /** @type {NodeJS.ProcessEnv | undefined} */
+    let captured;
+    api.spawn = (_command, _args, spawnOptions) => {
+      captured = spawnOptions.env;
+      const child = new EventEmitter();
+      return Object.assign(child, {
+        pid: undefined,
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+        stdin: Object.assign(new EventEmitter(), { write: () => true, writableLength: 0 }),
+        kill: () => { throw new Error('unexpected signal'); },
+      });
+    };
+    const supervisor = createPackagedBackend(options(resources, root));
+    supervisor.start();
+    supervisor.dispose();
+    if (!captured) throw new Error('missing captured env');
+    return captured;
+  };
+
+  try {
+    // 1. Nothing found -> manual flow (no env vars, not startup-blocked)
+    process.env.LOCALAPPDATA = localAppData;
+    process.env.PATH = `${symlinkDir};${pathDir}`;
+    let env = runAndCaptureEnv();
+    assert.equal(env.CAFE_FFMPEG_PATH, undefined);
+    assert.equal(env.CAFE_FFMPEG_SHA256, undefined);
+    assert.equal(env.CAFE_FFMPEG_STARTUP_BLOCKED, undefined);
+
+    // 2. Wrong hash in LOCALAPPDATA and symlink in PATH -> both rejected, manual flow kept
+    const localFfmpeg = path.join(localBin, 'ffmpeg.exe');
+    fs.writeFileSync(localFfmpeg, 'wrong-hash-bytes');
+    const symlinkTarget = path.join(targetDir, 'ffmpeg.exe');
+    fs.writeFileSync(symlinkTarget, approvedBytes);
+    fs.symlinkSync(symlinkTarget, path.join(symlinkDir, 'ffmpeg.exe'));
+    env = runAndCaptureEnv();
+    assert.equal(env.CAFE_FFMPEG_PATH, undefined);
+    assert.equal(env.CAFE_FFMPEG_SHA256, undefined);
+    assert.equal(env.CAFE_FFMPEG_STARTUP_BLOCKED, undefined);
+
+    // 3. Pin match in PATH after wrong-hash LOCALAPPDATA and symlink PATH entry -> selects PATH match
+    const pathFfmpeg = path.join(pathDir, 'ffmpeg.exe');
+    fs.writeFileSync(pathFfmpeg, approvedBytes);
+    env = runAndCaptureEnv();
+    assert.equal(env.CAFE_FFMPEG_PATH, pathFfmpeg);
+    assert.equal(env.CAFE_FFMPEG_SHA256, approvedPin);
+    assert.equal(env.CAFE_FFMPEG_STARTUP_BLOCKED, undefined);
+
+    // 4. Pin match in LOCALAPPDATA -> takes precedence over PATH
+    fs.writeFileSync(localFfmpeg, approvedBytes);
+    env = runAndCaptureEnv();
+    assert.equal(env.CAFE_FFMPEG_PATH, localFfmpeg);
+    assert.equal(env.CAFE_FFMPEG_SHA256, approvedPin);
+    assert.equal(env.CAFE_FFMPEG_STARTUP_BLOCKED, undefined);
+  } finally {
+    api.spawn = originalSpawn;
+    crypto.createHash = originalCreateHash;
+    if (originalLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = originalLocalAppData;
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+}));

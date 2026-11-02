@@ -5,9 +5,10 @@ send_to_obs) over the frozen cafe.control_intent.v1 wire contract. This module
 never mints confirmations, never reads approvals from MCP arguments or files,
 and never claims live product control: without a trusted configured snapshot
 provider, approval callback and rendezvous bridge every control attempt ends in
-an honest blocked reply. The native Rust confirmation bridge is pending
-(runtime_main advertises mcp_control_available=false), so default deployments
-deny by default.
+an honest blocked reply. Direct control still requires its separate trusted approval provider
+(runtime_main advertises mcp_control_available=false). The proposed organizer
+bridge in mcp_organizer sends only plan requests; its one native confirmation
+stays in the authority process. Windows acceptance is PENDING-LIVE.
 
 Provider protocols (all injected, trusted, in-process only, never files):
   snapshot_provider() -> None | {"authority_epoch": str, "revision": str | None,

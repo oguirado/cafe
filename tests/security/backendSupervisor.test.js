@@ -66,7 +66,7 @@ test('unauthorized origin and non-main or foreign frame are rejected',async t=>{
 test('arbitrary channels and process lifecycle methods are unavailable to renderer',async t=>{
  const s=setup(t);s.supervisor.start();await until(()=>s.supervisor.getStatus().availability==='available');
  for(const method of ['invoke','arbitrary','dispose','start','spawn','kill','__proto__'])assert.throws(()=>s.supervisor.handle(s.caller(),method,{}));
- const bridge=s.bridge();assert.deepEqual(Object.keys(bridge).sort(),['getSnapshot','onSnapshot','submitIntent']);assert.equal(Object.isFrozen(bridge),true);assert.equal(bridge.ipcRenderer,undefined);
+ const bridge=s.bridge();assert.deepEqual(Object.keys(bridge).sort(),['getSnapshot','onSnapshot','previewSource','submitIntent']);assert.equal(Object.isFrozen(bridge),true);assert.equal(bridge.ipcRenderer,undefined);
 });
 test('oversized unterminated line becomes visibly unavailable without parsing',async t=>{
  const s=setup(t,'giant',{maxLineBytes:1024,maxQueueBytes:8192});const seen=[];s.supervisor.subscribe(s.caller(),v=>seen.push(v));s.supervisor.start();

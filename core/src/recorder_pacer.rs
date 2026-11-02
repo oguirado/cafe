@@ -149,6 +149,25 @@ impl Pacer {
     }
 
     /// Select at most one due slot. Returns `None` before its deadline.
+    /// Live capture recovery: after a host stall, jump the timeline to the current
+    /// slot instead of failing the recording. Returns how many slots were skipped.
+    pub fn skip_late(&mut self, now: Instant) -> u64 {
+        let Some(elapsed) = now.checked_duration_since(self.origin) else { return 0 };
+        let den = (self.profile.fps_den as u128).saturating_mul(1_000_000_000);
+        let current = elapsed.as_nanos().saturating_mul(self.profile.fps_num as u128) / den;
+        let Ok(current) = u64::try_from(current) else { return 0 };
+        let period_ns = 1_000_000_000u128 * self.profile.fps_den as u128 / self.profile.fps_num as u128;
+        let late_slots = u64::try_from(self.profile.max_lateness_ns as u128 / period_ns.max(1)).unwrap_or(u64::MAX);
+        if current.saturating_sub(self.index) <= late_slots { return 0; }
+        // Move the origin, not the index: written slots must stay contiguous.
+        let skipped = current - self.index;
+        let shift_ns = (skipped as u128).saturating_mul(1_000_000_000).saturating_mul(self.profile.fps_den as u128) / self.profile.fps_num as u128;
+        let Ok(shift_ns) = u64::try_from(shift_ns) else { return 0 };
+        let Some(origin) = self.origin.checked_add(Duration::from_nanos(shift_ns)) else { return 0 };
+        self.origin = origin;
+        skipped
+    }
+
     pub fn select(&mut self, now: Instant) -> Result<Option<OutputFrame>, PacerError> {
         if now < self.origin {
             return Err(PacerError::ClockRegression);

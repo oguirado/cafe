@@ -63,13 +63,13 @@ class TestPythonExtraction(unittest.TestCase):
         inventory, _ = q.load_inventory(ROOT, os.environ.get('CAFE_ROUTER_INVENTORY'))
         # Numbered current source, independently transcribed before extraction.
         expected = [
-            ('CONTROL_TOOLS', 56, 'constant'), ('AUTHORITY_OPS', 57, 'constant'),
-            ('INTENT_SCHEMA', 58, 'constant'), ('INTENT_KIND', 59, 'constant'),
-            ('RECEIPT_SCHEMA', 60, 'constant'), ('LOOPBACK', 61, 'constant'),
-            ('BROKER_IDENTITY', 62, 'constant'), ('CONTROL_STATES', 72, 'constant'),
-            ('SUCCESS_STATES', 73, 'constant'), ('CONTROL_ERRORS', 75, 'constant'),
-            ('AUTHORITY_ERRORS', 83, 'constant'), ('ControlPlane', 246, 'class'),
-            ('main', 785, 'function'),
+            ('CONTROL_TOOLS', 57, 'constant'), ('AUTHORITY_OPS', 58, 'constant'),
+            ('INTENT_SCHEMA', 59, 'constant'), ('INTENT_KIND', 60, 'constant'),
+            ('RECEIPT_SCHEMA', 61, 'constant'), ('LOOPBACK', 62, 'constant'),
+            ('BROKER_IDENTITY', 63, 'constant'), ('CONTROL_STATES', 73, 'constant'),
+            ('SUCCESS_STATES', 74, 'constant'), ('CONTROL_ERRORS', 76, 'constant'),
+            ('AUTHORITY_ERRORS', 84, 'constant'), ('ControlPlane', 247, 'class'),
+            ('main', 786, 'function'),
         ]
         self.assertEqual(x.extract(ROOT, [path], inventory)['files'][0]['symbols'], [
             {'path': path, 'symbol': 'cafe.mcp_control.'+name, 'name': name,

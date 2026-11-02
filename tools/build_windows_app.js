@@ -8,8 +8,8 @@ const { spawnSync } = require('node:child_process');
 const { applyShellFuses } = require('./apply_shell_fuses');
 
 const ELECTRON_SHA256 = '1a9ed7f4e70291c95ed9479d7fcd384a2d9cf062e5fb7ce846b119c7c63036c3';
-const APP_FILES = ['package.json', 'src/main/index.js', 'src/main/shellSecurity.js',
-  'src/main/backendSupervisor.js', 'src/main/runtimeBackend.js', 'src/main/rendererAssets.js', 'src/main/ffmpegSelection.js', 'dist/preload/index.cjs',
+const APP_FILES = ['package.json', 'src/contracts/runtime_logging.json', 'src/main/runtime_logging.js', 'src/main/index.js', 'src/main/shellSecurity.js',
+  'src/main/backendSupervisor.js', 'src/main/runtimeBackend.js', 'src/main/capture_sources.js','src/main/rendererAssets.js', 'src/main/ffmpegSelection.js', 'dist/preload/index.cjs',
   'dist/renderer/manifest.json', 'dist/renderer/renderer.js', 'dist/renderer/renderer.css', 'LICENSE', 'NOTICE',
   'ui/src/design/vendor/open-design-openai/LICENSE', 'ui/src/design/vendor/open-design-openai/PROVENANCE.md', 'docs/ui/PROVENANCE.md'];
 
@@ -115,6 +115,9 @@ async function buildCheckedWindowsApp(request) {
     fs.copyFileSync(path.join(runtime,'runtime-manifest.json'),path.join(resources,'runtime-manifest.json'));
     fs.mkdirSync(path.join(resources,'backend'));fs.copyFileSync(authority,path.join(resources,'backend/cafe-core.exe'));
     if (digest(path.join(resources,'backend/cafe-core.exe'))!==request.authoritySha256) throw new Error('AUTHORITY_CHANGED_DURING_COPY');
+    fs.mkdirSync(path.join(resources, 'src/contracts'), {recursive:true});
+    fs.copyFileSync(path.join(root, 'src/contracts/runtime_logging.json'), path.join(resources, 'src/contracts/runtime_logging.json'));
+    if (digest(path.join(resources, 'src/contracts/runtime_logging.json')) !== sourceHashes['src/contracts/runtime_logging.json']) throw new Error('TRACE_SCHEMA_CHANGED');
     phase = 'connectors';
     const connectors=inventory.filter(name => name.startsWith('connectors/') && name.endsWith('.py'));
     for (const required of ['connectors/cafe/mcp_server.py','connectors/cafe/mcp_queries.py','connectors/cafe/twitch_chat.py','connectors/cafe/twitch_storage.py','connectors/cafe/obs_bridge.py']) if (!connectors.includes(required)) throw new Error('MVP_CONNECTOR_ABSENT');

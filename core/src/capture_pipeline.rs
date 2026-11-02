@@ -72,6 +72,7 @@ pub struct CapturePipeline<S: FrameSource> {
     recorder: Recorder,
     started: bool,
     stopped: bool,
+    live_pump: bool,
 }
 
 impl<S: FrameSource> CapturePipeline<S> {
@@ -81,7 +82,15 @@ impl<S: FrameSource> CapturePipeline<S> {
             recorder,
             started: false,
             stopped: false,
+            live_pump: false,
         }
+    }
+
+    /// Live runtime keeps pacing independent of the bounded pipe writer.
+    pub fn new_live(source: S, recorder: Recorder) -> Self {
+        let mut pipeline = Self::new(source, recorder);
+        pipeline.live_pump = true;
+        pipeline
     }
 
     /// Drive one capture-to-recorder step on the caller-supplied monotonic `now`.
@@ -96,6 +105,16 @@ impl<S: FrameSource> CapturePipeline<S> {
         registry: &WindowRegistry,
         now: Instant,
     ) -> Result<Tick, PipelineError> {
+        let live = self.live_pump;
+        self.tick_mode(registry, now, live).await
+    }
+
+    /// Live cadence path: confirmed writes are collected without waiting for IO.
+    pub async fn tick_nonblocking(&mut self, registry: &WindowRegistry, now: Instant) -> Result<Tick, PipelineError> {
+        self.tick_mode(registry, now, true).await
+    }
+
+    async fn tick_mode(&mut self, registry: &WindowRegistry, now: Instant, nonblocking: bool) -> Result<Tick, PipelineError> {
         if self.stopped {
             return Err(PipelineError::Stopped);
         }
@@ -110,6 +129,12 @@ impl<S: FrameSource> CapturePipeline<S> {
         }
         match state {
             CaptureState::Healthy => {
+                let acknowledged = if nonblocking {
+                    match self.recorder.poll_pump().await {
+                        Ok(value) => value,
+                        Err(err) => { let _ = self.source.stop(); let _ = self.recorder.interrupt().await; self.stopped = true; return Err(PipelineError::Recorder(err)); },
+                    }
+                } else { false };
                 if let Some(owned) = frame {
                     if let Err(err) = self.recorder.admit(owned, now) {
                         let _ = self.source.stop();
@@ -127,7 +152,8 @@ impl<S: FrameSource> CapturePipeline<S> {
                     self.stopped = true;
                     return Err(PipelineError::Recorder(err));
                 }
-                match self.recorder.pump_one().await {
+                let pumped = if nonblocking { self.recorder.begin_pump().map(|_| acknowledged) } else { self.recorder.pump_one().await };
+                match pumped {
                     Err(err) => {
                         let _ = self.source.stop();
                         let _ = self.recorder.interrupt().await;

@@ -224,6 +224,13 @@
       "language": "Text",
       "role": "Upstream attribution notices",
       "extractor": "not indexed"
+    },
+    {
+      "path": "submission/",
+      "owner": "Architecture and repository rules",
+      "language": "Markdown",
+      "role": "Hackathon submission and demo script",
+      "extractor": "not indexed"
     }
   ]
 }

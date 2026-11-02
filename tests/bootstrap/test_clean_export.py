@@ -97,7 +97,7 @@ class TestCleanExport(unittest.TestCase):
   self.assertEqual(subprocess.run(['git','check-ignore','-q','node_modules'],cwd=clone).returncode,0)
  def test_metadata_exceptions_reject_appended_credentials(self):
   patterns=tomllib.loads((ROOT/'.gitleaks.toml').read_text())['allowlist']['regexes']
-  lines=[(ROOT/'catalogue/router_sources.json').read_text().rstrip('\n'),next(v for v in (ROOT/'tests/bootstrap/test_extract_rust.py').read_text().splitlines() if v.startswith('SOURCE_HASHES = ')),next(v for v in (ROOT/'requirements-ci.txt').read_text().splitlines() if re.fullmatch(r'\s*--hash=sha256:[a-f0-9]{64}\s*\\?\s*',v))]
+  lines=(ROOT/'catalogue/router_sources.json').read_text().splitlines()+[next(v for v in (ROOT/'tests/bootstrap/test_extract_rust.py').read_text().splitlines() if v.startswith('SOURCE_HASHES = ')),next(v for v in (ROOT/'requirements-ci.txt').read_text().splitlines() if re.fullmatch(r'\s*--hash=sha256:[a-f0-9]{64}\s*\\?\s*',v))]
   for line in lines:
    for prefix in ['', '\n']:
     with self.subTest(metadata_shape=True,prefix=bool(prefix)):self.assertTrue(any(re.fullmatch(p,prefix+line) for p in patterns))
@@ -108,11 +108,13 @@ class TestCleanExport(unittest.TestCase):
 
 
  def test_router_receipt_pattern_supports_growth_and_rejects_invalid_values(self):
+  import build_cafe_nodes as B
   patterns=tomllib.loads((ROOT/'.gitleaks.toml').read_text())['allowlist']['regexes']
   receipt=json.loads((ROOT/'catalogue/router_sources.json').read_text())
   def matches(value):
-   line=json.dumps(value,sort_keys=True,separators=(',',':'))
-   return any(re.fullmatch(p,line) for p in patterns)
+   try:lines=B.encode_receipt(value).decode().splitlines()
+   except (KeyError,TypeError,ValueError):lines=json.dumps(value,sort_keys=True,separators=(',',':')).splitlines()
+   return bool(lines) and all(len(line.encode())<9000 and any(re.fullmatch(p,line) for p in patterns) for line in lines)
   added='core/tests/journal_recovery.rs'
   self.assertTrue((ROOT/added).is_file())
   receipt['families']['rust-extra-journal-fixture']=added

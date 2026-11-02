@@ -93,6 +93,8 @@ class TestClaims(unittest.TestCase):
   self.assertNotIn('paths',allow);self.assertEqual(allow['regexTarget'],'line');patterns=allow['regexes'];self.assertTrue(all(p.startswith('^') and p.endswith('$') for p in patterns))
   line='SCHEMA_SHA256 = "'+'a'*64+'"';self.assertTrue(any(re.fullmatch(p,line) for p in patterns))
   token='ghp_'+'a1'*18;self.assertFalse(any(re.fullmatch(p,line+' '+token) for p in patterns));self.assertTrue(pub.CREDENTIAL.search(line+' '+token))
+  historic='{"corpus":"cafe","families":{},"metadata":{},"node_schema_sha256":"'+'a'*64+'","profile_sha256":"'+'a'*64+'","schema":"cafe.router-sources.v1","sources":{},"tools":{}}'
+  self.assertTrue(any(re.fullmatch(p,historic) for p in patterns));self.assertFalse(any(re.fullmatch(p,historic+' '+token) for p in patterns))
  def test_shipped_tokenizer_asset_digest(self):
   asset=ROOT/'tools/assets/tokenizer/fb374d419588a4632f3f557e76b4b70aebbca790'
   self.assertEqual(hashlib.sha256(asset.read_bytes()).hexdigest(),'446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0cfb1a2d')

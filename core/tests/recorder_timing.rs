@@ -190,3 +190,14 @@ fn preview_ntsc_60000_1001_emits_1000_over_1001_slots(){
     assert_eq!(emitted,expected);
     assert_eq!(selector.counters(),PreviewCounters{emitted:1000,decimated:1});
 }
+
+#[test]
+fn skip_late_moves_the_origin_past_a_stall_and_keeps_slots_contiguous() {
+    let origin = Instant::now();
+    let profile = PacerProfile::sixty_fps(100_000_000, 3_600_000_000_000).unwrap();
+    let mut pacer = Pacer::new(profile, origin).unwrap();
+    assert_eq!(pacer.skip_late(origin + Duration::from_millis(50)), 0);
+    assert_eq!(pacer.skip_late(origin + Duration::from_millis(1000)), 60);
+    assert_eq!(pacer.skip_late(origin + Duration::from_millis(1000)), 0);
+    assert_eq!(pacer.skip_late(origin + Duration::from_millis(1100)), 0);
+}

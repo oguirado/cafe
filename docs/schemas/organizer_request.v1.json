@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cafe.organizer.v1",
+  "title": "Proposed organizer broker requests (PENDING-LIVE)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "kind",
+    "request_id",
+    "authority_epoch",
+    "body"
+  ],
+  "properties": {
+    "schema": {
+      "const": "cafe.organizer.v1"
+    },
+    "kind": {
+      "const": "organizer_request"
+    },
+    "request_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+    },
+    "authority_epoch": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "body": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "organizer_status"
+            }
+          },
+          "required": [
+            "op"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "list_discord_windows"
+            }
+          },
+          "required": [
+            "op"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "propose_recording_plan"
+            },
+            "folder_name": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$"
+            },
+            "tokens": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "minItems": 1,
+              "maxItems": 12,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "op",
+            "folder_name"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "plan_result"
+            },
+            "plan_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+            }
+          },
+          "required": [
+            "op",
+            "plan_id"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "propose_stop_all"
+            },
+            "capsule_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+              },
+              "minItems": 1,
+              "maxItems": 12,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "op"
+          ]
+        }
+      ]
+    }
+  }
+}

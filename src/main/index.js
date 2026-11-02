@@ -92,7 +92,6 @@ async function createDesktopShell(electronApi, options) {
   await app.whenReady();
 
   const rendererBundle = rendererAssets.loadRendererBundle(app.getAppPath());
-  security.hardenSession(session.defaultSession, rendererBundle);
   security.installBootstrapProtocol(protocol, rendererBundle);
 
   /** @type {import('electron').BrowserWindow | null} */
@@ -104,6 +103,9 @@ async function createDesktopShell(electronApi, options) {
   /** @type {Backend | null} */
   let backend = null;
   let disposed = false;
+  let defaultFolderAttempted = false;
+  let userChoseFolder = false;
+  let choosingFolder = false;
 
   // Stable unbound-frame token returned until a real window exists. It is
   // never admitted by native IPC: with no window, admission fails first.
@@ -119,6 +121,63 @@ async function createDesktopShell(electronApi, options) {
     return currentWin.webContents.mainFrame;
   };
 
+  /** @param {unknown} state @returns {boolean} */
+  const isFolderConfigured = (state) => {
+    if (!state || typeof state !== 'object' || Array.isArray(state)) return false;
+    const record = /** @type {Record<string, unknown>} */ (state);
+    return record.folder_configured === true || record.folderConfigured === true ||
+      (typeof record.folder === 'string' && record.folder.length > 0) ||
+      (typeof record.output_folder === 'string' && record.output_folder.length > 0);
+  };
+
+  /** @param {unknown} value */
+  const maybeConfigureDefaultFolder = (value) => {
+    if (disposed || defaultFolderAttempted || !backend || !value || typeof value !== 'object') return;
+    const status = /** @type {import('./backendSupervisor').SupervisorStatus} */ (value);
+    if (status.availability !== 'available') return;
+    defaultFolderAttempted = true;
+    if (userChoseFolder || choosingFolder || isFolderConfigured(status.state)) return;
+    if (typeof backend.submitHostSelection !== 'function' ||
+        typeof status.authority_epoch !== 'string' || typeof status.revision !== 'string') {
+      return;
+    }
+    try {
+      if (typeof app.getPath !== 'function') return;
+      const videosDir = app.getPath('videos');
+      if (typeof videosDir !== 'string' || !path.isAbsolute(videosDir) || videosDir.includes('\0')) return;
+      const fs = require('node:fs');
+      if (fs.lstatSync(videosDir).isSymbolicLink() || fs.realpathSync.native(videosDir) !== path.normalize(videosDir)) return;
+      const defaultFolder = path.join(videosDir, 'Cafe');
+      fs.mkdirSync(defaultFolder, { recursive: true });
+      if (fs.lstatSync(defaultFolder).isSymbolicLink() || !fs.statSync(defaultFolder).isDirectory() ||
+          fs.realpathSync.native(defaultFolder) !== path.normalize(defaultFolder)) return;
+      if (disposed || userChoseFolder || choosingFolder || !backend) return;
+      const latest = typeof backend.getStatus === 'function' ? backend.getStatus() : status;
+      if (!latest || latest.availability !== 'available' ||
+          typeof latest.authority_epoch !== 'string' || typeof latest.revision !== 'string' ||
+          isFolderConfigured(latest.state)) {
+        return;
+      }
+      backend.submitHostSelection({
+        schema: 'cafe.operator.v1',
+        kind: 'operator_intent',
+        request_id: 'default-folder',
+        authority_epoch: latest.authority_epoch,
+        expected_revision: latest.revision,
+        body: { op: 'set_folder', folder: defaultFolder },
+      });
+    } catch {
+      // Keep the manual flow when default folder creation or submission fails.
+    }
+  };
+
+  const previews = security.createPreviewSources({
+    getContents: () => getWindow()?.webContents || null,
+    getStatus: () => getBackend()?.getStatus() || null,
+    getSources: (request) => electronApi.desktopCapturer.getSources(request),
+  });
+  security.hardenSession(session.defaultSession, rendererBundle, previews);
+
   const removeIpcHandlers = security.bindNativeIpc(ipcMain, getWindow, getBackend, async (win) => {
     const choice = await electronApi.dialog.showOpenDialog(win, {
       title: 'Select audited FFmpeg executable', properties: ['openFile'],
@@ -127,12 +186,18 @@ async function createDesktopShell(electronApi, options) {
     if (choice.canceled || choice.filePaths.length !== 1) return null;
     return require('./runtimeBackend').selectExternalFfmpeg(choice.filePaths[0]);
   }, async (win) => {
-    const choice = await electronApi.dialog.showOpenDialog(win, {
-      title: 'Choose recording folder', properties: ['openDirectory', 'createDirectory'],
-    });
-    if (choice.canceled || choice.filePaths.length !== 1) return null;
-    return { folder: choice.filePaths[0] };
-  });
+    choosingFolder = true;
+    try {
+      const choice = await electronApi.dialog.showOpenDialog(win, {
+        title: 'Choose recording folder', properties: ['openDirectory', 'createDirectory'],
+      });
+      if (choice.canceled || choice.filePaths.length !== 1) return null;
+      userChoseFolder = true;
+      return { folder: choice.filePaths[0] };
+    } finally {
+      choosingFolder = false;
+    }
+  }, previews);
 
   const clearBackendSubscription = () => {
     subscriptionFrame = null;
@@ -145,12 +210,22 @@ async function createDesktopShell(electronApi, options) {
 
   /** @param {import('electron').BrowserWindow} win */
   const bindBackendSnapshots = (win) => {
-    if (!backend || getWindow() !== win) return;
+    const activeBackend = backend;
+    if (!activeBackend || getWindow() !== win) return;
     const frame = win.webContents.mainFrame;
     if (unsubscribeBackend && subscriptionFrame === frame) return;
     clearBackendSubscription();
-    unsubscribeBackend = security.subscribeBackend(getWindow, backend);
+    unsubscribeBackend = security.subscribeBackend(getWindow, {
+      ...activeBackend,
+      subscribe: (caller, listener) => activeBackend.subscribe(caller, (value) => {
+        listener(value);
+        maybeConfigureDefaultFolder(value);
+      }),
+    });
     subscriptionFrame = frame;
+    if (typeof activeBackend.getStatus === 'function') {
+      try { maybeConfigureDefaultFolder(activeBackend.getStatus()); } catch {}
+    }
   };
 
   const createAndShowWindow = async () => {
@@ -179,6 +254,7 @@ async function createDesktopShell(electronApi, options) {
     disposed = true;
     clearBackendSubscription();
     currentWin = null;
+    previews.dispose();
     removeIpcHandlers();
     if (backend) backend.dispose();
   };
