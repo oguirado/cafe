@@ -106,13 +106,93 @@
       "passed": false,
       "diagnostic": "file does not have exactly one owner",
       "scope": "complete six-path proposal; submission ownership missing"
+    },
+    {
+      "command": "python -B tools/run_ci.py --stage python",
+      "runner": "ubuntu-latest",
+      "run_id": 41372274512,
+      "job_id": 125045076547,
+      "exit_code": 1,
+      "tests": 342,
+      "failures": 12,
+      "errors": 8,
+      "scope": "hosted bootstrap suite; does not select the new guide tests"
+    },
+    {
+      "command": "python -B tools/run_ci.py --stage python",
+      "runner": "windows-latest",
+      "run_id": 41372274512,
+      "job_id": 125045076576,
+      "exit_code": 1,
+      "tests": 342,
+      "failures": 12,
+      "errors": 8,
+      "scope": "hosted bootstrap suite; does not select the new guide tests"
+    },
+    {
+      "check": "transport Markdown patch SHA-256 equals the complete product patch",
+      "result": "pass"
     }
   ],
   "scope": "unverified_proposal",
   "live_acceptance": "pending for S01 through S07; no native integration or acceptance is established",
   "ci": {
-    "proposal_run": null,
-    "status": "not_yet_pushed",
+    "proposal_run": {
+      "id": 41372274512,
+      "url": "https://github.com/oguirado/cafe/actions/runs/41372274512",
+      "event": "push",
+      "status": "completed",
+      "conclusion": "failure",
+      "jobs": [
+        {
+          "id": 125045076547,
+          "name": "verify (ubuntu-latest)",
+          "status": "completed",
+          "conclusion": "failure",
+          "failed_step": "Gate python",
+          "bootstrap_tests": 342,
+          "failures": 12,
+          "errors": 8,
+          "log_tail": [
+            "Ran 342 tests in 35.504s",
+            "FAILED (failures=12, errors=8)"
+          ]
+        },
+        {
+          "id": 125045076576,
+          "name": "verify (windows-latest)",
+          "status": "completed",
+          "conclusion": "failure",
+          "failed_step": "Gate python",
+          "bootstrap_tests": 342,
+          "failures": 12,
+          "errors": 8,
+          "log_tail": [
+            "Ran 342 tests in 111.330s",
+            "FAILED (failures=12, errors=8)"
+          ]
+        },
+        {
+          "id": 125045076612,
+          "name": "gitleaks full history and real negative controls",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125045076383,
+          "name": "WGC availability assessment (not native pass)",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125045628150,
+          "name": "Synthetic owned-window WGC capture",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    "status": "completed",
     "base_run": {
       "id": 41369756476,
       "url": "https://github.com/oguirado/cafe/actions/runs/41369756476",
@@ -124,7 +204,20 @@
       "secret_scan": "success",
       "diagnostic": "portable_router tests/test_T9_gates.py returned rc=1; other base resolver checks passed"
     },
-    "guide_test_selected_by_existing_workflow": false
+    "guide_test_selected_by_existing_workflow": false,
+    "conclusion": "failure",
+    "evidence_head_sha": "773caed440c5edef2dbe67a1a4b5b0e0f57afc0a",
+    "failure_classification": "Required additions conflict with inherited source-profile and document-route coverage, filename vocabulary, submission ownership, and claims heuristics. These are proposal-triggered integration failures, distinct from the separate pre-existing Windows router failure at the base.",
+    "failure_diagnostics": [
+      "source_profile_coverage_incomplete",
+      "non_english_or_unreviewed_filename",
+      "unproven_path_tool_or_flag",
+      "document primary id missing from generic lookup",
+      "file does not have exactly one owner"
+    ],
+    "repair_disposition": "No product-contract defect found by the direct guide suite and independent review. Repairing these CI failures requires paths or validators forbidden by the closed write set. No bypasses, filename substitutions, gate suppression, workflow changes or catalogue changes were made.",
+    "observed_product_rounds": 1,
+    "evidence_scope": "This completed run covers the unchanged four-file product patch. The subsequent commit adds only this CI metadata and triggers a separate check run; its status must be observed independently."
   },
   "integration_blockers": [
     {
@@ -145,7 +238,8 @@
         "connectors/cafe/mcp_demo_guide.py",
         "docs/bridge/changes/unit-05.md"
       ],
-      "required_out_of_scope_change": "review source profile and rebuild catalogue/index; no catalogue edits made"
+      "required_out_of_scope_change": "review source profile and rebuild catalogue/index; no catalogue edits made",
+      "detail": "Hosted bootstrap also reports document primary id missing from generic lookup for the mandated transport Markdown. Both coverage and document routing require catalogue edits outside scope."
     },
     {
       "kind": "submission_ownership",
@@ -178,6 +272,7 @@
   "tooling_notes": [
     "Initial sandbox clone could not connect to its configured proxy; the authorized network retry succeeded.",
     "The first guide test-harness run had a whitespace-only assertion mismatch; normalized whitespace and reran successfully.",
-    "The first ownership diagnostic print attempted to serialize a Check object directly; dataclass serialization corrected the harness and exposed the actual ownership failure."
+    "The first ownership diagnostic print attempted to serialize a Check object directly; dataclass serialization corrected the harness and exposed the actual ownership failure.",
+    "Direct workflow-job metadata URLs were rejected by the GitHub fetch allowlist; supported workflow-job and log tools provided the required CI results."
   ]
 }
