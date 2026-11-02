@@ -1,0 +1,114 @@
+{
+  "id": "PRO-04",
+  "base_commit": "f1e874050e305645a90e64267e50f8625daae9bc",
+  "patch_sha256": "ce7e9139d67f0085a0114c679e50eda23722636a976410849b0e178b4a8a5ae9",
+  "paths": [
+    "connectors/cafe/mcp_control_intents.py",
+    "tests/integration/test_mcp_control_intents.py"
+  ],
+  "tests_written": [
+    "test_a_slow_initial_provider_cannot_restart_the_proposal_ttl",
+    "test_added_feed_invalidates_previously_empty_role",
+    "test_all_request_clocks_require_canonical_u64_strings",
+    "test_any_bound_identity_change_invalidates_consumption",
+    "test_any_changed_valid_body_conflicts_with_stored_request",
+    "test_bad_consumption_clocks_cannot_be_retried_with_fresh_values",
+    "test_changed_feed_role_is_not_silently_rebound",
+    "test_clock_fault_or_regression_blocks_without_resurrection",
+    "test_clock_is_rechecked_after_a_provider_crosses_the_deadline",
+    "test_closed_request_and_window_shapes",
+    "test_constructor_rejects_boolean_or_excessive_limits",
+    "test_consume_hands_off_once_without_claiming_a_commit",
+    "test_consume_one_nanosecond_before_deadline_is_still_pending",
+    "test_consumption_rechecks_native_clock_without_a_ui_inspect",
+    "test_duplicate_window_or_feed_identity_within_its_domain_is_invalid",
+    "test_each_operation_creates_only_a_pending_proposal",
+    "test_expiration_releases_pending_capacity_without_reusing_old_ids",
+    "test_expiry_at_exact_deadline_never_rounds_a_nanosecond_away",
+    "test_identical_text_in_separate_identifier_domains_is_valid",
+    "test_input_and_reply_mutation_cannot_modify_stored_body",
+    "test_known_inspect_and_reject_are_terminal_without_consumption",
+    "test_malformed_replay_echoes_only_stored_id_without_corrupting_entry",
+    "test_missing_capsule_and_missing_window_block_without_slot_resolution",
+    "test_mistyped_operations_and_roles_fail_closed",
+    "test_module_cannot_import_recording_obs_or_broker_effect_hosts",
+    "test_native_snapshot_counts_are_bounded_without_a_three_window_limit",
+    "test_no_lifecycle_path_performs_effects_or_reads_a_wall_clock",
+    "test_non_objects_and_invalid_identifiers_are_never_echoed",
+    "test_partial_window_page_does_not_allow_a_disappeared_binding",
+    "test_pending_capacity_is_64_and_replay_works_while_full",
+    "test_private_handoff_is_immutable_and_hides_identity_in_repr",
+    "test_provider_absence_none_exception_or_wrong_signature_fails_closed",
+    "test_provider_clocks_are_validated_everywhere",
+    "test_provider_failure_is_remembered_and_never_resurrected",
+    "test_provider_loss_or_malformed_view_at_consumption_is_terminal",
+    "test_provider_shape_is_closed_at_every_level",
+    "test_reentrant_provider_cannot_consume_the_same_proposal_twice",
+    "test_reentrant_reject_during_provider_call_cannot_be_overwritten",
+    "test_replay_is_idempotent_and_does_not_extend_deadline",
+    "test_seen_bound_retains_all_1024_consumed_tombstones",
+    "test_stale_epoch_revision_or_chosen_window_blocks_at_proposal",
+    "test_stale_native_decision_clocks_are_terminal",
+    "test_unknown_or_invalid_proposal_identifiers_never_create_state",
+    "test_window_is_required_only_for_binding",
+    "test_window_values_are_opaque_utf8_not_control_identifiers",
+    "test_zero_and_u64_maximum_clocks_are_preserved"
+  ],
+  "tests_run": [
+    {
+      "command": "python -B -m unittest discover -s tests/integration -p test_mcp_control_intents.py -v",
+      "runtime": "CPython 3.12.14",
+      "status": "pass",
+      "tests": 46,
+      "skipped": 0,
+      "evidence": "Measured local stdlib unittest run; synthetic provider and clock only."
+    },
+    {
+      "command": "python -B -m unittest discover -s tests/integration -p 'test_mcp_control*.py' -v",
+      "status": "fail",
+      "tests": 81,
+      "failures": 13,
+      "errors": 1,
+      "evidence": "Earlier run with 41 proposal tests; failures are in unchanged base transport tests. socket.sendall is denied by the execution sandbox."
+    },
+    {
+      "command": "python -B -m unittest discover -s tests/integration -p test_mcp_control.py -q",
+      "status": "fail",
+      "tests": 29,
+      "failures": 11,
+      "errors": 1,
+      "evidence": "Isolated unchanged base regression; PermissionError: [Errno 1] Operation not permitted on socket.sendall."
+    },
+    {
+      "command": "git apply --check pro04_complete.diff",
+      "status": "pass",
+      "evidence": "The complete diff applies to an empty verification directory; both paths are new at the immutable base."
+    },
+    {
+      "command": "tools.publication_lint.scan on the four authorized paths with the unchanged base allowlist",
+      "status": "pass",
+      "findings": 0
+    }
+  ],
+  "scope": "unverified_proposal",
+  "ci": {
+    "base_run_id": 41369756476,
+    "base_commit": "f1e874050e305645a90e64267e50f8625daae9bc",
+    "base_conclusion": "failure",
+    "preexisting_failure": {
+      "job_id": 125037473239,
+      "job": "verify (windows-latest)",
+      "step": "Gate router",
+      "selection": "tests/test_T9_gates.py",
+      "reason": "nonpassing, empty or unverifiable test selection"
+    },
+    "base_successes": [
+      "verify (ubuntu-latest)",
+      "gitleaks full history and real negative controls",
+      "WGC availability assessment (not native pass)",
+      "Synthetic owned-window WGC capture"
+    ],
+    "proposal_test_discovery": "The unchanged base CI uses explicit test selections and does not automatically run test_mcp_control_intents.py; the exact local command is recorded above.",
+    "branch_run": null
+  }
+}
