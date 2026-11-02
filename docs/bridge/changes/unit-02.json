@@ -129,12 +129,26 @@
       }
     },
     "failure_classification": "Mandated new files are incompatible with unchanged repository integration policies under the closed write set.",
-    "pre_existing_red_ci": false,
     "baseline_evidence": {
       "commit": "f1e874050e305645a90e64267e50f8625daae9bc",
       "run_id": 41372020406,
+      "conclusion": "failure",
       "linux_all_gates": "success",
-      "windows_python_gate": "success"
+      "windows_python_gate": "success",
+      "windows_integration_gate": "success",
+      "windows_failure": {
+        "job_id": 125044309432,
+        "step": "Gate router",
+        "case": "router_qualification",
+        "group": "portable_router",
+        "selection": "router/tests/test_T9_gates.py",
+        "tests": 23,
+        "exit_code": 1,
+        "problem": "nonpassing, empty or unverifiable test selection",
+        "verdict": "router unavailable",
+        "classification": "Separate pre-existing Windows router failure; the proposal failed earlier for different bootstrap integration-policy reasons.",
+        "finer_failure_detail": "Not exposed by the returned qualification report."
+      }
     },
     "blockers": [
       {
@@ -166,7 +180,8 @@
     "new_stats_test_auto_discovered": false,
     "new_stats_test_run_remotely": false,
     "discovery_evidence": "The existing tools/run_ci.py selects named integration files and omits test_mcp_jsonl_stats.py. Both verification jobs stopped at Gate python before Gate integration.",
-    "evidence_scope": "This completed run evaluates the product and test contents. The subsequent evidence commit changes only this JSON report.",
-    "development_python": "3.12.3"
+    "evidence_scope": "The completed proposal run evaluates the product and test contents. Subsequent evidence commits change only this JSON report; their separate CI must not be mistaken for the completed proposal run.",
+    "development_python": "3.12.3",
+    "proposal_bootstrap_failures_pre_existing": false
   }
 }
