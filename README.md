@@ -4,6 +4,9 @@ Café is a Windows desktop tool for creators and Twitch streamers, built with Op
 
 **Judges and AI assistants:** start with the [install and test guide](docs/JUDGES.md), including limitations and recovery steps.
 
+
+**Built for the Codex x TwitchCon Hackathon** by OpenAI and Twitch. **Demo video:** https://www.youtube.com/watch?v=MgCl3-jeYTk
+
 ## Measured scope and limits
 
 - **Hardware [MEASURED]:** Only the MSI laptop with GTX 1060, i7-8750H, 16 GB RAM and Windows 10 was tested.
