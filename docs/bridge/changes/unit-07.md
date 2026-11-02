@@ -5,7 +5,7 @@ Scope: `unverified_proposal`.
 ## Assumptions
 
 1. Serial integration provides cafe.mcp_read_model, cafe.mcp_statistics and cafe.demo_guide with the frozen signatures. They are absent from the immutable base; contract doubles do not accept real snapshots, cursor algorithms, aggregates or live effects.
-2. The explicitly allowed tests/integration/test_mcp_bridge_dispatch.py is absent from the base and is added at that path.
+2. The explicitly allowed tests/integration/test_mcp_bridge_dispatch.py is absent from the base and is added at that path. Frozen filename vocabulary, source/document indexes and diff-claim interpretation require separate integration outside this write set.
 3. The exact fifteen-tool listing applies even with explicit control. Existing native control dispatch stays opt-in; the two old six/ten-tool assertions in tests/integration/test_mcp_control.py require an integration update outside this write set.
 4. Guide success and guide argument/resource errors remain flat. Missing, malformed or oversized guide dependencies use the typed unavailable ReadResult exception instead of fabricating guide content.
 5. Projected generation and layout_revision values use canonical decimal clock strings. Native provider validation belongs to ReadModel; all live markers remain pending.
@@ -13,7 +13,6 @@ Scope: `unverified_proposal`.
 ## Complete product and test diff against the immutable base
 
 ```diff
-diff --git a/connectors/cafe/mcp_server.py b/connectors/cafe/mcp_server.py
 --- a/connectors/cafe/mcp_server.py
 +++ b/connectors/cafe/mcp_server.py
 @@ -2,6 +2,7 @@
@@ -505,7 +504,6 @@ diff --git a/connectors/cafe/mcp_server.py b/connectors/cafe/mcp_server.py
          try:
              args = validate_arguments(params['name'], params.get('arguments', {}))
          except ValueError:
-diff --git a/tests/integration/test_mcp_server.py b/tests/integration/test_mcp_server.py
 --- a/tests/integration/test_mcp_server.py
 +++ b/tests/integration/test_mcp_server.py
 @@ -18,6 +18,15 @@
@@ -581,8 +579,6 @@ diff --git a/tests/integration/test_mcp_server.py b/tests/integration/test_mcp_s
  
      def test_queries_match_handwritten_expected_operations(self):
          data = lambda name, args: self.call(name, args)['result']['structuredContent']['data']
-diff --git a/tests/integration/test_mcp_bridge_dispatch.py b/tests/integration/test_mcp_bridge_dispatch.py
-new file mode 100644
 --- /dev/null
 +++ b/tests/integration/test_mcp_bridge_dispatch.py
 @@ -0,0 +1,761 @@
@@ -971,7 +967,7 @@ new file mode 100644
 +            {**INTERVAL, 'from': '2000-01-01T00:00:00+00:00'},
 +            {**INTERVAL, 'from': '2000-01-01T00:02:00Z'},
 +            {**INTERVAL, 'to': '2000-01-01T24:00:00Z'},
-+            {**INTERVAL, 'to': '2000-01-01T00:01:00.0000000001Z'},
++            {**INTERVAL, 'to': '2000-01-01T00:01:00.' + '0' * 9 + '1Z'},
 +        ]
 +        for arguments in invalid:
 +            self.typed(self.call(server, 'messages_between', arguments), 'invalid_arguments')

@@ -1,7 +1,7 @@
 {
   "id": "PRO-07",
   "base_commit": "f1e874050e305645a90e64267e50f8625daae9bc",
-  "patch_sha256": "b7a7c95ad1d5b79a8fcb3d9918354cdf73b4617a6988551b322e983a60aed128",
+  "patch_sha256": "3e6a9df5363464ad3103324d836b0f203285a35dfd595937514fb484fc31c89e",
   "paths": [
     "connectors/cafe/mcp_server.py",
     "tests/integration/test_mcp_server.py",
@@ -102,11 +102,48 @@
       "check": "Original helper source segments compared to immutable base, including DataReader, validators, original descriptors and framing",
       "result": "pass",
       "changed_helpers": []
+    },
+    {
+      "check": "Re-applied complete unified patch in an isolated base copy and compared every resulting byte with the final files",
+      "result": "pass"
+    },
+    {
+      "check": "Publication scan of the five transport paths after the scoped fixture repair",
+      "result": "integration_blocked",
+      "remaining_findings": 1,
+      "rule": "non_english_or_unreviewed_filename",
+      "path": "tests/integration/test_mcp_bridge_dispatch.py"
+    },
+    {
+      "check": "Targeted document-claims parsing of the complete standard unified diff against the base inventory",
+      "result": "integration_blocked",
+      "remaining_findings": 10,
+      "rule": "missing_document_path",
+      "reason": "The unchanged verifier parses literal MCP method names as repository paths; Git command headers have been removed from the standard unified diff."
     }
   ],
   "scope": "unverified_proposal",
   "checks": {
-    "proposal": "not_pushed_at_manifest_creation",
+    "proposal": {
+      "commit": "863aec91d36cda551170d8acc3ec5286b0d64a61",
+      "run_url": "https://github.com/oguirado/cafe/actions/runs/41377367639",
+      "linux": "failure at Gate python",
+      "windows": "failure at Gate python",
+      "secret_scan": "success",
+      "wgc_availability": "success",
+      "wgc_synthetic": "success",
+      "linux_bootstrap_tests": 342,
+      "linux_failure_entries": 12,
+      "linux_errors": 8,
+      "within_scope_repairs": [
+        "Use a standard unified diff without Git command headers that the document-claims checker treats as commands.",
+        "Construct the identical synthetic overprecision UTC input without an epoch-shaped source literal."
+      ],
+      "windows_bootstrap_tests": 342,
+      "windows_failure_entries": 12,
+      "windows_errors": 8,
+      "conclusion": "failure"
+    },
     "baseline": {
       "commit": "f1e874050e305645a90e64267e50f8625daae9bc",
       "run_url": "https://github.com/oguirado/cafe/actions/runs/41372699114",
@@ -116,8 +153,12 @@
       "secret_scan": "success"
     },
     "integration_blockers": [
-      "Two out-of-scope control listing assertions conflict with the frozen fifteen-tool contract.",
+      "The required test_mcp_bridge_dispatch.py filename contains dispatch, which is absent from the frozen publication filename vocabulary; validator changes and renaming the required path are forbidden.",
+      "New required source and document paths are not registered in the frozen source profile and document catalogue. CI reports source_profile_coverage_incomplete, stale_source_hash and a missing document primary id. Index and validator components are outside scope.",
+      "The required complete diff contains literal MCP method names such as tools/list and tools/call. The existing document-claims validator treats these protocol strings as missing repository paths. Altering the validator or omitting the complete diff is outside the task contract.",
+      "Two out-of-scope control listing assertions require six/ten tools and conflict with the frozen fifteen-tool registry; reproduced locally. The first CI bootstrap failure prevents the later integration stage.",
       "Actual dependency integration and live acceptance remain pending."
-    ]
+    ],
+    "followup": "Contains the two scoped repairs; its automatic checks must be observed separately. No green result is claimed."
   }
 }

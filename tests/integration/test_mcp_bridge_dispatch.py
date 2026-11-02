@@ -383,7 +383,7 @@ class McpBridgeDispatch(unittest.TestCase):
             {**INTERVAL, 'from': '2000-01-01T00:00:00+00:00'},
             {**INTERVAL, 'from': '2000-01-01T00:02:00Z'},
             {**INTERVAL, 'to': '2000-01-01T24:00:00Z'},
-            {**INTERVAL, 'to': '2000-01-01T00:01:00.0000000001Z'},
+            {**INTERVAL, 'to': '2000-01-01T00:01:00.' + '0' * 9 + '1Z'},
         ]
         for arguments in invalid:
             self.typed(self.call(server, 'messages_between', arguments), 'invalid_arguments')
