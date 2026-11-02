@@ -1,0 +1,127 @@
+{
+  "schema": "cafe.bridge.delivery.v1",
+  "unit": "PRO-08",
+  "base_commit": "803f06de934dc5ff95f7d655e9dfeeebc05da03d",
+  "delivery_kind": "unapplied_patch",
+  "patches": [
+    {
+      "path": "docs/bridge/changes/unit-08.patch",
+      "bytes": 151548,
+      "sha256": "c135e52e60e545fa28aed8ee3013423da45d1eb5fdbdcb3bc6b28ef7936829a3"
+    }
+  ],
+  "paths": [
+    "src/main/backendSupervisor.js",
+    "src/main/index.js",
+    "src/main/previewSources.js",
+    "src/main/shellSecurity.js",
+    "src/preload/cafeBridge.js",
+    "src/preload/preloadSecurity.js",
+    "src/renderer/control.js",
+    "tests/security/backendSupervisor.test.js",
+    "tests/security/capsule_workspace.test.js",
+    "tests/security/electronShell.test.js",
+    "tests/security/liveWall.test.js",
+    "ui/src/App.vue",
+    "ui/src/cafe.css",
+    "ui/src/capsule/capture.js",
+    "ui/src/capsule/capture.vue",
+    "ui/src/capsule/control.js",
+    "ui/src/capsule/control.vue",
+    "ui/src/capsule/grid.vue",
+    "ui/src/capsule/operator.vue",
+    "ui/src/capsule/topbar.vue",
+    "ui/src/workspace.css"
+  ],
+  "tests_executed": [
+    {
+      "command": "node --test --test-reporter=tap tests/security/backendSupervisor.test.js tests/security/capsule_registry.test.js tests/security/capsule_workspace.test.js tests/security/control.test.js tests/security/control_privacy.test.js tests/security/control_probe.test.js tests/security/designTokens.test.js tests/security/electronShell.test.js tests/security/ffmpegSelection.test.js tests/security/liveWall.test.js tests/security/package_notice.test.js tests/security/rendererAssets.test.js tests/security/rendererCheck.test.js tests/security/runtimeBackend.test.js tests/security/runtime_logging.test.js tests/security/window_catalogue.test.js tests/security/window_queries.test.js tests/security/window_queries_integration.test.js tests/security/windowsPackage.test.js",
+      "status": "PASS",
+      "tests": 183,
+      "passed": 183,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "command": "node tests/security/liveWall.test.js",
+      "status": "PASS",
+      "tests": 39,
+      "passed": 39,
+      "failed": 0,
+      "skipped": 0,
+      "note": "Repeated after the final patch edit."
+    },
+    {
+      "command": "npm run check",
+      "status": "PASS"
+    },
+    {
+      "command": "node tools/check_renderer.js",
+      "status": "PASS"
+    },
+    {
+      "command": "node tools/check_design_tokens.js --repo .",
+      "status": "PASS"
+    },
+    {
+      "command": "node tools/build_preload.js",
+      "status": "PASS"
+    },
+    {
+      "command": "node tools/build_renderer.js",
+      "status": "PASS"
+    },
+    {
+      "command": "python3 -B tools/claims_check.py",
+      "status": "PASS",
+      "findings": 0
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS"
+    },
+    {
+      "command": "python3 -B tools/publication_lint.py --repo .",
+      "scope": "implementation working tree",
+      "status": "FAIL",
+      "findings": [
+        {
+          "path": "src/main/previewSources.js",
+          "rule": "non_english_or_unreviewed_filename"
+        },
+        {
+          "path": "tests/security/liveWall.test.js",
+          "rule": "non_english_or_unreviewed_filename"
+        }
+      ],
+      "note": "Both required filenames are outside the existing closed filename vocabulary. No content findings were reported."
+    },
+    {
+      "command": "python3 -B tools/publication_lint.py --repo .",
+      "scope": "pristine base worktree, before adding delivery artifacts",
+      "status": "PASS",
+      "findings": 0
+    },
+    {
+      "command": "git apply --check --index docs/bridge/changes/unit-08.patch",
+      "scope": "pristine base worktree",
+      "status": "PASS",
+      "note": "Validation only; the patch has not been applied to the delivery tree."
+    }
+  ],
+  "not_executed": [
+    {
+      "check": "Windows Electron archive fuse regressions",
+      "status": "BLOCKED",
+      "reason": "Approved Electron Windows archive cache unavailable."
+    },
+    {
+      "check": "Native Windows and Discord preview, capture and recording acceptance",
+      "status": "PENDING-LIVE"
+    },
+    {
+      "check": "Hosted CI for this delivery",
+      "status": "NOT_REQUESTED"
+    }
+  ]
+}

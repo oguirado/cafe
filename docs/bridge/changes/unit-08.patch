@@ -1,0 +1,2651 @@
+diff --git a/src/main/backendSupervisor.js b/src/main/backendSupervisor.js
+index 72e90078d940f726b0ce41a973ab88f527b0bef2..8c08ab0d6f10c7c873b77c5a9cda6b040cd490ee 100644
+--- a/src/main/backendSupervisor.js
++++ b/src/main/backendSupervisor.js
+@@ -298,6 +298,15 @@ function createBackendSupervisor(options) {
+     return projection;
+   }
+ 
++  /** Main keeps source bindings; the renderer's projection never contains them.
++   * @param {SupervisorStatus} status @returns {SupervisorStatus} */
++  function rendererStatus(status) {
++    const copy = /** @type {SupervisorStatus} */ (deepCloneJson(status));
++    if (isPlainObject(copy.state)) delete /** @type {Record<string, unknown>} */ (copy.state).preview_sources;
++    deepFreeze(copy);
++    return copy;
++  }
++
+   /**
+    * @returns {void}
+    */
+@@ -307,7 +316,7 @@ function createBackendSupervisor(options) {
+     const current = Array.from(listeners);
+     for (const listener of current) {
+       try {
+-        listener(projection);
++        listener(rendererStatus(projection));
+       } catch {
+         // A failing listener must not break other subscribers.
+       }
+@@ -360,7 +369,7 @@ function createBackendSupervisor(options) {
+   function handle(caller, method, payload) {
+     authorize(caller);
+     if (method === 'getSnapshot') {
+-      return getStatus();
++      return rendererStatus(getStatus());
+     }
+     if (method === 'submitIntent') {
+       return submitIntent(payload);
+@@ -462,7 +471,7 @@ function createBackendSupervisor(options) {
+     }
+     listeners.add(listener);
+     try {
+-      listener(getStatus());
++      listener(rendererStatus(getStatus()));
+     } catch {
+       // Immediate-emission failures must not break subscribe.
+     }
+diff --git a/src/main/index.js b/src/main/index.js
+index 5e75001892052bf69059a04b38dcc75a022f0401..c1a4bcd6285313aed03b89c40380f0bed0643797 100644
+--- a/src/main/index.js
++++ b/src/main/index.js
+@@ -92,7 +92,6 @@ async function createDesktopShell(electronApi, options) {
+   await app.whenReady();
+ 
+   const rendererBundle = rendererAssets.loadRendererBundle(app.getAppPath());
+-  security.hardenSession(session.defaultSession, rendererBundle);
+   security.installBootstrapProtocol(protocol, rendererBundle);
+ 
+   /** @type {import('electron').BrowserWindow | null} */
+@@ -119,6 +118,13 @@ async function createDesktopShell(electronApi, options) {
+     return currentWin.webContents.mainFrame;
+   };
+ 
++  const previews = security.createPreviewSources({
++    getContents: () => getWindow()?.webContents || null,
++    getStatus: () => getBackend()?.getStatus() || null,
++    getSources: (request) => electronApi.desktopCapturer.getSources(request),
++  });
++  security.hardenSession(session.defaultSession, rendererBundle, previews);
++
+   const removeIpcHandlers = security.bindNativeIpc(ipcMain, getWindow, getBackend, async (win) => {
+     const choice = await electronApi.dialog.showOpenDialog(win, {
+       title: 'Select audited FFmpeg executable', properties: ['openFile'],
+@@ -132,7 +138,7 @@ async function createDesktopShell(electronApi, options) {
+     });
+     if (choice.canceled || choice.filePaths.length !== 1) return null;
+     return { folder: choice.filePaths[0] };
+-  });
++  }, previews);
+ 
+   const clearBackendSubscription = () => {
+     subscriptionFrame = null;
+@@ -179,6 +185,7 @@ async function createDesktopShell(electronApi, options) {
+     disposed = true;
+     clearBackendSubscription();
+     currentWin = null;
++    previews.dispose();
+     removeIpcHandlers();
+     if (backend) backend.dispose();
+   };
+diff --git a/src/main/previewSources.js b/src/main/previewSources.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..4192433fe0a5253ebabe1827216e0b89dad1267d
+--- /dev/null
++++ b/src/main/previewSources.js
+@@ -0,0 +1,225 @@
++// @ts-check
++'use strict';
++
++// Display-only proposal. Enabling requires the operator's real Windows gate.
++const LIVE_PREVIEW_ENABLED = false;
++const BOOT_URL = 'cafe://app/bootstrap';
++const ORIGIN = 'cafe://app';
++const GRANT_MS = 5000;
++
++/** @param {unknown} value @returns {value is Record<string, any>} */
++function record(value) {
++  return value !== null && typeof value === 'object' && !Array.isArray(value)
++    && [Object.prototype, null].includes(Object.getPrototypeOf(value));
++}
++/** @param {unknown} value @returns {value is string} */
++function identifier(value) { return typeof value === 'string' && value === value.trim() && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$/.test(value); }
++/** @param {unknown} value @returns {value is string} */
++function positiveClock(value) {
++  return typeof value === 'string' && value === value.trim() && /^[1-9][0-9]{0,19}$/.test(value)
++    && BigInt(value) <= 18446744073709551615n;
++}
++/** @param {string} error */
++function refused(error) { return Object.freeze({ ok: false, error }); }
++
++/**
++ * @typedef {object} PreviewOptions
++ * @property {() => import('electron').WebContents|null} getContents
++ * @property {() => import('./backendSupervisor').SupervisorStatus|null} getStatus
++ * @property {(options: {types: ['window'], thumbnailSize: {width: number, height: number}, fetchWindowIcons: boolean}) => Promise<import('electron').DesktopCapturerSource[]>} getSources
++ * @property {() => number} [now] Host clock injection for deterministic expiry tests.
++ */
++/**
++ * @typedef {object} Grant
++ * @property {object} frame
++ * @property {string} capsule_id
++ * @property {string} feed_id
++ * @property {string} source_id
++ * @property {string} generation
++ * @property {string} epoch
++ * @property {number} expires
++ */
++
++/**
++ * @typedef {object} PreviewController
++ * @property {(event: unknown, payload: unknown) => Promise<Readonly<Record<string, unknown>>>} request
++ * @property {(contents: unknown, permission: string, details: unknown) => boolean} permissionRequest
++ * @property {(contents: unknown, permission: string, origin: string, details: unknown) => boolean} permissionCheck
++ * @property {(display: import('electron').DisplayMediaRequestHandlerHandlerRequest, callback: (streams: import('electron').Streams|null) => void) => Promise<void>} displayRequest
++ * @property {(session: import('electron').Session) => void} install
++ * @property {() => void} dispose
++ */
++
++/**
++ * A single-use, short-lived main-frame selection; source identities never leave
++ * main. The renderer serializes each grant and its getDisplayMedia acquisition.
++ * The host-only enabled argument tests both policies; production uses the one
++ * constant above. No renderer flag can enable a permission.
++ * @param {PreviewOptions} options
++ * @param {boolean} [enabled]
++ * @returns {PreviewController}
++ */
++function createPreviewSources(options, enabled = LIVE_PREVIEW_ENABLED) {
++  const now = options.now || Date.now;
++  /** @type {Grant|null} */ let pending = null;
++  /** @type {Grant|null} */ let acquiring = null;
++  let requesting = false;
++  let disposed = false;
++  let installed = false;
++
++  /** @param {unknown} contents @param {unknown} frame */
++  function currentFrame(contents, frame) {
++    try {
++      const current = options.getContents();
++      return !!current && !current.isDestroyed() && contents === current
++        && frame === current.mainFrame && current.mainFrame.parent === null
++        && current.mainFrame.detached === false && current.mainFrame.url === BOOT_URL;
++    } catch { return false; }
++  }
++
++  /** @param {unknown} payload */
++  function binding(payload) {
++    if (!record(payload) || Object.keys(payload).sort().join(',') !== 'capsule_id,feed_id'
++        || !identifier(payload.capsule_id) || !identifier(payload.feed_id)) return null;
++    try {
++      const status = options.getStatus();
++      if (!status || status.availability !== 'available' || !positiveClock(status.authority_epoch) || !record(status.state)) return null;
++      const state = status.state;
++      if (state.platform !== 'windows' || state.runtime !== 'authority_ready') return null;
++      if (!record(state.capsules) || !Array.isArray(state.preview_sources) || state.preview_sources.length > 24) return null;
++      const seen = new Set();
++      for (const row of state.preview_sources) {
++        if (!record(row) || Object.keys(row).sort().join(',') !== 'capsule_id,feed_id,source_id'
++            || !identifier(row.capsule_id) || !identifier(row.feed_id)
++            || typeof row.source_id !== 'string' || row.source_id.length > 96 || row.source_id !== row.source_id.trim()
++            || !/^window:[0-9]+:0$/.test(row.source_id)) return null;
++        const key = JSON.stringify([row.capsule_id, row.feed_id]);
++        if (seen.has(key)) return null;
++        seen.add(key);
++      }
++      const rows = state.preview_sources.filter(row => row.capsule_id === payload.capsule_id && row.feed_id === payload.feed_id);
++      const capsules = Object.values(state.capsules).filter(row => record(row) && row.capsule_id === payload.capsule_id);
++      if (rows.length !== 1 || capsules.length !== 1 || !record(capsules[0].feeds)) return null;
++      const feeds = Object.values(capsules[0].feeds).filter(row => record(row) && row.feed_id === payload.feed_id);
++      if (feeds.length !== 1 || !positiveClock(feeds[0].generation)) return null;
++      return { capsule_id: payload.capsule_id, feed_id: payload.feed_id,
++        source_id: rows[0].source_id, generation: feeds[0].generation, epoch: status.authority_epoch };
++    } catch { return null; }
++  }
++
++  /** @param {Grant} grant */
++  function stillCurrent(grant) {
++    try {
++      if (disposed || !installed || enabled !== true || now() >= grant.expires
++          || !currentFrame(options.getContents(), grant.frame)) return false;
++      const latest = binding({ capsule_id: grant.capsule_id, feed_id: grant.feed_id });
++      return latest !== null && latest.source_id === grant.source_id
++        && latest.generation === grant.generation && latest.epoch === grant.epoch;
++    } catch { return false; }
++  }
++
++  /** @returns {Promise<import('electron').DesktopCapturerSource[]>} */
++  async function sources() {
++    /** @type {ReturnType<typeof setTimeout>|undefined} */ let timer;
++    try {
++      const values = await Promise.race([
++        options.getSources({ types: ['window'], thumbnailSize: { width: 0, height: 0 }, fetchWindowIcons: false }),
++        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('PREVIEW_UNAVAILABLE')), 3000); }),
++      ]);
++      return Array.isArray(values) ? values : [];
++    } finally { if (timer !== undefined) clearTimeout(timer); }
++  }
++
++  /** @param {unknown} event @param {unknown} payload */
++  async function request(event, payload) {
++    if (typeof event !== 'object' || event === null) return refused('preview_denied');
++    const caller = /** @type {import('electron').IpcMainInvokeEvent} */ (event);
++    if (!currentFrame(caller.sender, caller.senderFrame)) return refused('preview_denied');
++    if (enabled !== true) return refused('preview_disabled');
++    if (disposed || !installed) return refused('preview_unavailable');
++    if (!record(payload) || Object.keys(payload).sort().join(',') !== 'capsule_id,feed_id'
++        || !identifier(payload.capsule_id) || !identifier(payload.feed_id)) return refused('preview_denied');
++    if (pending && !stillCurrent(pending)) pending = null;
++    if (requesting || pending || acquiring) return refused('preview_busy');
++    const selected = binding(payload);
++    if (!selected) return refused('no_preview');
++    const candidate = { ...selected, frame: /** @type {object} */ (caller.senderFrame), expires: now() + GRANT_MS };
++    requesting = true;
++    try {
++      const available = await sources();
++      if (!stillCurrent(candidate) || !currentFrame(caller.sender, caller.senderFrame)) return refused('no_preview');
++      if (available.filter(source => source && source.id === candidate.source_id).length !== 1) return refused('no_preview');
++      pending = candidate;
++      return Object.freeze({ ok: true, capsule_id: candidate.capsule_id, feed_id: candidate.feed_id });
++    } catch { return refused('preview_unavailable'); }
++    finally { requesting = false; }
++  }
++
++  /** @param {unknown} contents @param {unknown} details */
++  function permissionContext(contents, details) {
++    const grant = pending || acquiring;
++    return !!grant && stillCurrent(grant) && currentFrame(contents, grant.frame)
++      && record(details) && details.isMainFrame === true && details.requestingUrl === BOOT_URL
++      && (details.securityOrigin === undefined || details.securityOrigin === ORIGIN);
++  }
++
++  /**
++   * PENDING-LIVE: Electron 44's generic media permission does not distinguish
++   * desktop getDisplayMedia from legacy desktop getUserMedia (empty types),
++   * while a video type can mean a camera. Deny generic media entirely. Only an
++   * explicitly typed display permission can enter this proposal; the published
++   * 44 API therefore fails closed until the operator resolves that native gate.
++   * @param {unknown} contents @param {string} permission @param {unknown} details
++   */
++  function permissionRequest(contents, permission, details) {
++    return permission === 'display-capture' && permissionContext(contents, details) && record(details)
++      && Array.isArray(details.mediaTypes) && details.mediaTypes.length === 1 && details.mediaTypes[0] === 'video';
++  }
++
++  /** @param {unknown} contents @param {string} permission @param {string} origin @param {unknown} details */
++  function permissionCheck(contents, permission, origin, details) {
++    return permission === 'display-capture' && origin === ORIGIN && permissionContext(contents, details)
++      && record(details) && details.mediaType === 'video';
++  }
++
++  /**
++   * @param {import('electron').DisplayMediaRequestHandlerHandlerRequest} display
++   * @param {(streams: import('electron').Streams|null) => void} callback
++   */
++  async function displayRequest(display, callback) {
++    let answered = false;
++    /** @param {import('electron').Streams|null} streams */
++    const finish = (streams) => { if (answered) return; answered = true; try { callback(streams); } catch {} };
++    const grant = pending;
++    // A malformed request cannot steal a different document's pending grant.
++    if (!grant || !stillCurrent(grant) || !display || display.frame !== grant.frame
++        || display.securityOrigin !== ORIGIN || display.videoRequested !== true || display.audioRequested !== false) {
++      finish(null); return;
++    }
++    pending = null;
++    acquiring = grant;
++    try {
++      const available = await sources();
++      const selected = available.filter(source => source && source.id === grant.source_id);
++      if (acquiring !== grant || !stillCurrent(grant) || selected.length !== 1) { finish(null); return; }
++      // Only the exact DesktopCapturerSource returned by this enumeration enters
++      // Electron. No audio, system picker or renderer-selected id is accepted.
++      finish({ video: selected[0] });
++    } catch { finish(null); }
++    finally { if (acquiring === grant) acquiring = null; }
++  }
++
++  /** @param {import('electron').Session} session */
++  function install(session) {
++    if (disposed || installed || typeof session.setDisplayMediaRequestHandler !== 'function') return;
++    try {
++      session.setDisplayMediaRequestHandler((display, callback) => { void displayRequest(display, callback); }, { useSystemPicker: false });
++      installed = true;
++    } catch { installed = false; }
++  }
++
++  function dispose() { disposed = true; pending = null; acquiring = null; }
++  return Object.freeze({ request, permissionRequest, permissionCheck, displayRequest, install, dispose });
++}
++
++module.exports = { LIVE_PREVIEW_ENABLED, createPreviewSources };
+diff --git a/src/main/shellSecurity.js b/src/main/shellSecurity.js
+index ac04b6b6e7fb19d5ff7da9e6218f249c1aa7ed99..dff45f26ed75d03e93604fb1d2e63bfaa7421422 100644
+--- a/src/main/shellSecurity.js
++++ b/src/main/shellSecurity.js
+@@ -5,7 +5,7 @@ const rendererAssets = require('./rendererAssets');
+ 
+ const BOOT_URL = 'cafe://app/bootstrap';
+ const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; frame-ancestors 'none'; form-action 'none'";
+-const INVOKE_CHANNELS = Object.freeze(['cafe:getSnapshot', 'cafe:submitIntent']);
++const INVOKE_CHANNELS = Object.freeze(['cafe:getSnapshot', 'cafe:submitIntent', 'cafe:previewSource']);
+ const SNAPSHOT_CHANNEL = 'cafe:snapshot';
+ 
+ /** @param {unknown} value @returns {boolean} */
+@@ -60,11 +60,49 @@ function admitInvokeChannel(value) {
+   if (!INVOKE_CHANNELS.includes(value)) throw new Error('IPC_CHANNEL_DENIED');
+ }
+ 
++/**
++ * The existing Windows package has a fixed file list. Until integration adds
++ * the optional preview helper, its absence must not prevent the shell from
++ * starting. A missing or faulted helper is explicitly unavailable, never a
++ * successful preview and never a reason to relax the permission boundary.
++ * @param {import('./previewSources').PreviewOptions} options
++ * @returns {import('./previewSources').PreviewController}
++ */
++function createPreviewSources(options) {
++  try {
++    const controller = require('./previewSources').createPreviewSources(options);
++    if (!controller || ['request', 'permissionRequest', 'permissionCheck', 'displayRequest', 'install', 'dispose']
++      .some(method => typeof /** @type {Record<string, unknown>} */ (controller)[method] !== 'function')) {
++      throw new Error('PREVIEW_UNAVAILABLE');
++    }
++    return controller;
++  } catch {
++    return Object.freeze({
++      request: async () => Object.freeze({ ok: false, error: 'preview_unavailable' }),
++      permissionRequest: () => false,
++      permissionCheck: () => false,
++      displayRequest: async (_display, callback) => { try { callback(null); } catch {} },
++      install: (session) => {
++        try {
++          if (typeof session.setDisplayMediaRequestHandler === 'function') {
++            session.setDisplayMediaRequestHandler((_display, callback) => callback(null), { useSystemPicker: false });
++          }
++        } catch { /* The independent permission handlers still deny everything. */ }
++      },
++      dispose: () => {},
++    });
++  }
++}
++
+ /** @param {import('electron').Session} session
+- * @param {import('./rendererAssets').RendererBundle} [bundle] */
+-function hardenSession(session, bundle) {
+-  session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+-  session.setPermissionCheckHandler(() => false);
++ * @param {import('./rendererAssets').RendererBundle} [bundle]
++ * @param {import('./previewSources').PreviewController} [previews] */
++function hardenSession(session, bundle, previews) {
++  previews?.install(session);
++  session.setPermissionRequestHandler((contents, permission, callback, details) =>
++    callback(previews?.permissionRequest(contents, permission, details) === true));
++  session.setPermissionCheckHandler((contents, permission, origin, details) =>
++    previews?.permissionCheck(contents, permission, origin, details) === true);
+   session.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
+     callback({ cancel: !isBootstrapUrl(details.url) && !rendererAssets.admitsResource(details.url, bundle) });
+   });
+@@ -151,9 +189,10 @@ function publicSnapshot(value) {
+   let state = null;
+   if (value.state !== null) {
+     const wire = JSON.stringify(value.state);
+-    if (Buffer.byteLength(wire, 'utf8') > 4096) throw new Error('SNAPSHOT_REJECTED');
++    if (Buffer.byteLength(wire, 'utf8') > 65536) throw new Error('SNAPSHOT_REJECTED');
+     state = JSON.parse(wire);
+     if (typeof state !== 'object' || state === null || Array.isArray(state)) throw new Error('SNAPSHOT_REJECTED');
++    delete state.preview_sources;
+   }
+   return Object.freeze({ availability: value.availability, pid: null,
+     reason: value.availability === 'available' ? 'authority_available' : 'authority_unavailable',
+@@ -167,8 +206,16 @@ function publicSnapshot(value) {
+  * @param {() => Backend|null} getBackend
+  * @param {(window:import('electron').BrowserWindow)=>Promise<{path:string,sha256:string}|null>} [chooseFfmpeg]
+  * @param {(window:import('electron').BrowserWindow)=>Promise<{folder:string}|null>} [chooseFolder]
++ * @param {import('./previewSources').PreviewController} [previews]
+  */
+-function bindNativeIpc(ipcMain, getWindow, getBackend, chooseFfmpeg, chooseFolder) {
++function bindNativeIpc(ipcMain, getWindow, getBackend, chooseFfmpeg, chooseFolder, previews) {
++  ipcMain.handle('cafe:previewSource', (event, ...args) => {
++    const win = getWindow();
++    if (!win || args.length !== 1) return { ok: false, error: 'preview_denied' };
++    try { admitCaller(event, win.webContents); }
++    catch { return { ok: false, error: 'preview_denied' }; }
++    return previews ? previews.request(event, args[0]) : { ok: false, error: 'preview_disabled' };
++  });
+   ipcMain.handle('cafe:getSnapshot', (event, ...args) => {
+     const win = getWindow();
+     if (!win || args.length !== 0) throw new Error('IPC_REQUEST_REJECTED');
+@@ -253,6 +300,7 @@ exports.browserOptions = browserOptions;
+ exports.admitCaller = admitCaller;
+ exports.admitInvokeChannel = admitInvokeChannel;
+ exports.hardenSession = hardenSession;
++exports.createPreviewSources = createPreviewSources;
+ exports.hardenWindow = hardenWindow;
+ exports.installBootstrapProtocol = installBootstrapProtocol;
+ exports.unavailableSnapshot = unavailableSnapshot;
+diff --git a/src/preload/cafeBridge.js b/src/preload/cafeBridge.js
+index f6c677601ed566bc149283d5d2a9c6ea349e015a..78bcf41fcf1d3a56c957768af2d8d8cacf390099 100644
+--- a/src/preload/cafeBridge.js
++++ b/src/preload/cafeBridge.js
+@@ -30,11 +30,14 @@
+  * @property {() => Promise<BridgeStatus>} getSnapshot
+  * @property {(intent: unknown) => Promise<unknown>} submitIntent
+  * @property {(listener: (status: BridgeStatus) => void) => () => void} onSnapshot
++ * @property {(request: unknown) => Promise<Readonly<Record<string, unknown>>>} previewSource
+  */
+ 
+ const GET_SNAPSHOT_CHANNEL = 'cafe:getSnapshot';
+ const SUBMIT_INTENT_CHANNEL = 'cafe:submitIntent';
+ const SNAPSHOT_CHANNEL = 'cafe:snapshot';
++const PREVIEW_SOURCE_CHANNEL = 'cafe:previewSource';
++const PREVIEW_ERRORS = new Set(['preview_disabled', 'preview_denied', 'preview_unavailable', 'preview_busy', 'no_preview']);
+ const U64_MAX = 18446744073709551615n;
+ 
+ /**
+@@ -173,6 +176,7 @@ function toBridgeStatus(value) {
+     state: stateValue === null ? null : /** @type {object} */ (deepCloneJson(stateValue)),
+     stderrBytes: record.stderrBytes,
+   };
++  if (isPlainObject(status.state)) delete /** @type {Record<string, unknown>} */ (status.state).preview_sources;
+   deepFreeze(status);
+   return status;
+ }
+@@ -211,6 +215,33 @@ function createCafeBridge(transport) {
+     return invoke(SUBMIT_INTENT_CHANNEL, intent);
+   }
+ 
++  /** Only a capsule/feed pair is accepted; source identities never cross preload.
++   * @param {unknown} request @returns {Promise<Readonly<Record<string, unknown>>>} */
++  async function previewSource(request) {
++    if (!isPlainObject(request)) return Object.freeze({ ok: false, error: 'preview_denied' });
++    const pair = /** @type {Record<string, unknown>} */ (request);
++    if (Object.keys(pair).sort().join(',') !== 'capsule_id,feed_id'
++        || typeof pair.capsule_id !== 'string' || pair.capsule_id !== pair.capsule_id.trim() || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$/.test(pair.capsule_id)
++        || typeof pair.feed_id !== 'string' || pair.feed_id !== pair.feed_id.trim() || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$/.test(pair.feed_id)) {
++      return Object.freeze({ ok: false, error: 'preview_denied' });
++    }
++    try {
++      const response = await invoke(PREVIEW_SOURCE_CHANNEL, { capsule_id: pair.capsule_id, feed_id: pair.feed_id });
++      if (isPlainObject(response)) {
++        const value = /** @type {Record<string, unknown>} */ (response);
++        const keys = Object.keys(value).sort().join(',');
++        if (keys === 'capsule_id,feed_id,ok' && value.ok === true
++            && value.capsule_id === pair.capsule_id && value.feed_id === pair.feed_id) {
++          return Object.freeze({ ok: true, capsule_id: pair.capsule_id, feed_id: pair.feed_id });
++        }
++        if (keys === 'error,ok' && value.ok === false && typeof value.error === 'string' && PREVIEW_ERRORS.has(value.error)) {
++          return Object.freeze({ ok: false, error: value.error });
++        }
++      }
++    } catch { /* Provider errors are never returned to the renderer. */ }
++    return Object.freeze({ ok: false, error: 'preview_unavailable' });
++  }
++
+   /**
+    * @param {(status: BridgeStatus) => void} listener
+    * @returns {() => void}
+@@ -224,7 +255,7 @@ function createCafeBridge(transport) {
+     });
+   }
+ 
+-  return Object.freeze({ getSnapshot, submitIntent, onSnapshot });
++  return Object.freeze({ getSnapshot, submitIntent, onSnapshot, previewSource });
+ }
+ 
+ module.exports = { createCafeBridge };
+diff --git a/src/preload/preloadSecurity.js b/src/preload/preloadSecurity.js
+index 6ac637c42fd2749ec71f594407278e2e14fc136e..ecb7d0906d048bc015cb2f44bb0a924f238d3af2 100644
+--- a/src/preload/preloadSecurity.js
++++ b/src/preload/preloadSecurity.js
+@@ -3,6 +3,7 @@
+ const { createCafeBridge } = require('./cafeBridge');
+ const GET = 'cafe:getSnapshot';
+ const SUBMIT = 'cafe:submitIntent';
++const PREVIEW = 'cafe:previewSource';
+ const SNAPSHOT = 'cafe:snapshot';
+ 
+ /** @param {import('electron').IpcRenderer} ipcRenderer */
+@@ -10,7 +11,7 @@ function closedTransport(ipcRenderer) {
+   return Object.freeze({
+     /** @param {string} channel @param {unknown} [payload] @returns {Promise<unknown>} */
+     async invoke(channel, payload) {
+-      if (channel !== GET && channel !== SUBMIT) throw new Error('IPC_CHANNEL_DENIED');
++      if (channel !== GET && channel !== SUBMIT && channel !== PREVIEW) throw new Error('IPC_CHANNEL_DENIED');
+       if (channel === GET && payload !== undefined) throw new Error('IPC_ARGUMENTS_DENIED');
+       try { return channel === GET ? await ipcRenderer.invoke(channel) : await ipcRenderer.invoke(channel, payload); }
+       catch { throw new Error('IPC_REQUEST_REJECTED'); }
+diff --git a/src/renderer/control.js b/src/renderer/control.js
+index 076bfce4bda40665f0bd92cd6167bc103c2a1a00..7a3025e35733c992b07a15b8c2f52b3f8808b1f6 100644
+--- a/src/renderer/control.js
++++ b/src/renderer/control.js
+@@ -2,6 +2,14 @@
+ /** Named renderer actions only. The native parent and Rust authority revalidate
+  * every request; queued is never interpreted as committed or complete. */
+ const MAX_CLOCK = 18446744073709551615n;
++const MAX_CAPSULES = 12;
++// The authority transport has its own bound; this only bounds the UI projection.
++const MAX_SNAPSHOT_BYTES = 65536;
++const OPERATOR_OPS = new Set([
++  'create_capsule','list_windows','pair_window','choose_folder','choose_ffmpeg',
++  'start_recording','stop_recording','send_to_obs','configure_obs','configure_twitch',
++  'organizer_plan_confirm','organizer_plan_reject','set_auto_anchor','remove_capsule',
++]);
+ /** @param {unknown} value @returns {value is Record<string, any>} */
+ function object(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
+ /** @param {unknown} value @returns {value is string} */
+@@ -13,6 +21,23 @@ function text(value, max) { return typeof value === 'string' && value.length > 0
+ /** @param {unknown} value @returns {value is number} */
+ function unsigned(value) { return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 4294967295; }
+ function rejected() { return new Error('Request rejected; refresh and try again'); }
++/** Optional proposal data never grants an effect or supplies an executable path.
++ * @param {unknown} value */
++function organizerPlan(value) {
++  if (!object(value) || !identifier(value.plan_id) || !text(value.folder_name,255)
++      || !clock(value.expires_unix_ms) || !Array.isArray(value.windows)
++      || value.windows.length < 1 || value.windows.length > MAX_CAPSULES
++      || !value.windows.every(row => object(row) && text(row.title,512))) return null;
++  return {plan_id:value.plan_id,folder_name:value.folder_name,
++    expires_unix_ms:value.expires_unix_ms,windows:value.windows.map(row => ({title:row.title}))};
++}
++/** Only closed, authority-supplied recording reasons reach presentation.
++ * @param {unknown} value @returns {string|null} */
++function recordingReason(value) {
++  if (value === undefined || value === null) return null;
++  return typeof value === 'string' && DIAGNOSTIC_CODES.has(value) && value.startsWith('recording_')
++    ? value : 'recording_reason_unavailable';
++}
+ /** @param {unknown} bridge @param {()=>string} [idFactory] */
+ export function createControls(bridge, idFactory = () => globalThis.crypto.randomUUID()) {
+   /** @type {Record<string,any>|null} */ let current = null;
+@@ -22,23 +47,23 @@ export function createControls(bridge, idFactory = () => globalThis.crypto.rando
+   /** @type {Set<(view:any)=>void>} */ const listeners = new Set();
+   /** @returns {any} */
+   function getState() {
+-    const empty = { availability: current?.availability || 'unavailable', platform: 'unknown', capsules: [], windows: [], windowPage: {offset:0,nextOffset:null,total:null}, recordings: [], folderConfigured:false,ffmpegConfigured:false,obsReady:false,obsConfigurable:false,chatReady:false,chatConfigurable:false,lastResult:null };
++    const empty = { availability: current?.availability || 'unavailable', platform: 'unknown', capsules: [], windows: [], windowPage: {offset:0,nextOffset:null,total:null}, recordings: [], folderConfigured:false,ffmpegConfigured:false,obsReady:false,obsConfigurable:false,chatReady:false,chatConfigurable:false,lastResult:null,organizerPlan:null,autoAnchor:null };
+     if (!current || current.availability !== 'available') return empty;
+     const state=current.state;
+     if (!object(state) || state.runtime !== 'authority_ready' || !object(state.capsules) || !Array.isArray(state.windows)) return {...empty,availability:'unavailable'};
+     try {
+       const capsules=Object.values(state.capsules).map(row=>{
+         if (!object(row)||!identifier(row.capsule_id)||!text(row.person_label,128)||!object(row.feeds)) throw rejected();
+-        const feeds=Object.values(row.feeds) .map((/** @type {any} */ feed)=>{if(!object(feed)||!identifier(feed.feed_id)||!['game','camera'].includes(feed.role)||!clock(feed.generation)||BigInt(feed.generation)===0n)throw rejected();return {feed_id:feed.feed_id,role:feed.role,generation:feed.generation};});
++        const feeds=Object.values(row.feeds) .map((/** @type {any} */ feed)=>{if(!object(feed)||!identifier(feed.feed_id)||!['game','camera'].includes(feed.role)||!clock(feed.generation)||BigInt(feed.generation)===0n)throw rejected();return {feed_id:feed.feed_id,role:feed.role,generation:feed.generation,window_state:['window_minimized','window_closed'].includes(feed.window_state)?feed.window_state:null};});
+         if(feeds.length>2)throw rejected();return {capsule_id:row.capsule_id,person_label:row.person_label,feeds};
+       });
+-      if(!['windows','unsupported'].includes(state.platform)||capsules.length>2||state.windows.length>3)throw rejected();
++      if(!['windows','unsupported'].includes(state.platform)||capsules.length>MAX_CAPSULES||state.windows.length>3)throw rejected();
+       const windows=state.windows.map(row=>{if(!object(row)||!text(row.handle,128)||!clock(row.generation)||!clock(row.layout_revision)||BigInt(row.generation)===0n||BigInt(row.layout_revision)===0n||!object(row.rect)||!unsigned(row.rect.width)||!unsigned(row.rect.height))throw rejected();return {token:row.handle,generation:row.generation,layout_revision:row.layout_revision,title:typeof row.title==='string'?row.title:'',class_name:typeof row.class==='string'?row.class:'',exe:typeof row.executable==='string'?row.executable:'',rect:{width:row.rect.width,height:row.rect.height}};});
+       const page=state.window_page;
+       if(!object(page)||!unsigned(page.offset)||!unsigned(page.total)||!(page.next_offset===null||unsigned(page.next_offset)))throw rejected();
+-      const recordings=Array.isArray(state.recordings)?state.recordings.map(row=>({capsule_id:row.capsule_id,state:row.state,feeds:Array.isArray(row.feeds)?row.feeds .map((/** @type {any} */ feed)=>({feed_id:feed.feed_id,state:feed.state,written_frames:clock(feed.written_frames)?feed.written_frames:null,backpressure:clock(feed.backpressure)?feed.backpressure:null})):[]})):[];
+-      const last=object(state.last_result)&&['observed','committed','rejected','pending','blocked','interrupted','configured'].includes(state.last_result.state)?{state:state.last_result.state,code:'runtime_'+state.last_result.state,requestId:identifier(state.last_result.request_id)?state.last_result.request_id:null}:null;
+-      return {availability:'available',platform:state.platform==='windows'?'windows':'unsupported',capsules,windows,windowPage:{offset:page.offset,nextOffset:page.next_offset,total:page.total},recordings,folderConfigured:state.folder_configured===true,ffmpegConfigured:state.recording_configured===true,obsReady:state.obs_available===true,obsConfigurable:state.obs_configurable===true,chatReady:state.chat_available===true,chatConfigurable:state.chat_configurable===true,lastResult:last};
++      const recordings=Array.isArray(state.recordings)?state.recordings.map(row=>({capsule_id:row.capsule_id,state:row.state,reason:recordingReason(row.reason),elapsed_ms:clock(row.elapsed_ms)?row.elapsed_ms:null,feeds:Array.isArray(row.feeds)?row.feeds .map((/** @type {any} */ feed)=>({feed_id:feed.feed_id,state:feed.state,written_frames:clock(feed.written_frames)?feed.written_frames:null,backpressure:clock(feed.backpressure)?feed.backpressure:null})):[]})):[];
++      const last=object(state.last_result)&&['observed','committed','rejected','pending','blocked','interrupted','configured'].includes(state.last_result.state)?{state:state.last_result.state,code:DIAGNOSTIC_CODES.has(state.last_result.code)?state.last_result.code:'runtime_'+state.last_result.state,requestId:identifier(state.last_result.request_id)?state.last_result.request_id:null}:null;
++      return {availability:'available',platform:state.platform==='windows'?'windows':'unsupported',capsules,windows,windowPage:{offset:page.offset,nextOffset:page.next_offset,total:page.total},recordings,folderConfigured:state.folder_configured===true,ffmpegConfigured:state.recording_configured===true,obsReady:state.obs_available===true,obsConfigurable:state.obs_configurable===true,chatReady:state.chat_available===true,chatConfigurable:state.chat_configurable===true,lastResult:last,organizerPlan:organizerPlan(state.organizer_plan),autoAnchor:typeof state.auto_anchor==='boolean'?state.auto_anchor:null};
+     } catch { return {...empty,availability:'unavailable'}; }
+   }
+   function emit(){const view=getState();for(const listener of listeners){try{listener(view);}catch{ /* presentation listener has no authority effect */ }}}
+@@ -46,7 +71,7 @@ export function createControls(bridge, idFactory = () => globalThis.crypto.rando
+   function accept(snapshot){
+     if(disposed)return;
+     try {
+-      if(!object(snapshot)||!['starting','available','unavailable'].includes(snapshot.availability)||new TextEncoder().encode(JSON.stringify(snapshot)).length>8192)throw rejected();
++      if(!object(snapshot)||!['starting','available','unavailable'].includes(snapshot.availability)||new TextEncoder().encode(JSON.stringify(snapshot)).length>MAX_SNAPSHOT_BYTES)throw rejected();
+       if(snapshot.availability==='available'){
+         if(!clock(snapshot.authority_epoch)||BigInt(snapshot.authority_epoch)===0n||!clock(snapshot.revision))throw rejected();
+         if(epoch!==null&&snapshot.authority_epoch!==epoch)throw rejected();
+@@ -68,14 +93,14 @@ export function createControls(bridge, idFactory = () => globalThis.crypto.rando
+   function nonce(){const value=idFactory();if(!identifier(value))throw rejected();return value;}
+   /** @param {Record<string,unknown>} body @param {string} [requestId] */
+   async function send(body,requestId=nonce()){
+-    if(disposed||pending||getState().availability!=='available'||!current||!object(bridge)||typeof bridge.submitIntent!=='function')throw rejected();
++    if(disposed||pending||typeof body.op!=='string'||!OPERATOR_OPS.has(body.op)||getState().availability!=='available'||!current||!object(bridge)||typeof bridge.submitIntent!=='function')throw rejected();
+     const request={schema:'cafe.operator.v1',kind:'operator_intent',request_id:requestId,authority_epoch:current.authority_epoch,expected_revision:current.revision,body};
+     pending=true;
+-    try{const reply=await bridge.submitIntent(request);if(!object(reply)||!(reply.queued===true||(reply.queued===false&&reply.cancelled===true)))throw rejected();return reply;}
++    try{const reply=await bridge.submitIntent(request);if(!object(reply)||!(reply.queued===true||(reply.queued===false&&reply.cancelled===true)))throw rejected();return {queued:reply.queued===true,cancelled:reply.cancelled===true,request_id:requestId};}
+     catch{throw rejected();}finally{pending=false;}
+   }
+   /** @param {string} personLabel */
+-  async function createCapsule(personLabel){if(!text(personLabel,128)||getState().capsules.length>=2)throw rejected();return send({op:'create_capsule',capsule_id:'cap-'+nonce(),person_label:personLabel});}
++  async function createCapsule(personLabel){if(!text(personLabel,128)||getState().capsules.length>=MAX_CAPSULES)throw rejected();return send({op:'create_capsule',capsule_id:'cap-'+nonce(),person_label:personLabel});}
+   /** @param {number} [offset] */
+   async function refreshWindows(offset=0){if(!unsigned(offset)||offset>1000000)throw rejected();const requestId=nonce();const reply=await send({op:'list_windows',offset},requestId);return {queued:reply.queued===true,cancelled:reply.cancelled===true,request_id:requestId};}
+   /** @param {any} value */
+@@ -98,7 +123,34 @@ export function createControls(bridge, idFactory = () => globalThis.crypto.rando
+   async function configureObs(port,password){if(!getState().obsConfigurable||!Number.isInteger(port)||port<1||port>65535||typeof password!=='string'||new TextEncoder().encode(password).length>1024||password.includes('\0'))throw rejected();return send({op:'configure_obs',port,password:password===''?{mode:'absent'}:{mode:'provided',value:password}});}
+   /** @param {string} channel */
+   async function configureTwitch(channel){if(!getState().chatConfigurable||typeof channel!=='string'||!(/^[a-z0-9_]{1,25}$/).test(channel))throw rejected();return send({op:'configure_twitch',channel});}
+-  return Object.freeze({getState,subscribe,connect,dispose,createCapsule,refreshWindows,pairWindow,chooseFolder,chooseFfmpeg,startRecording,stopRecording,sendToObs,configureObs,configureTwitch});
++  /** A native operator action submits one current proposal; no observer calls it.
++   * @param {string} planId */
++  async function confirmOrganizerPlan(planId){
++    const plan=getState().organizerPlan;
++    if(!identifier(planId)||!plan||plan.plan_id!==planId||BigInt(plan.expires_unix_ms)<=BigInt(Date.now()))throw rejected();
++    return send({op:'organizer_plan_confirm',plan_id:planId});
++  }
++  /** @param {string} planId */
++  async function rejectOrganizerPlan(planId){
++    const plan=getState().organizerPlan;
++    if(!identifier(planId)||!plan||plan.plan_id!==planId)throw rejected();
++    return send({op:'organizer_plan_reject',plan_id:planId});
++  }
++  /** Missing authority capability never becomes a local opt-in.
++   * @param {boolean} enabled */
++  async function setAutoAnchor(enabled){
++    if(typeof enabled!=='boolean'||getState().autoAnchor===null)throw rejected();
++    return send({op:'set_auto_anchor',enabled});
++  }
++  /** PENDING-LIVE: the authority must implement this named removal operation.
++   * @param {string} capsuleId */
++  async function removeCapsule(capsuleId){
++    const view=getState();
++    if(!identifier(capsuleId)||!view.capsules.some((/** @type {any} */ row)=>row.capsule_id===capsuleId)
++      ||view.recordings.some((/** @type {any} */ row)=>row.capsule_id===capsuleId&&row.state==='Running'))throw rejected();
++    return send({op:'remove_capsule',capsule_id:capsuleId});
++  }
++  return Object.freeze({getState,subscribe,connect,dispose,createCapsule,refreshWindows,pairWindow,chooseFolder,chooseFfmpeg,startRecording,stopRecording,sendToObs,configureObs,configureTwitch,confirmOrganizerPlan,rejectOrganizerPlan,setAutoAnchor,removeCapsule});
+ }
+ 
+ /** Fixed public diagnostic vocabulary. Unknown values never become text output. */
+@@ -111,6 +163,9 @@ const DIAGNOSTIC_CODES = new Set([
+   'pair_proposal_rejected', 'pair_not_durable', 'pair_reconfirmation_required',
+   'binding_state_unavailable', 'window_token_unknown_or_ambiguous', 'stale_revision',
+   'old_authority_epoch', 'request_id_conflict', 'operator_frame_rejected',
++  'request_or_capacity_conflict', 'capsule_not_durable', 'capsule_removed',
++  'recording_runtime_not_configured', 'organizer_plan_expired', 'organizer_plan_unknown',
++  'organizer_plan_confirmed', 'organizer_plan_rejected', 'auto_anchor_configured',
+   'window_paired', 'windows_refreshed', 'capsule_created', 'authority_started',
+   'native_enumeration_unavailable', 'window_page_invalidated', 'projection_budget_exceeded',
+   'ffmpeg_startup_selection_blocked', 'hardware_preflight_required', 'recording_ffmpeg_not_approved', 'recording_hardware_preflight_blocked', 'recording_capture_unavailable',
+@@ -133,7 +188,7 @@ export function buildDiagnosticReport(snapshot) {
+   const st=object(s.state)?s.state:{};
+   const last=object(st.last_result)?st.last_result:{};
+   const windows=Array.isArray(st.windows)&&st.windows.length<=3?st.windows:null;
+-  const caps=object(st.capsules)&&Object.keys(st.capsules).length<=2?Object.values(st.capsules):null;
++  const caps=object(st.capsules)&&Object.keys(st.capsules).length<=MAX_CAPSULES?Object.values(st.capsules):null;
+   const validCaps=caps!==null&&caps.every(c=>object(c)&&object(c.feeds)&&Object.keys(c.feeds).length<=2);
+   return Object.freeze({schema:'cafe.diagnostic.v1',
+     bridge:['available','starting','unavailable'].includes(s.availability)?s.availability:'unknown',
+diff --git a/tests/security/backendSupervisor.test.js b/tests/security/backendSupervisor.test.js
+index f2559f58baf1ca71eb4b839266554f87123feee4..02c257df9c1112548981100e110bd235029695c4 100644
+--- a/tests/security/backendSupervisor.test.js
++++ b/tests/security/backendSupervisor.test.js
+@@ -66,7 +66,7 @@ test('unauthorized origin and non-main or foreign frame are rejected',async t=>{
+ test('arbitrary channels and process lifecycle methods are unavailable to renderer',async t=>{
+  const s=setup(t);s.supervisor.start();await until(()=>s.supervisor.getStatus().availability==='available');
+  for(const method of ['invoke','arbitrary','dispose','start','spawn','kill','__proto__'])assert.throws(()=>s.supervisor.handle(s.caller(),method,{}));
+- const bridge=s.bridge();assert.deepEqual(Object.keys(bridge).sort(),['getSnapshot','onSnapshot','submitIntent']);assert.equal(Object.isFrozen(bridge),true);assert.equal(bridge.ipcRenderer,undefined);
++ const bridge=s.bridge();assert.deepEqual(Object.keys(bridge).sort(),['getSnapshot','onSnapshot','previewSource','submitIntent']);assert.equal(Object.isFrozen(bridge),true);assert.equal(bridge.ipcRenderer,undefined);
+ });
+ test('oversized unterminated line becomes visibly unavailable without parsing',async t=>{
+  const s=setup(t,'giant',{maxLineBytes:1024,maxQueueBytes:8192});const seen=[];s.supervisor.subscribe(s.caller(),v=>seen.push(v));s.supervisor.start();
+diff --git a/tests/security/capsule_workspace.test.js b/tests/security/capsule_workspace.test.js
+index 8f5e6c84e37aefaaf6c5024b7360164da20af118..e7dd7792dfeeb3e35d86600b6da4a550bb525975 100644
+--- a/tests/security/capsule_workspace.test.js
++++ b/tests/security/capsule_workspace.test.js
+@@ -8,8 +8,8 @@ function snapshot(ids=['cap-a'],revision='1') {
+ test('one desktop exposes pairing and help navigation never starts or stops',async()=>{
+  const m=await mount(async()=>snapshot());try{
+  assert.equal(button(m.tree,'Capsules'),undefined);assert.equal(button(m.tree,'Diagnostics'),undefined);
+- for(const label of ['Nueva cápsula','Ventanas','Carpeta de grabación','Ayuda'])assert.ok(button(m.tree,label),label);
+- assert.ok(button(m.tree,'REC'));assert.ok(button(m.tree,'Elegir ventana'));assert.ok(squash(textOf(m.tree)).includes('Preview not available'));
++ for(const label of ['Nueva cápsula','Ventanas','Settings','Ayuda'])assert.ok(button(m.tree,label),label);
++ assert.ok(button(m.tree,'REC'));assert.ok(button(m.tree,'Elegir ventana'));assert.ok(squash(textOf(m.tree)).includes('No preview'));
+  assert.equal(findAll(m.tree,n=>n.props.id==='cafe-window-browser').length,0);assert.equal(m.ui.probe.reads,0);
+  await m.click('Ayuda');await m.click('Diagnóstico');assert.ok(button(m.tree,'Mostrar diagnóstico'));
+  assert.equal(m.calls.intents,0);assert.equal(m.calls.detached,0);assert.equal(m.ui.probe.reads,0);
+diff --git a/tests/security/electronShell.test.js b/tests/security/electronShell.test.js
+index 967fd730d1f161e8be43f10674da89ac9dc17cf6..5319219ae8b071fbb6248ca12ab010c5a80c1fac 100644
+--- a/tests/security/electronShell.test.js
++++ b/tests/security/electronShell.test.js
+@@ -113,7 +113,7 @@ test('native IPC authenticates actual sender, current top frame and exact URL be
+   frame.url = security.BOOT_URL; frame.detached = true; assert.throws(() => invoke(eventFor(win.webContents)), /DENIED/); frame.detached = false;
+   assert.equal(reads, 0); frame.url = security.BOOT_URL;
+   assert.equal(invoke(eventFor(win.webContents)).availability, 'unavailable');
+-  assert.deepEqual([...f.handlers.keys()].sort(), ['cafe:getSnapshot', 'cafe:submitIntent']);
++  assert.deepEqual([...f.handlers.keys()].sort(), ['cafe:getSnapshot', 'cafe:previewSource', 'cafe:submitIntent']);
+   assert.equal(f.handlers.has('cafe:spawn'), false); assert.throws(() => security.admitInvokeChannel('cafe:spawn'));
+   remove(); assert.equal(f.handlers.size, 0);
+ });
+@@ -125,12 +125,12 @@ test('public snapshots preserve decimal clocks and remove native PID/provider er
+   for (const value of [9007199254740992, '18446744073709551616', '01']) assert.throws(() => security.publicSnapshot({ ...snapshot(), revision: value }));
+ });
+ 
+-test('closed preload has exactly three frozen methods and discards native IPC event', async () => {
++test('closed preload has exactly four frozen methods and discards native IPC event', async () => {
+   const ipc = new EventEmitter(); const calls = [];
+   ipc.invoke = async (name, ...args) => { calls.push(name); if (name === 'cafe:getSnapshot') assert.equal(args.length, 0); return snapshot(); };
+   let exposed;
+   const api = preloadSecurity.exposeClosedBridge({ ipcRenderer: ipc, contextBridge: { exposeInMainWorld: (name, value) => { assert.equal(name, 'cafe'); exposed = value; } } });
+-  assert.equal(api, exposed); assert.deepEqual(Object.keys(api).sort(), ['getSnapshot', 'onSnapshot', 'submitIntent']); assert.equal(Object.isFrozen(api), true);
++  assert.equal(api, exposed); assert.deepEqual(Object.keys(api).sort(), ['getSnapshot', 'onSnapshot', 'previewSource', 'submitIntent']); assert.equal(Object.isFrozen(api), true);
+   assert.equal(api.ipcRenderer, undefined); assert.equal(api.invoke, undefined);
+   assert.equal((await api.getSnapshot()).revision, '18446744073709551615');
+   let received; const stop = api.onSnapshot((value) => { received = value; }); const nativeEvent = { nativeCapability: true };
+@@ -150,7 +150,7 @@ test('bundled sandbox preload loads with electron as the only require capability
+   ipc.invoke = async () => vm.runInContext('JSON.parse(snapshotWire)', realm);
+   vm.runInContext(bundle, realm, { timeout: 1000 });
+   assert.deepEqual(required, ['electron']); assert.equal(Object.isFrozen(facade), true);
+-  assert.deepEqual(Object.keys(facade).sort(), ['getSnapshot', 'onSnapshot', 'submitIntent']);
++  assert.deepEqual(Object.keys(facade).sort(), ['getSnapshot', 'onSnapshot', 'previewSource', 'submitIntent']);
+   assert.equal((await facade.getSnapshot()).authority_epoch, '9007199254740993');
+ });
+ 
+diff --git a/tests/security/liveWall.test.js b/tests/security/liveWall.test.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..a3be2ae51f90644f82ac8a2f3d77febe6f2b6f99
+--- /dev/null
++++ b/tests/security/liveWall.test.js
+@@ -0,0 +1,883 @@
++// @ts-check
++'use strict';
++
++// Contract tests use synthetic authority state and browser objects. Native
++// Windows capture, Discord, and concurrent recordings remain PENDING-LIVE.
++const test = require('node:test');
++const assert = require('node:assert/strict');
++const path = require('node:path');
++const { pathToFileURL } = require('node:url');
++const { LIVE_PREVIEW_ENABLED, createPreviewSources } = require('../../src/main/previewSources');
++const security = require('../../src/main/shellSecurity');
++
++const copy = value => JSON.parse(JSON.stringify(value));
++const capsule = number => ({
++  capsule_id: `cap-${number}`, person_label: `Guest ${number}`,
++  feeds: { game: { feed_id: `feed-${number}`, role: 'game', generation: '1' } },
++});
++function authority(count = 1) {
++  return {
++    availability: 'available', pid: null, reason: 'authority_available',
++    authority_epoch: '9007199254740993', revision: '3', stderrBytes: 0,
++    state: {
++      runtime: 'authority_ready', platform: 'windows',
++      folder_configured: true, recording_configured: true,
++      obs_available: false, obs_configurable: false,
++      chat_available: false, chat_configurable: false,
++      capsules: Object.fromEntries(Array.from({ length: count }, (_, n) => {
++        const row = capsule(n + 1); return [row.capsule_id, row];
++      })),
++      windows: [], window_page: { offset: 0, next_offset: null, total: 0 },
++      recordings: [], last_result: { state: 'observed', code: 'snapshot' },
++      preview_sources: [{ capsule_id: 'cap-1', feed_id: 'feed-1', source_id: 'window:101:0' }],
++    },
++  };
++}
++function previewFixture(enabled = true) {
++  const frame = { url: security.BOOT_URL, parent: null, detached: false };
++  const contents = { mainFrame: frame, isDestroyed: () => false, getURL: () => security.BOOT_URL };
++  const event = { sender: contents, senderFrame: frame };
++  let status = authority();
++  let sources = [{ id: 'window:101:0', name: 'Synthetic window' }];
++  let time = 1000;
++  let enumerations = 0;
++  let getSources = async options => {
++    enumerations++;
++    assert.deepEqual(options.types, ['window']);
++    return sources;
++  };
++  let displayHandler = null;
++  const session = { setDisplayMediaRequestHandler: fn => { displayHandler = fn; } };
++  const broker = createPreviewSources({
++    getContents: () => contents, getStatus: () => status,
++    getSources: options => getSources(options), now: () => time,
++  }, enabled);
++  broker.install(session);
++  const details = { isMainFrame: true, requestingUrl: security.BOOT_URL, securityOrigin: 'cafe://app', mediaTypes: ['video'] };
++  const checkDetails = { isMainFrame: true, requestingUrl: security.BOOT_URL, securityOrigin: 'cafe://app', mediaType: 'video' };
++  const request = { frame, securityOrigin: 'cafe://app', videoRequested: true, audioRequested: false, userGesture: true };
++  return {
++    broker, frame, contents, event, details, checkDetails, request,
++    setStatus: value => { status = value; }, status: () => status,
++    setSources: value => { sources = value; },
++    setGetSources: value => { getSources = value; },
++    advance: value => { time += value; },
++    enumerationCount: () => enumerations, handler: () => displayHandler,
++    grant: () => broker.request(event, { capsule_id: 'cap-1', feed_id: 'feed-1' }),
++    display: (value = request) => new Promise(resolve => broker.displayRequest(value, resolve)),
++  };
++}
++
++test('preview flag defaults off, disabled requests enumerate nothing and open no permission', async () => {
++  assert.equal(LIVE_PREVIEW_ENABLED, false);
++  const f = previewFixture(false);
++  assert.deepEqual(await f.grant(), { ok: false, error: 'preview_disabled' });
++  assert.equal(f.enumerationCount(), 0);
++  for (const permission of ['media', 'display-capture', 'geolocation', 'notifications', 'clipboard-read', 'fullscreen']) {
++    assert.equal(f.broker.permissionRequest(f.contents, permission, f.details), false);
++    assert.equal(f.broker.permissionCheck(f.contents, permission, 'cafe://app', f.checkDetails), false);
++  }
++  assert.equal(await f.display(), null);
++  f.broker.dispose();
++});
++
++test('enabled grant identifies a current capsule/feed without exposing native source ids or window names', async () => {
++  const f = previewFixture();
++  const grant = await f.grant();
++  assert.deepEqual(grant, { ok: true, capsule_id: 'cap-1', feed_id: 'feed-1' });
++  assert.equal(JSON.stringify(grant).includes('window:'), false);
++  assert.equal(JSON.stringify(grant).includes('Synthetic window'), false);
++  assert.equal(f.enumerationCount(), 1);
++  f.broker.dispose();
++});
++
++test('closed preview request cannot carry a renderer-selected source id or unknown field', async () => {
++  for (const request of [
++    { capsule_id: 'cap-1', feed_id: 'feed-1', source_id: 'window:999:0' },
++    { capsule_id: 'cap-1', feed_id: 'feed-1', audio: true },
++    { capsule_id: 'cap-1' },
++    { capsule_id: 'cap-1', feed_id: 1 },
++    { capsule_id: 'cap-1', feed_id: 'feed-2' },
++  ]) {
++    const f = previewFixture();
++    const reply = await f.broker.request(f.event, request);
++    assert.equal(reply.ok, false);
++    assert.equal(f.enumerationCount(), 0);
++    f.broker.dispose();
++  }
++});
++
++test('missing, malformed, duplicate or unbound source rows cannot authorize capture', async () => {
++  const valid = { capsule_id: 'cap-1', feed_id: 'feed-1', source_id: 'window:101:0' };
++  for (const rows of [
++    undefined, null, {}, [],
++    [{ ...valid, source_id: 'screen:101:0' }],
++    [{ ...valid, source_id: 'window:-1:0' }],
++    [{ ...valid, source_id: 'window:101:1' }],
++    [{ ...valid, source_id: 'window:101:0\n' }],
++    [{ ...valid, source_id: 'window:1e2:0' }],
++    [{ ...valid, source_id: 101 }],
++    [{ ...valid, extra: true }],
++    [valid, { ...valid }],
++    [{ ...valid, capsule_id: 'cap-missing' }],
++    [{ ...valid, feed_id: 'feed-missing' }],
++  ]) {
++    const f = previewFixture();
++    const state = authority();
++    if (rows === undefined) delete state.state.preview_sources;
++    else state.state.preview_sources = rows;
++    f.setStatus(state);
++    assert.equal((await f.grant()).ok, false);
++    assert.equal(await f.display(), null);
++    f.broker.dispose();
++  }
++});
++
++test('core mapping also needs a current desktopCapturer window source', async () => {
++  const f = previewFixture();
++  f.setSources([{ id: 'window:999:0', name: 'Other synthetic window' }]);
++  assert.equal((await f.grant()).ok, false);
++  assert.equal(await f.display(), null);
++  f.broker.dispose();
++});
++
++test('preview requires an available Windows authority and never falls back to another platform', async () => {
++  for (const stateChange of [
++    { platform: 'unsupported' }, { platform: undefined },
++    { runtime: 'starting' }, { runtime: undefined },
++  ]) {
++    const f = previewFixture();
++    const value = authority(); Object.assign(value.state, stateChange);
++    f.setStatus(value);
++    assert.equal((await f.grant()).ok, false);
++    assert.equal(f.enumerationCount(), 0);
++    f.broker.dispose();
++  }
++});
++
++test('foreign sender, subframe, detached frame and wrong app origin never enumerate windows', async () => {
++  for (const mutate of [
++    f => ({ ...f.event, sender: {} }),
++    f => ({ ...f.event, senderFrame: { ...f.frame } }),
++    f => { f.frame.parent = {}; return f.event; },
++    f => { f.frame.detached = true; return f.event; },
++    f => { f.frame.url = 'https://example.invalid/'; return f.event; },
++    f => { f.frame.url = 'cafe://other/bootstrap'; return f.event; },
++    f => { f.frame.url = 'cafe://app/bootstrap?other=1'; return f.event; },
++  ]) {
++    const f = previewFixture();
++    const reply = await f.broker.request(mutate(f), { capsule_id: 'cap-1', feed_id: 'feed-1' });
++    assert.equal(reply.ok, false);
++    assert.equal(f.enumerationCount(), 0);
++    f.broker.dispose();
++  }
++});
++
++test('a grant is revalidated when asynchronous source enumeration completes', async () => {
++  const f = previewFixture();
++  let resolveSources;
++  f.setGetSources(() => new Promise(resolve => { resolveSources = resolve; }));
++  const pending = f.grant();
++  const next = authority();
++  next.revision = '4'; next.state.preview_sources = [];
++  f.setStatus(next);
++  resolveSources([{ id: 'window:101:0', name: 'Synthetic window' }]);
++  assert.equal((await pending).ok, false);
++  assert.equal(await f.display(), null);
++  f.broker.dispose();
++});
++
++test('display handler only consumes a granted current window once and never grants audio', async () => {
++  const f = previewFixture();
++  assert.equal(await f.display(), null);
++  await f.grant();
++  const capture = await f.display();
++  assert.equal(capture.video.id, 'window:101:0');
++  assert.equal(Object.hasOwn(capture, 'audio'), false);
++  assert.equal(await f.display(), null);
++  f.broker.dispose();
++});
++
++test('display requests reject audio, unknown source grants, changed frame, and non-app origins', async () => {
++  for (const change of [
++    { audioRequested: true }, { videoRequested: false },
++    { securityOrigin: 'https://example.invalid' },
++    { securityOrigin: 'cafe://other' },
++    { frame: null }, { frame: {} },
++  ]) {
++    const f = previewFixture();
++    await f.grant();
++    assert.equal(await f.display({ ...f.request, ...change }), null);
++    f.broker.dispose();
++  }
++  const f = previewFixture();
++  await f.grant();
++  f.setSources([]);
++  assert.equal(await f.display(), null);
++  f.broker.dispose();
++});
++
++test('expired grant and authority changes between grant and display fail closed', async () => {
++  for (const mutate of [
++    f => f.advance(6000),
++    f => { const next = authority(); next.state.preview_sources[0].source_id = 'window:999:0'; f.setStatus(next); },
++    f => { const next = authority(); next.state.capsules = {}; f.setStatus(next); },
++    f => { const next = authority(); next.availability = 'unavailable'; f.setStatus(next); },
++    f => { f.contents.mainFrame = { ...f.frame }; },
++  ]) {
++    const f = previewFixture();
++    await f.grant(); mutate(f);
++    assert.equal(await f.display(), null);
++    f.broker.dispose();
++  }
++});
++
++test('permission callbacks refuse other origins, frames, audio and ambiguous Electron 44 desktop requests', async () => {
++  const f = previewFixture();
++  await f.grant();
++  // Electron 44's media/video permission is a camera request. Its media/[]
++  // desktop request cannot distinguish arbitrary legacy getUserMedia ids.
++  assert.equal(f.broker.permissionRequest(f.contents, 'media', f.details), false);
++  assert.equal(f.broker.permissionCheck(f.contents, 'media', 'cafe://app', f.checkDetails), false);
++  for (const details of [
++    { ...f.details, mediaTypes: ['audio'] },
++    { ...f.details, mediaTypes: ['video', 'audio'] },
++    { ...f.details, mediaTypes: [] },
++    { ...f.details, mediaTypes: ['unknown'] },
++    { ...f.details, mediaTypes: undefined },
++    { ...f.details, isMainFrame: false },
++    { ...f.details, requestingUrl: 'https://example.invalid/' },
++    { ...f.details, securityOrigin: 'cafe://other' },
++  ]) {
++    for (const permission of ['media', 'display-capture']) {
++      assert.equal(f.broker.permissionRequest(f.contents, permission, details), false);
++    }
++  }
++  for (const details of [
++    { ...f.checkDetails, mediaType: 'audio' },
++    { ...f.checkDetails, mediaType: 'unknown' },
++    { ...f.checkDetails, mediaType: undefined },
++    { ...f.checkDetails, isMainFrame: false },
++    { ...f.checkDetails, requestingUrl: 'https://example.invalid/' },
++  ]) {
++    assert.equal(f.broker.permissionCheck(f.contents, 'media', 'cafe://app', details), false);
++  }
++  assert.equal(f.broker.permissionCheck(f.contents, 'media', 'https://example.invalid', f.checkDetails), false);
++  for (const permission of ['notifications', 'clipboard-read', 'camera', 'microphone', 'geolocation', 'fullscreen']) {
++    assert.equal(f.broker.permissionRequest(f.contents, permission, f.details), false);
++    assert.equal(f.broker.permissionCheck(f.contents, permission, 'cafe://app', f.checkDetails), false);
++  }
++  f.broker.dispose();
++});
++
++test('renderer snapshots strip native preview mappings without changing authority data', () => {
++  const original = authority();
++  const saved = copy(original);
++  const projected = security.publicSnapshot(original);
++  assert.equal(Object.hasOwn(projected.state, 'preview_sources'), false);
++  assert.equal(JSON.stringify(projected).includes('window:101:0'), false);
++  assert.deepEqual(original, saved);
++  assert.equal(projected.authority_epoch, original.authority_epoch);
++});
++
++async function controlsFixture(value = authority()) {
++  const module = await import(pathToFileURL(path.resolve(__dirname, '../../src/renderer/control.js')).href);
++  let listener = () => {};
++  let sequence = 0;
++  const sent = [];
++  const bridge = {
++    getSnapshot: async () => value,
++    onSnapshot: fn => { listener = fn; return () => {}; },
++    submitIntent: async request => { sent.push(request); return { queued: true }; },
++  };
++  const controls = module.createControls(bridge, () => `request-${++sequence}`);
++  await controls.connect();
++  return { controls, bridge, sent, publish: value => listener(value), diagnostics: module.buildDiagnosticReport };
++}
++
++test('controller admits twelve authoritative capsules and rejects thirteen without altering window page size', async () => {
++  for (const count of [1, 3, 12, 13]) {
++    const f = await controlsFixture(authority(count));
++    assert.equal(f.controls.getState().availability, count <= 12 ? 'available' : 'unavailable');
++    assert.equal(f.diagnostics(authority(count)).capsule_count, count <= 12 ? count : null);
++    f.controls.dispose();
++  }
++  const value = authority(12);
++  value.state.windows = Array.from({ length: 4 }, (_, n) => ({
++    handle: `synthetic-${n}`, generation: '1', layout_revision: '1', rect: { width: 100, height: 80 },
++  }));
++  const f = await controlsFixture(value);
++  assert.equal(f.controls.getState().availability, 'unavailable');
++  f.controls.dispose();
++});
++
++test('third capsule reaches the authority and its refusal is not represented as a created capsule', async () => {
++  const f = await controlsFixture(authority(2));
++  await f.controls.createCapsule('Guest 3');
++  assert.equal(f.sent[0].body.op, 'create_capsule');
++  assert.equal(f.controls.getState().capsules.length, 2);
++  const refused = authority(2);
++  refused.revision = '4';
++  refused.state.last_result = { state: 'rejected', code: 'request_or_capacity_conflict', request_id: f.sent[0].request_id };
++  f.publish(refused);
++  assert.equal(f.controls.getState().capsules.length, 2);
++  assert.equal(f.controls.getState().lastResult.state, 'rejected');
++  assert.equal(f.controls.getState().lastResult.code, 'request_or_capacity_conflict');
++  f.controls.dispose();
++  const full = await controlsFixture(authority(12));
++  await assert.rejects(full.controls.createCapsule('Guest 13'));
++  assert.equal(full.sent.length, 0);
++  full.controls.dispose();
++});
++
++test('per-capsule recording commands preserve another capsule and await authoritative state', async () => {
++  const value = authority(2);
++  value.state.recordings = [{ capsule_id: 'cap-2', state: 'Running', elapsed_ms: '5000', feeds: [] }];
++  const f = await controlsFixture(value);
++  await f.controls.startRecording('cap-1');
++  assert.deepEqual(f.sent[0].body, { op: 'start_recording', capsule_id: 'cap-1' });
++  assert.deepEqual(f.controls.getState().recordings.map(row => [row.capsule_id, row.state]), [['cap-2', 'Running']]);
++  await assert.rejects(f.controls.stopRecording('cap-1'));
++  await f.controls.stopRecording('cap-2');
++  assert.deepEqual(f.sent[1].body, { op: 'stop_recording', capsule_id: 'cap-2' });
++  assert.equal(f.controls.getState().recordings[0].state, 'Running');
++  f.controls.dispose();
++});
++
++test('organizer and auto-anchor stay absent until authority publishes their frozen contracts', async () => {
++  const f = await controlsFixture();
++  assert.equal(f.controls.getState().organizerPlan, null);
++  assert.equal(f.controls.getState().autoAnchor, null);
++  await assert.rejects(f.controls.confirmOrganizerPlan('plan-1'));
++  await assert.rejects(f.controls.rejectOrganizerPlan('plan-1'));
++  await assert.rejects(f.controls.setAutoAnchor(true));
++  assert.equal(f.sent.length, 0);
++  f.controls.dispose();
++});
++
++test('explicit organizer confirmation/rejection and auto-anchor use only exact named intents', async () => {
++  const value = authority();
++  value.state.organizer_plan = {
++    plan_id: 'plan-1', windows: [{ title: '<strong>Synthetic call</strong>' }],
++    folder_name: 'Synthetic session', expires_unix_ms: String(Date.now() + 60000),
++  };
++  value.state.auto_anchor = false;
++  const f = await controlsFixture(value);
++  assert.equal(f.sent.length, 0);
++  assert.equal(f.controls.getState().organizerPlan.windows[0].title, '<strong>Synthetic call</strong>');
++  assert.equal(f.controls.getState().autoAnchor, false);
++  await assert.rejects(f.controls.confirmOrganizerPlan('plan-other'));
++  await f.controls.confirmOrganizerPlan('plan-1');
++  await f.controls.rejectOrganizerPlan('plan-1');
++  await f.controls.setAutoAnchor(true);
++  assert.deepEqual(f.sent.map(row => row.body), [
++    { op: 'organizer_plan_confirm', plan_id: 'plan-1' },
++    { op: 'organizer_plan_reject', plan_id: 'plan-1' },
++    { op: 'set_auto_anchor', enabled: true },
++  ]);
++  assert.equal(f.controls.getState().autoAnchor, false);
++  assert.equal(f.controls.getState().organizerPlan.plan_id, 'plan-1');
++  await assert.rejects(f.controls.setAutoAnchor('true'));
++  f.controls.dispose();
++});
++
++test('an expired organizer plan can be rejected but cannot be confirmed', async () => {
++  const value = authority();
++  value.state.organizer_plan = { plan_id: 'plan-1', windows: [{ title: 'Synthetic call' }], folder_name: 'Synthetic session', expires_unix_ms: '1' };
++  const f = await controlsFixture(value);
++  await assert.rejects(f.controls.confirmOrganizerPlan('plan-1'));
++  await f.controls.rejectOrganizerPlan('plan-1');
++  assert.deepEqual(f.sent.map(row => row.body), [{ op: 'organizer_plan_reject', plan_id: 'plan-1' }]);
++  f.controls.dispose();
++});
++
++test('recording reason and elapsed time are authoritative and unknown provider text remains closed', async () => {
++  const value = authority();
++  value.state.recordings = [
++    { capsule_id: 'cap-1', state: 'Failed', reason: 'recording_capture_minimized', elapsed_ms: '9007199254740993', feeds: [] },
++  ];
++  const f = await controlsFixture(value);
++  assert.equal(f.controls.getState().recordings[0].reason, 'recording_capture_minimized');
++  assert.equal(f.controls.getState().recordings[0].elapsed_ms, '9007199254740993');
++  const next = copy(value); next.revision = '4';
++  next.state.recordings[0].reason = 'SYNTHETIC_PROVIDER_PRIVATE_CANARY';
++  next.state.recordings[0].elapsed_ms = 9007199254740992;
++  f.publish(next);
++  assert.equal(f.controls.getState().recordings[0].reason, 'recording_reason_unavailable');
++  assert.equal(f.controls.getState().recordings[0].elapsed_ms, null);
++  assert.equal(JSON.stringify(f.controls.getState()).includes('SYNTHETIC_PROVIDER_PRIVATE_CANARY'), false);
++  f.controls.dispose();
++});
++
++test('preload rejects extra source identities, mismatched grants and provider error text', async () => {
++  const { createCafeBridge } = require('../../src/preload/cafeBridge');
++  const calls = [];
++  let response = { ok: true, capsule_id: 'cap-1', feed_id: 'feed-1' };
++  const bridge = createCafeBridge({
++    invoke: async (channel, request) => { calls.push({ channel, request }); return response; },
++    subscribe: () => () => {},
++  });
++  const pair = { capsule_id: 'cap-1', feed_id: 'feed-1' };
++  assert.equal((await bridge.previewSource({ ...pair, source_id: 'window:999:0' })).ok, false);
++  assert.equal(calls.length, 0);
++  assert.deepEqual(await bridge.previewSource(pair), response);
++  assert.deepEqual(calls[0], { channel: 'cafe:previewSource', request: pair });
++  for (const value of [
++    { ok: true, capsule_id: 'cap-other', feed_id: 'feed-1' },
++    { ok: true, ...pair, source_id: 'window:999:0' },
++    { ok: false, error: 'SYNTHETIC_PROVIDER_PRIVATE_CANARY' },
++  ]) {
++    response = value;
++    assert.deepEqual(await bridge.previewSource(pair), { ok: false, error: 'preview_unavailable' });
++  }
++});
++
++test('a mocked distinct display permission is grant-scoped; this is not Electron 44 compatibility evidence', async () => {
++  const f = previewFixture();
++  assert.equal(f.broker.permissionRequest(f.contents, 'display-capture', f.details), false);
++  await f.grant();
++  assert.equal(f.broker.permissionRequest(f.contents, 'display-capture', f.details), true);
++  assert.equal(f.broker.permissionCheck(f.contents, 'display-capture', 'cafe://app', f.checkDetails), true);
++  assert.equal(f.broker.permissionRequest({}, 'display-capture', f.details), false);
++  await f.display();
++  assert.equal(f.broker.permissionRequest(f.contents, 'display-capture', f.details), false);
++  f.broker.dispose();
++});
++
++test('supervisor retains native preview mappings for main while stripping handle and subscription results', () => {
++  const { EventEmitter } = require('node:events');
++  const { createBackendSupervisor } = require('../../src/main/backendSupervisor');
++  const frame = {};
++  const child = new EventEmitter();
++  Object.assign(child, {
++    pid: 4242, stdout: new EventEmitter(), stderr: new EventEmitter(),
++    stdin: Object.assign(new EventEmitter(), { writableLength: 0, write: () => true }),
++    kill: () => true,
++  });
++  const supervisor = createBackendSupervisor({
++    spawn: () => child, authorizedOrigin: 'cafe://app', getAuthorizedFrame: () => frame,
++  });
++  const caller = { origin: 'cafe://app', frame, isMainFrame: true };
++  const projected = [];
++  supervisor.subscribe(caller, snapshot => projected.push(snapshot));
++  supervisor.start();
++  const value = authority();
++  child.stdout.emit('data', Buffer.from(JSON.stringify({
++    kind: 'snapshot', authority_epoch: value.authority_epoch, revision: value.revision, state: value.state,
++  }) + '\n'));
++  assert.equal(supervisor.getStatus().availability, 'available');
++  assert.deepEqual(supervisor.getStatus().state.preview_sources, value.state.preview_sources);
++  assert.equal(Object.hasOwn(supervisor.handle(caller, 'getSnapshot').state, 'preview_sources'), false);
++  assert.equal(Object.hasOwn(projected.at(-1).state, 'preview_sources'), false);
++  const next = copy(value.state); next.preview_sources[0].source_id = 'window:102:0';
++  child.stdout.emit('data', Buffer.from(JSON.stringify({
++    kind: 'delta', authority_epoch: value.authority_epoch, base_revision: '3', revision: '4', state: next,
++  }) + '\n'));
++  assert.equal(supervisor.getStatus().state.preview_sources[0].source_id, 'window:102:0');
++  assert.equal(Object.hasOwn(projected.at(-1).state, 'preview_sources'), false);
++  supervisor.dispose();
++});
++
++const moduleUrl = filename => pathToFileURL(path.resolve(__dirname, '../../ui/src/capsule', filename)).href;
++const flush = () => new Promise(resolve => setImmediate(resolve));
++function mediaStream({ audio = false, ignoreLimits = false } = {}) {
++  let settings = { width: 320, height: 180, frameRate: 15 };
++  const listeners = new Map();
++  const track = {
++    readyState: 'live', stops: 0, constraints: [],
++    stop() { this.stops++; this.readyState = 'ended'; },
++    getSettings: () => settings,
++    async applyConstraints(value) {
++      this.constraints.push(copy(value));
++      if (!ignoreLimits) settings = { width: value.width.max, height: value.height.max, frameRate: value.frameRate.max };
++      else settings = { width: 1920, height: 1080, frameRate: 30 };
++    },
++    addEventListener: (name, listener) => listeners.set(name, listener),
++    removeEventListener: (name, listener) => { if (listeners.get(name) === listener) listeners.delete(name); },
++    end() { this.readyState = 'ended'; listeners.get('ended')?.(); },
++  };
++  const audioTrack = { stops: 0, stop() { this.stops++; } };
++  return {
++    track, audioTrack,
++    getTracks: () => audio ? [track, audioTrack] : [track],
++    getVideoTracks: () => [track], getAudioTracks: () => audio ? [audioTrack] : [],
++  };
++}
++async function sessionFixture(options = {}) {
++  const { createPreviewSession } = await import(moduleUrl('capture.js'));
++  const states = [], streams = [], calls = [], requests = [], tasks = [], scheduledDelays = [];
++  let size = { width: 320, height: 180 };
++  let counter = 0;
++  const value = mediaStream();
++  const session = createPreviewSession({
++    bridge: { previewSource: async pair => {
++      requests.push(pair);
++      return options.grant ? options.grant(pair) : { ok: true, ...pair };
++    } },
++    getDisplayMedia: async constraints => { calls.push(constraints); return options.capture ? options.capture() : value; },
++    onState: (state, reason) => states.push({ state, reason }),
++    onStream: stream => streams.push(stream), size: () => size,
++    schedule: (callback, delay) => {
++      const id = ++counter; tasks.push({ id, callback, delay }); scheduledDelays.push(delay); return id;
++    },
++    cancel: id => { const at = tasks.findIndex(task => task.id === id); if (at >= 0) tasks.splice(at, 1); },
++  });
++  const binding = { capsule_id: 'cap-1', feed_id: 'feed-1', generation: '1' };
++  return {
++    session, states, streams, calls, requests, tasks, scheduledDelays, value, binding,
++    resizeTo: next => { size = next; },
++    start: async () => { session.setBinding(binding); session.setVisibility(true, true); await flush(); },
++  };
++}
++
++test('preview uses video-only GDM, validates tile bounds and 15fps before attaching a stream', async () => {
++  const f = await sessionFixture();
++  await f.start();
++  assert.deepEqual(f.requests, [{ capsule_id: 'cap-1', feed_id: 'feed-1' }]);
++  assert.equal(f.calls.length, 1);
++  assert.equal(f.calls[0].audio, false);
++  assert.equal(f.calls[0].video.frameRate.ideal, 15);
++  assert.deepEqual(f.value.track.constraints[0], { width: { max: 320 }, height: { max: 180 }, frameRate: { max: 15 } });
++  assert.equal(f.states.at(-1).state, 'live');
++  assert.equal(f.streams.at(-1), f.value);
++  f.resizeTo({ width: 160, height: 90 });
++  await f.session.resize();
++  assert.deepEqual(f.value.track.constraints.at(-1), { width: { max: 160 }, height: { max: 90 }, frameRate: { max: 15 } });
++  f.session.dispose();
++  assert.equal(f.value.track.stops, 1);
++  assert.equal(f.streams.at(-1), null);
++});
++
++test('hidden tiles never acquire and hiding or rebinding a tile stops all of its tracks', async () => {
++  const values = [];
++  const f = await sessionFixture({ capture: () => { const value = mediaStream(); values.push(value); return value; } });
++  f.session.setBinding(f.binding);
++  f.session.setVisibility(false, true);
++  await flush();
++  assert.equal(f.calls.length, 0);
++  f.session.setVisibility(true, true);
++  await flush();
++  assert.equal(values.length, 1);
++  f.session.setVisibility(false, true);
++  assert.equal(values[0].track.stops, 1);
++  assert.equal(f.streams.at(-1), null);
++  f.session.setVisibility(true, true);
++  await flush();
++  f.session.setBinding({ ...f.binding, feed_id: 'feed-2', generation: '2' });
++  assert.equal(values[1].track.stops, 1);
++  await flush();
++  assert.equal(f.requests.at(-1).feed_id, 'feed-2');
++  f.session.dispose();
++  assert.equal(values[2].track.stops, 1);
++});
++
++test('late streams after disposal are stopped and cannot update the tile', async () => {
++  let resolveCapture;
++  const f = await sessionFixture({ capture: () => new Promise(resolve => { resolveCapture = resolve; }) });
++  await f.start();
++  assert.equal(f.calls.length, 1);
++  f.session.dispose();
++  const value = mediaStream();
++  resolveCapture(value);
++  await flush();
++  assert.equal(value.track.stops, 1);
++  assert.equal(f.streams.includes(value), false);
++  assert.equal(f.states.some(row => row.state === 'live'), false);
++});
++
++test('source ending stops tracks and recovery retries have a finite schedule', async () => {
++  let attempts = 0;
++  const value = mediaStream();
++  const f = await sessionFixture({ capture: () => {
++    attempts++;
++    if (attempts === 1) return value;
++    throw new Error('SYNTHETIC_PROVIDER_PRIVATE_CANARY');
++  } });
++  await f.start();
++  value.track.end();
++  assert.equal(value.track.stops, 1);
++  assert.equal(f.streams.at(-1), null);
++  while (f.tasks.length) {
++    const pending = f.tasks.shift(); pending.callback(); await flush();
++  }
++  assert.deepEqual(f.scheduledDelays, [500, 1500, 3000]);
++  assert.equal(attempts, 4);
++  assert.equal(f.states.at(-1).state, 'no_preview');
++  assert.equal(JSON.stringify(f.states).includes('SYNTHETIC_PROVIDER_PRIVATE_CANARY'), false);
++  f.session.dispose();
++});
++
++test('disabled/denied/unlisted previews perform no capture and schedule no retry', async () => {
++  for (const error of ['preview_disabled', 'preview_denied', 'no_preview']) {
++    const f = await sessionFixture({ grant: () => ({ ok: false, error }) });
++    await f.start();
++    assert.equal(f.calls.length, 0);
++    assert.equal(f.tasks.length, 0);
++    assert.deepEqual(f.states.at(-1), { state: 'no_preview', reason: error });
++    f.session.dispose();
++  }
++});
++
++test('audio tracks and noncompliant size/fps are stopped before a preview reaches video', async () => {
++  for (const value of [mediaStream({ audio: true }), mediaStream({ ignoreLimits: true })]) {
++    const f = await sessionFixture({ capture: () => value });
++    await f.start();
++    assert.equal(f.streams.includes(value), false);
++    assert.equal(value.track.stops, 1);
++    if (value.getAudioTracks().length) assert.equal(value.audioTrack.stops, 1);
++    assert.equal(f.states.at(-1).state, 'no_preview');
++    f.session.dispose();
++  }
++});
++
++test('all tile states and elapsed text derive from explicit authority or actual preview state', async () => {
++  const { tileState, elapsedLabel, planSecondsRemaining } = await import(moduleUrl('control.js'));
++  const cap = { feeds: [{ feed_id: 'feed-1' }] };
++  assert.equal(tileState(cap, null, {}), 'no_preview');
++  assert.equal(tileState(cap, null, { 'feed-1': 'connecting' }), 'connecting');
++  assert.equal(tileState(cap, null, { 'feed-1': 'live' }), 'live');
++  assert.equal(tileState(cap, { state: 'Running' }, {}), 'recording');
++  assert.equal(tileState(cap, { state: 'Failed', reason: 'recording_capture_source_failed' }, {}), 'recording_failed');
++  assert.equal(tileState({ feeds: [{ window_state: 'window_minimized' }] }, null, {}), 'window_minimized');
++  assert.equal(tileState({ feeds: [{ window_state: 'window_closed' }] }, null, {}), 'window_closed');
++  assert.equal(elapsedLabel(null), '—');
++  assert.equal(elapsedLabel('65000'), '01:05');
++  assert.equal(elapsedLabel('3661000'), '01:01:01');
++  assert.equal(planSecondsRemaining('10001', 10000), 1);
++  assert.equal(planSecondsRemaining('10000', 10000), 0);
++  assert.equal(planSecondsRemaining('unknown', 10000), null);
++});
++
++test('batch confirmation waits for the matching authority result and never treats queued as success', async () => {
++  const { waitForAuthorityResult } = await import(moduleUrl('control.js'));
++  let listener = () => {}, removed = 0, settled = false;
++  const current = { availability: 'available', lastResult: { state: 'committed', requestId: 'request-other' } };
++  const controls = {
++    getState: () => current,
++    subscribe: fn => { listener = fn; fn(current); return () => { removed++; }; },
++  };
++  const pending = waitForAuthorityResult(controls, 'request-1', { timeoutMs: 1000 }).then(value => { settled = true; return value; });
++  listener({ ...current, lastResult: { state: 'pending', requestId: 'request-1' } });
++  await flush();
++  assert.equal(settled, false);
++  listener({ ...current, lastResult: { state: 'rejected', code: 'recording_capture_source_failed', requestId: 'request-1' } });
++  assert.equal((await pending).state, 'rejected');
++  assert.equal(removed, 1);
++});
++
++const uiFixture = require('../fixtures/capsule_control');
++
++test('actual Vue wall renders twelve authoritative tiles with independent REC controls', async () => {
++  const m = await uiFixture.mount(async () => authority(12));
++  try {
++    const tiles = uiFixture.findAll(m.tree, node => node.tag === 'article');
++    assert.equal(tiles.length, 12);
++    assert.equal(m.ui.presentations[0].panels.length, 12);
++    assert.equal(new Set(m.ui.presentations[0].panels.map(row => row.params.capsuleId)).size, 12);
++    for (const tile of tiles) assert.ok(uiFixture.button(tile, 'REC'));
++    assert.equal(uiFixture.button(m.tree, 'Nueva cápsula').props.disabled, true);
++    assert.equal(m.calls.intents, 0);
++    assert.equal(uiFixture.findAll(m.tree, node => node.props.id === 'cafe-setup-title').length, 0);
++    await m.click('Settings');
++    assert.equal(uiFixture.findAll(m.tree, node => node.props.id === 'cafe-setup-title').length, 1);
++    assert.equal(m.calls.intents, 0);
++  } finally { m.done(); }
++});
++
++test('actual organizer panel renders untrusted titles as text and requires an explicit confirmation', async () => {
++  const value = authority();
++  value.state.organizer_plan = {
++    plan_id: 'plan-ui', windows: [{ title: '<em data-title="synthetic">Synthetic call</em>' }],
++    folder_name: '<b>Synthetic folder</b>', expires_unix_ms: String(Date.now() + 60000),
++  };
++  const m = await uiFixture.mount(async () => value, { submit: async () => ({ queued: true }) });
++  try {
++    assert.equal(m.calls.intents, 0);
++    assert.equal(uiFixture.findAll(m.tree, node => node.tag === 'em' || node.tag === 'b').length, 0);
++    assert.ok(uiFixture.textOf(m.tree).includes(value.state.organizer_plan.windows[0].title));
++    assert.ok(uiFixture.textOf(m.tree).includes(value.state.organizer_plan.folder_name));
++    const confirm = uiFixture.button(m.tree, 'Confirm');
++    assert.ok(confirm);
++    assert.equal(confirm.props.autofocus, undefined);
++    assert.equal(confirm.props.type, 'button');
++    assert.match(uiFixture.squash(uiFixture.textOf(m.tree)), /Expires in \d+s/);
++    await m.click('Settings');
++    assert.ok(uiFixture.button(m.tree, 'Confirm'), 'settings navigation cannot dismiss the plan');
++    assert.equal(m.calls.intents, 0);
++    await m.click('Confirm');
++    assert.deepEqual(m.calls.requests.map(row => row.body), [{ op: 'organizer_plan_confirm', plan_id: 'plan-ui' }]);
++    assert.ok(uiFixture.button(m.tree, 'Confirm'), 'queued response does not remove the plan');
++    const confirmed = copy(value); confirmed.revision = '4'; confirmed.state.organizer_plan = null;
++    confirmed.state.last_result = { state: 'committed', code: 'snapshot', request_id: m.calls.requests[0].request_id };
++    await m.push(confirmed);
++    assert.equal(uiFixture.button(m.tree, 'Confirm'), undefined);
++  } finally { m.done(); }
++});
++
++test('actual recording failure shows the closed authority reason with Retry', async () => {
++  const value = authority();
++  value.state.recordings = [{ capsule_id: 'cap-1', state: 'Failed', reason: 'recording_capture_source_failed', feeds: [] }];
++  const m = await uiFixture.mount(async () => value);
++  try {
++    const tile = uiFixture.findAll(m.tree, node => node.tag === 'article')[0];
++    assert.equal(tile.props['data-tile-state'], 'recording_failed');
++    assert.ok(uiFixture.button(tile, 'Retry'));
++    assert.ok(uiFixture.textOf(tile).includes('recording_capture_source_failed'));
++    assert.equal(m.calls.intents, 0);
++    const next = copy(value); next.revision = '4';
++    next.state.recordings[0].reason = 'SYNTHETIC_PROVIDER_PRIVATE_CANARY';
++    await m.push(next);
++    assert.equal(uiFixture.textOf(m.tree).includes('SYNTHETIC_PROVIDER_PRIVATE_CANARY'), false);
++  } finally { m.done(); }
++});
++
++test('auto-anchor settings stay hidden when absent and reflect only an authoritative boolean', async () => {
++  const m = await uiFixture.mount(async () => authority(), { submit: async () => ({ queued: true }) });
++  try {
++    await m.click('Settings');
++    const labels = () => uiFixture.findAll(m.tree, node => node.tag === 'label' && uiFixture.textOf(node).includes('Auto-anchor Discord pop-outs'));
++    assert.equal(labels().length, 0);
++    const value = authority(); value.revision = '4'; value.state.auto_anchor = false;
++    await m.push(value);
++    assert.equal(labels().length, 1);
++    const toggle = uiFixture.findAll(labels()[0], node => node.tag === 'input')[0];
++    assert.equal(toggle.props.checked, false);
++    const event = { target: { checked: true } };
++    toggle.props.onChange(event);
++    await uiFixture.settle(m.ui.nextTick);
++    assert.deepEqual(m.calls.requests[0].body, { op: 'set_auto_anchor', enabled: true });
++    assert.equal(event.target.checked, false);
++    assert.equal(toggle.props.checked, false);
++    const next = copy(value); next.revision = '5'; next.state.auto_anchor = true;
++    await m.push(next);
++    assert.equal(uiFixture.findAll(labels()[0], node => node.tag === 'input')[0].props.checked, true);
++  } finally { m.done(); }
++});
++
++test('Record all invokes one capsule at a time and reports each authority result independently', async () => {
++  const m = await uiFixture.mount(async () => authority(2), { submit: async () => ({ queued: true }) });
++  try {
++    const batch = uiFixture.button(m.tree, 'Record all').props.onClick();
++    await uiFixture.settle(m.ui.nextTick);
++    assert.equal(m.calls.requests.length, 1);
++    assert.deepEqual(m.calls.requests[0].body, { op: 'start_recording', capsule_id: 'cap-1' });
++    assert.doesNotMatch(uiFixture.textOf(m.tree), /Recording state: Running/);
++    const first = authority(2); first.revision = '4';
++    first.state.recordings = [{ capsule_id: 'cap-1', state: 'Running', elapsed_ms: '1000', feeds: [] }];
++    first.state.last_result = { state: 'committed', code: 'snapshot', request_id: m.calls.requests[0].request_id };
++    await m.push(first);
++    assert.equal(m.calls.requests.length, 2);
++    assert.deepEqual(m.calls.requests[1].body, { op: 'start_recording', capsule_id: 'cap-2' });
++    assert.equal(m.calls.requests[1].expected_revision, '4');
++    const second = copy(first); second.revision = '5';
++    second.state.last_result = { state: 'rejected', code: 'recording_capture_source_failed', request_id: m.calls.requests[1].request_id };
++    await m.push(second); await batch;
++    const tiles = uiFixture.findAll(m.tree, node => node.tag === 'article');
++    assert.equal(tiles[0].props['data-tile-state'], 'recording');
++    assert.equal(tiles[1].props['data-tile-state'], 'no_preview');
++    assert.match(uiFixture.textOf(tiles[1]), /Authority refused/);
++    assert.equal(m.calls.requests.length, 2);
++  } finally { m.done(); }
++});
++
++test('Stop all sends separate stop commands and preserves recordings until authority changes', async () => {
++  const value = authority(2);
++  value.state.recordings = [1, 2].map(id => ({ capsule_id: `cap-${id}`, state: 'Running', elapsed_ms: '1000', feeds: [] }));
++  const m = await uiFixture.mount(async () => value, { submit: async () => ({ queued: true }) });
++  try {
++    const batch = uiFixture.button(m.tree, 'Stop all').props.onClick();
++    await uiFixture.settle(m.ui.nextTick);
++    assert.equal(m.calls.requests.length, 1);
++    assert.deepEqual(m.calls.requests[0].body, { op: 'stop_recording', capsule_id: 'cap-1' });
++    assert.equal(uiFixture.findAll(m.tree, node => node.props['data-tile-state'] === 'recording').length, 2);
++    const first = copy(value); first.revision = '4'; first.state.recordings[0].state = 'Stopped';
++    first.state.last_result = { state: 'committed', code: 'snapshot', request_id: m.calls.requests[0].request_id };
++    await m.push(first);
++    assert.equal(m.calls.requests.length, 2);
++    assert.deepEqual(m.calls.requests[1].body, { op: 'stop_recording', capsule_id: 'cap-2' });
++    const second = copy(first); second.revision = '5'; second.state.recordings[1].state = 'Stopped';
++    second.state.last_result = { state: 'committed', code: 'snapshot', request_id: m.calls.requests[1].request_id };
++    await m.push(second); await batch;
++    assert.equal(uiFixture.findAll(m.tree, node => node.props['data-tile-state'] === 'recording').length, 0);
++    assert.equal(m.calls.requests.length, 2);
++  } finally { m.done(); }
++});
++
++test('missing or faulty optional preview module keeps the packaged shell available and permissions closed', async () => {
++  const fs = require('node:fs'), vm = require('node:vm');
++  const { createRequire } = require('node:module');
++  const file = path.resolve(__dirname, '../../src/main/shellSecurity.js');
++  const source = fs.readFileSync(file, 'utf8');
++  const originalRequire = createRequire(file);
++  for (const fault of ['missing', 'factory']) {
++    const exported = {};
++    const module = { exports: exported };
++    const sandboxRequire = name => {
++      if (name !== './previewSources') return originalRequire(name);
++      if (fault === 'missing') {
++        const error = new Error('SYNTHETIC_OPTIONAL_MODULE_MISSING'); error.code = 'MODULE_NOT_FOUND'; throw error;
++      }
++      return { createPreviewSources() { throw new Error('SYNTHETIC_PROVIDER_PRIVATE_CANARY'); } };
++    };
++    vm.runInNewContext(source, { module, exports: exported, require: sandboxRequire, Buffer, Response }, { filename: file });
++    const shell = module.exports;
++    let captures = 0;
++    const broker = shell.createPreviewSources({ getSources: async () => { captures++; return []; } });
++    assert.deepEqual(copy(await broker.request({}, {})), { ok: false, error: 'preview_unavailable' });
++    assert.equal(captures, 0);
++    const callbacks = {};
++    const session = {
++      setDisplayMediaRequestHandler: fn => { callbacks.display = fn; },
++      setPermissionRequestHandler: fn => { callbacks.request = fn; },
++      setPermissionCheckHandler: fn => { callbacks.check = fn; },
++      webRequest: { onBeforeRequest() {}, onHeadersReceived() {} },
++    };
++    shell.hardenSession(session, undefined, broker);
++    for (const permission of ['media', 'display-capture', 'notifications']) {
++      let allowed;
++      callbacks.request({}, permission, value => { allowed = value; }, { mediaTypes: ['video'], isMainFrame: true });
++      assert.equal(allowed, false);
++      assert.equal(callbacks.check({}, permission, 'cafe://app', { mediaType: 'video', isMainFrame: true }), false);
++    }
++    let selected;
++    callbacks.display({}, value => { selected = value; });
++    assert.equal(selected, null);
++    const options = shell.browserOptions(path.resolve(__dirname, '../../src/preload/index.js'));
++    assert.equal(options.webPreferences.sandbox, true);
++    assert.equal(options.webPreferences.contextIsolation, true);
++    const frame = { url: security.BOOT_URL, parent: null, detached: false };
++    const contents = { mainFrame: frame, isDestroyed: () => false };
++    const handlers = new Map();
++    const cleanup = shell.bindNativeIpc({ handle: (name, callback) => handlers.set(name, callback), removeHandler: name => handlers.delete(name) },
++      () => ({ webContents: contents }), () => null, undefined, undefined, broker);
++    const event = { sender: contents, senderFrame: frame };
++    assert.equal(handlers.get('cafe:getSnapshot')(event).availability, 'unavailable');
++    assert.equal((await handlers.get('cafe:previewSource')(event, { capsule_id: 'cap-1', feed_id: 'feed-1' })).error, 'preview_unavailable');
++    assert.equal(captures, 0);
++    cleanup(); assert.equal(handlers.size, 0); broker.dispose();
++  }
++});
++
++test('a timed-out native capture leaves connecting, quarantines its grant, and stops its late stream', async t => {
++  t.mock.timers.enable({ apis: ['setTimeout'] });
++  let resolveCapture;
++  const first = await sessionFixture({ capture: () => new Promise(resolve => { resolveCapture = resolve; }) });
++  const second = await sessionFixture();
++  try {
++    await first.start();
++    await second.start();
++    assert.equal(first.calls.length, 1);
++    assert.equal(second.requests.length, 0, 'another tile cannot arm a grant while the previous GDM is unresolved');
++    t.mock.timers.tick(8001);
++    await flush();
++    assert.equal(first.states.at(-1).state, 'no_preview');
++    assert.equal(second.requests.length, 0, 'timeout cannot let a late GDM steal another tile selection');
++    const late = mediaStream(); resolveCapture(late); await flush();
++    assert.equal(late.track.stops, 1);
++    assert.equal(first.streams.includes(late), false);
++    assert.equal(second.requests.length, 1);
++    assert.equal(second.states.at(-1).state, 'live');
++  } finally {
++    first.session.dispose(); second.session.dispose(); t.mock.timers.reset();
++  }
++});
+diff --git a/ui/src/App.vue b/ui/src/App.vue
+index b8884eeaf161fc9b0d11373faca024b0e6e27602..b2d4a9dd6a531eea65b49c57c6f1cb642e1cf576 100644
+--- a/ui/src/App.vue
++++ b/ui/src/App.vue
+@@ -23,6 +23,9 @@ import StatusBar from './kit/shell/StatusBar.vue';
+ import CapsuleTopbar from './capsule/topbar.vue';
+ import CapsuleControl from './capsule/control.vue';
+ import CapsuleGrid from './capsule/grid.vue';
++import CapsulePreview from './capsule/capture.vue';
++import OrganizerPlan from './capsule/operator.vue';
++import { actionResultLabel, elapsedLabel, tileState, waitForAuthorityResult } from './capsule/control.js';
+ import { createRegistry } from './capsule/registry.js';
+ import WindowBrowser from './windows.vue';
+ import { createWindowCatalogue } from './window_catalogue.js';
+@@ -130,8 +133,22 @@ const diagnosticsPending = ref(false);
+ const diagnosticsRows = ref([]);
+ /** @type {import('vue').Ref<string>} Fixed diagnostics note, '' when none. */
+ const diagnosticsNote = ref('');
+-/** @type {import('vue').Ref<'capsules' | 'diagnostics'>} View-only page; switching never stops authority/recorder. */
++/** @type {import('vue').Ref<'capsules' | 'settings' | 'diagnostics'>} View-only page; switching never stops authority/recorder. */
+ const activePage = ref('capsules');
++const previewsEnabled = ref(false);
++/** @type {import('vue').Ref<Record<string, Record<string,string>>>} */
++const previewStates = ref({});
++/** @type {import('vue').Ref<Record<string,boolean>>} */
++const tilePending = ref({});
++/** @type {import('vue').Ref<Record<string,string>>} */
++const tileResults = ref({});
++const batchPending = ref(false);
++const batchNote = ref('');
++const organizerPending = ref(false);
++const organizerResult = ref('');
++const actionAbort = new AbortController();
++let capsuleQueue = Promise.resolve();
++let appDisposed = false;
+ const helpMenuOpen = ref(false);
+ const browserOpen = ref(false);
+ const browserPending = ref(false);
+@@ -182,6 +199,7 @@ function cafeFacade() {
+ function applyView(snapshot) {
+   if (snapshot !== null && typeof snapshot === 'object') {
+     view.value = snapshot;
++    if (view.value.lastResult?.code === 'request_or_capacity_conflict') notice.value = actionResultLabel(view.value.lastResult);
+     if (browserOpen.value && view.value.availability !== 'available') {
+       browserSequence += 1; catalogue.reset(); browserRows.value = [];
+       browserTotal.value = null; browserSelected.value = ''; browserPending.value = false;
+@@ -560,21 +578,19 @@ function capsuleById(id) {
+ function capsuleIndexFor(id) { return capsules.value.findIndex((entry) => cid(entry) === id); }
+ /** Recording truth mapped to topbar allowlist, else unknown. */
+ function headerStateFor(capsule) {
+-  const rec = recFor(capsule);
+-  if (rec === undefined) return 'standby';
+-  const state = rec !== null && typeof rec === 'object' ? rec.state : undefined;
+-  return state === 'Running' ? 'active' : 'unknown';
++  return tileState(capsule, recFor(capsule), previewStates.value[cid(capsule)] || {});
+ }
+ /** Disabled reasons reuse existing guards plus pending. */
+ function recordReasonFor(capsule) {
+   const base = startBlock(capsule);
+   if (base !== '') return base;
+-  return isPending.value || browserPending.value ? 'Request pending…' : '';
++  if (recFor(capsule)?.state === 'Running') return 'Already recording';
++  return tilePending.value[cid(capsule)] ? 'Request pending…' : '';
+ }
+ function stopReasonFor(capsule) {
+   const base = stopBlock(capsule);
+   if (base !== '') return base;
+-  return isPending.value || browserPending.value ? 'Request pending…' : '';
++  return tilePending.value[cid(capsule)] ? 'Request pending…' : '';
+ }
+ function obsReasonFor(capsule) {
+   const base = sendBlock(capsule);
+@@ -598,10 +614,97 @@ function onCardObs(id) {
+ }
+ /** View-only page switch; never stops authority/recorder. */
+ function showPage(page) {
+-  if (page !== 'capsules' && page !== 'diagnostics') return;
++  if (page !== 'capsules' && page !== 'settings' && page !== 'diagnostics') return;
+   activePage.value = page;
+ }
+ 
++const organizerPlan = computed(() => view.value.organizerPlan || null);
++const autoAnchor = computed(() => typeof view.value.autoAnchor === 'boolean' ? view.value.autoAnchor : null);
++const runningCount = computed(() => recordings.value.filter(row => row.state === 'Running').length);
++function previewStateFor(id, feedId, state) {
++  if (!['live', 'connecting', 'no_preview'].includes(state)) return;
++  previewStates.value[id] = { ...(previewStates.value[id] || {}), [feedId]: state };
++}
++function resolutionLabel(capsule) {
++  const reason = startBlock(capsule);
++  return reason === REASON_PAIRING ? 'Choose window' : reason === REASON_FOLDER || reason === REASON_FFMPEG ? 'Open settings'
++    : reason === REASON_UNAVAILABLE || reason === REASON_STARTING ? 'Open diagnostics' : '';
++}
++function resolveRecordingBlock(id) {
++  const current = capsuleById(id);
++  if (!current) return;
++  const reason = startBlock(current);
++  if (reason === REASON_PAIRING) openWindowBrowser(id);
++  else showPage(reason === REASON_UNAVAILABLE || reason === REASON_STARTING ? 'diagnostics' : 'settings');
++}
++function failureReasonFor(capsule) {
++  const reason = recFor(capsule)?.reason;
++  return typeof reason === 'string' && reason !== '' ? reason + ' · review setup and retry.'
++    : 'Recording reason unavailable. Open diagnostics before retrying.';
++}
++
++/** Serial commands retain independent per-capsule pending/results. Queued is never success. */
++function queueCapsuleAction(id, op) {
++  if (tilePending.value[id] || appDisposed) return Promise.resolve({ status: 'blocked' });
++  tilePending.value[id] = true;
++  tileResults.value[id] = 'Waiting to submit this capsule request.';
++  const task = capsuleQueue.then(async () => {
++    if (appDisposed || !controls) return { status: 'cancelled' };
++    const current = capsuleById(id);
++    const blocked = !current || availReason.value !== '' || isPending.value || browserPending.value
++      || (op === 'start' && (startBlock(current) !== '' || recFor(current)?.state === 'Running'
++        || ['connecting', 'window_minimized', 'window_closed'].includes(headerStateFor(current))))
++      || (op === 'stop' && stopBlock(current) !== '');
++    if (blocked) return { status: 'blocked' };
++    try {
++      const reply = await (op === 'start' ? controls.startRecording(id) : op === 'stop' ? controls.stopRecording(id) : controls.removeCapsule(id));
++      if (reply.cancelled === true) return { status: 'cancelled' };
++      if (reply.queued !== true || typeof reply.request_id !== 'string') return { status: 'unconfirmed' };
++      tileResults.value[id] = actionResultLabel({ status: 'queued' });
++      return await waitForAuthorityResult(controls, reply.request_id, { signal: actionAbort.signal });
++    } catch { return { status: 'failed' }; }
++  }).then(result => {
++    if (!appDisposed) { tileResults.value[id] = actionResultLabel(result); tilePending.value[id] = false; }
++    return result;
++  });
++  capsuleQueue = task.then(() => undefined, () => undefined);
++  return task;
++}
++function onRemoveCapsule(id) { void queueCapsuleAction(id, 'remove'); }
++async function onBatch(op) {
++  if (batchPending.value || appDisposed) return;
++  batchPending.value = true; batchNote.value = 'Submitting capsule requests one at a time.';
++  const ids = capsules.value.filter(capsule => op === 'stop' ? recFor(capsule)?.state === 'Running' : recFor(capsule)?.state !== 'Running').map(cid);
++  try {
++    for (const id of ids) {
++      const result = await queueCapsuleAction(id, op);
++      if (appDisposed) return;
++      if (result.status === 'unconfirmed' || result.status === 'cancelled' || result.status === 'failed') {
++        batchNote.value = 'Batch paused. Review the result on each capsule before retrying.'; return;
++      }
++    }
++    batchNote.value = 'Requests processed. Check each capsule for its authority result.';
++  } finally { if (!appDisposed) batchPending.value = false; }
++}
++async function onOrganizer(planId, confirm) {
++  if (!controls || organizerPending.value || organizerPlan.value?.plan_id !== planId) return;
++  organizerPending.value = true; organizerResult.value = '';
++  try {
++    const reply = await (confirm ? controls.confirmOrganizerPlan(planId) : controls.rejectOrganizerPlan(planId));
++    organizerResult.value = actionResultLabel({ status: 'queued' });
++    const result = await waitForAuthorityResult(controls, reply.request_id, { signal: actionAbort.signal });
++    if (!appDisposed) organizerResult.value = actionResultLabel(result);
++  } catch { organizerResult.value = REQUEST_FAILED; }
++  finally { organizerPending.value = false; }
++}
++function onAutoAnchor(event) {
++  const enabled = event?.target?.checked;
++  if (!controls || autoAnchor.value === null || typeof enabled !== 'boolean' || isPending.value) return;
++  // Reflect only authoritative state while the command awaits its next snapshot.
++  event.target.checked = autoAnchor.value;
++  request(controls.setAutoAnchor(enabled));
++}
++
+ const statusLabel = computed(() =>
+   availability.value === 'available'
+     ? 'Available'
+@@ -718,6 +821,7 @@ function pairBlock(capsule, index, role) {
+ function onCreateCapsule() {
+   if (personLabel.value.trim() === '') personLabel.value = 'Invitado ' + String(capsules.value.length + 1);
+   if (controls === null || browserPending.value || isPending.value) return;
++  if (capsules.value.length >= 12) { notice.value = 'The wall limit is 12 capsules. Remove a capsule before adding another.'; return; }
+   request(controls.createCapsule(personLabel.value));
+ }
+ 
+@@ -783,20 +887,18 @@ function onPair(capsule, index, role) {
+  * @param {unknown} capsule
+  */
+ function onStart(capsule) {
+-  if (controls === null || browserPending.value || isPending.value) return;
+   const id = cid(capsule);
+   if (id === '') return;
+-  request(controls.startRecording(id));
++  void queueCapsuleAction(id, 'start');
+ }
+ 
+ /**
+  * @param {unknown} capsule
+  */
+ function onStop(capsule) {
+-  if (controls === null || browserPending.value || isPending.value) return;
+   const id = cid(capsule);
+   if (id === '') return;
+-  request(controls.stopRecording(id));
++  void queueCapsuleAction(id, 'stop');
+ }
+ 
+ /**
+@@ -1020,6 +1122,7 @@ onMounted(() => {
+ });
+ 
+ onBeforeUnmount(() => {
++  appDisposed = true; actionAbort.abort();
+   closeWindowBrowser();
+   diagnosticsSeq += 1;
+   if (stopControls !== null) {
+@@ -1049,36 +1152,47 @@ onBeforeUnmount(() => {
+       <template #primary><span aria-hidden="true"></span></template>
+     </TopBar>
+     <nav class="cafe-desktop-toolbar" aria-label="Escritorio">
+-      <button class="cafe-button" type="button" :disabled="availReason !== '' || capsules.length >= 2" @click="onCreateCapsule">Nueva cápsula</button>
++      <button class="cafe-button" type="button" :disabled="availReason !== '' || capsules.length >= 12" @click="onCreateCapsule">Nueva cápsula</button>
+       <button class="cafe-button" type="button" :disabled="availReason !== ''" @click="openWindowBrowser()">Ventanas</button>
+-      <button class="cafe-button" type="button" :disabled="availReason !== ''" @click="onChooseFolder">Carpeta de grabación</button>
+-      <span class="cafe-desktop-config">Carpeta: {{ folderConfigured ? 'Configurada' : 'Sin elegir' }} · FFmpeg: {{ ffmpegConfigured ? 'Configurado' : 'Sin elegir' }}</span>
++      <button class="cafe-button cafe-button-secondary" type="button" :disabled="availReason !== '' || capsules.length === 0 || batchPending" @click="onBatch('start')">Record all</button>
++      <button class="cafe-button cafe-button-secondary" type="button" :disabled="availReason !== '' || runningCount === 0 || batchPending" @click="onBatch('stop')">Stop all</button>
++      <button class="cafe-button cafe-button-secondary" type="button" :aria-pressed="previewsEnabled" @click="previewsEnabled = !previewsEnabled">{{ previewsEnabled ? 'Pause previews' : 'Show previews' }}</button>
++      <span class="cafe-toolbar-space"></span>
++      <button class="cafe-button cafe-button-secondary" type="button" @click="showPage(activePage === 'capsules' ? 'settings' : 'capsules')">{{ activePage === 'capsules' ? 'Settings' : 'Back to wall' }}</button>
+       <button class="cafe-button" type="button" @click="helpMenuOpen = !helpMenuOpen">Ayuda</button>
+       <div v-if="helpMenuOpen" class="cafe-desktop-help" role="menu">
+         <button class="cafe-button" type="button" @click="showPage('diagnostics'); helpMenuOpen = false">Diagnóstico</button>
+-        <button class="cafe-button" type="button" :disabled="availReason !== ''" @click="onChooseFfmpeg">Elegir FFmpeg</button>
+-        <button class="cafe-button" type="button" @click="toggleTheme">Cambiar tema</button>
++        <button class="cafe-button" type="button" @click="showPage('settings'); helpMenuOpen = false">Settings</button>
+       </div>
+     </nav>
+     <main class="cafe-main cafe-desktop-main">
++      <OrganizerPlan v-if="organizerPlan" :plan="organizerPlan" :busy="organizerPending" :result="organizerResult" @confirm="onOrganizer($event, true)" @reject="onOrganizer($event, false)" />
+       <section v-if="activePage === 'capsules'" class="cafe-desktop-workspace" aria-label="Escritorio de cápsulas">
+         <p v-if="availReason !== ''" class="cafe-warning" role="status">{{ availReason }} · Comprueba que Café está conectado antes de grabar.</p>
+         <p v-if="notice !== ''" class="cafe-error" role="alert">{{ notice }}</p>
++        <p class="cafe-wall-guidance">Pop out a Discord window, add a capsule, then choose its window. Use REC on each capsule.</p>
++        <p v-if="batchNote" class="cafe-batch-result" role="status">{{ batchNote }}</p>
+         <div :inert="browserOpen ? true : undefined">
+         <CapsuleGrid :capsuleIDs="rawCapsuleIds" :available="gridAvailable" @add-capsule="onCreateCapsule">
+-          <template #capsule="{ id }">
+-            <article v-if="capsuleById(id) !== undefined" class="cafe-capsule cafe-desktop-capsule">
+-              <CapsuleTopbar :slotLabel="slotLabelFor(id)" :capsuleLabel="cname(capsuleById(id))" :state="headerStateFor(capsuleById(id))" />
+-              <CapsuleControl :recordReason="recordReasonFor(capsuleById(id))" :stopReason="stopReasonFor(capsuleById(id))" :obsReason="obsReasonFor(capsuleById(id))" :busy="isPending || browserPending" @record="onCardRecord(id)" @stop="onCardStop(id)" @obs="onCardObs(id)" />
+-              <div class="cafe-desktop-media"><p>Preview not available.</p><small>La vista previa aún está pendiente. El estado de grabación lo confirma Café.</small></div>
+-              <div class="cafe-desktop-feeds">
++          <template #capsule="{ id, visible }">
++            <article v-if="capsuleById(id) !== undefined" class="cafe-capsule cafe-desktop-capsule" :data-tile-state="headerStateFor(capsuleById(id))">
++              <CapsuleTopbar :slotLabel="slotLabelFor(id)" :capsuleLabel="cname(capsuleById(id))" :state="headerStateFor(capsuleById(id))" :elapsed="elapsedLabel(recFor(capsuleById(id))?.elapsed_ms)" />
++              <div class="cafe-desktop-media" :data-feed-count="capsuleFeeds(capsuleById(id)).length">
++                <CapsulePreview v-for="feed in capsuleFeeds(capsuleById(id))" :key="feed.feed_id" :capsule-id="id" :feed="feed" :enabled="previewsEnabled" :visible="visible" @state="previewStateFor(id, feed.feed_id, $event)" />
++                <div v-if="capsuleFeeds(capsuleById(id)).length === 0" class="cafe-preview-placeholder"><strong>No preview</strong><span>Choose a window for this capsule.</span></div>
++              </div>
++              <CapsuleControl :recordReason="recordReasonFor(capsuleById(id))" :stopReason="stopReasonFor(capsuleById(id))" :obsReason="obsReasonFor(capsuleById(id))" :busy="tilePending[id] === true" :state="headerStateFor(capsuleById(id))" :resolve-label="resolutionLabel(capsuleById(id))" :failure-reason="failureReasonFor(capsuleById(id))" :result="tileResults[id] || ''" @record="onCardRecord(id)" @stop="onCardStop(id)" @obs="onCardObs(id)" @resolve="resolveRecordingBlock(id)" @remove="onRemoveCapsule(id)" />
++              <details class="cafe-tile-feed-details">
++                <summary>Window bindings</summary>
++                <div class="cafe-desktop-feeds">
+                 <div v-for="role in pairRoles" :key="role" class="cafe-desktop-feed">
+                   <strong>{{ slotTitle(role) }}</strong>
+                   <span>{{ feedFor(capsuleById(id), role) === undefined ? 'Sin ventana' : 'Ventana emparejada' }}</span>
+                   <button class="cafe-button" type="button" :disabled="availReason !== '' || feedFor(capsuleById(id), role) !== undefined" @click="openWindowBrowser(id, role)">{{ role === 'game' ? 'Elegir ventana' : 'Elegir cámara' }}</button>
+                 </div>
+-              </div>
+-              <p class="cafe-text">Recording state: {{ textOf(recFor(capsuleById(id))?.state, 'Not recording') }}</p>
++                </div>
++              </details>
++              <p class="cafe-tile-recording-state">Recording state: {{ textOf(recFor(capsuleById(id))?.state, 'Not recording') }}</p>
+             </article>
+           </template>
+         </CapsuleGrid>
+@@ -1096,10 +1210,10 @@ onBeforeUnmount(() => {
+           </details>
+         </template>
+       </WindowBrowser>
+-      <div v-if="activePage === 'diagnostics'" class="cafe-desktop-diagnostics">
++      <div v-if="activePage === 'diagnostics' || activePage === 'settings'" class="cafe-desktop-diagnostics">
+         <button class="cafe-button" type="button" @click="showPage('capsules')">Volver al escritorio</button>
+       <section class="cafe-panel" aria-labelledby="cafe-status-title">
+-        <h1 id="cafe-status-title" class="cafe-title">Café workspace</h1>
++        <h1 id="cafe-status-title" class="cafe-title">Settings and diagnostics</h1>
+         <p class="cafe-status" role="status">Bridge status: {{ statusLabel }}</p>
+         <p v-if="platformWarning !== ''" class="cafe-warning" role="status">{{ platformWarning }}</p>
+         <p v-if="isPending" class="cafe-status" role="status">Request pending…</p>
+@@ -1336,6 +1450,7 @@ onBeforeUnmount(() => {
+       </section>
+       <section class="cafe-panel" aria-labelledby="cafe-setup-title">
+         <h2 id="cafe-setup-title" class="cafe-heading">Recording setup</h2>
++        <label v-if="autoAnchor !== null" class="cafe-auto-anchor"><input type="checkbox" :checked="autoAnchor === true" :disabled="availReason !== '' || isPending" @change="onAutoAnchor" /> Auto-anchor Discord pop-outs</label>
+         <p class="cafe-text">Output folder: {{ folderConfigured ? 'Configured' : 'Not chosen' }}</p>
+         <div class="cafe-controls">
+           <button
+diff --git a/ui/src/cafe.css b/ui/src/cafe.css
+index 4649242c2810cbb62868fbef7f891c4f582a9ef1..41adb724bc828c2350efa0f82502d240717b7c4d 100644
+--- a/ui/src/cafe.css
++++ b/ui/src/cafe.css
+@@ -330,3 +330,36 @@ body {
+ .cafe-desktop-capsule .cafe-capsule-slot,.cafe-desktop-capsule .cafe-capsule-title { grid-column:1; margin:0; }
+ .cafe-desktop-capsule .cafe-capsule-status { grid-column:2; grid-row:1 / 3; align-self:center; }
+ .cafe-desktop-capsule .cafe-actions { margin:0; padding:var(--space-2); border:0; }
++
++/* Live wall proposal: stable media and feedback regions keep REC in one place. */
++.cafe-toolbar-space { flex: 1; }
++.cafe-button-secondary { background: var(--surface); color: var(--fg); border-color: var(--border); }
++.cafe-wall-guidance, .cafe-batch-result { margin: 0 0 var(--space-2); color: var(--muted); font-size: var(--text-sm); }
++.cafe-desktop-capsule { height: 100%; min-height: 0; gap: var(--space-1); }
++.cafe-desktop-capsule .cafe-capsule-header { flex: 0 0 auto; grid-template-columns: minmax(0, 1fr) 7.5rem; padding: var(--space-1); }
++.cafe-desktop-capsule .cafe-capsule-title { font-size: var(--text-sm); max-width: 100%; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
++.cafe-desktop-capsule .cafe-capsule-status { font-size: var(--text-xs); padding: var(--space-1); white-space: nowrap; }
++.cafe-desktop-capsule .cafe-capsule-elapsed { grid-column: 2; text-align: right; }
++.cafe-desktop-media { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); place-content: stretch; min-height: 96px; height: 144px; overflow: hidden; }
++.cafe-desktop-media[data-feed-count="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
++.cafe-feed-preview { position: relative; display: grid; min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
++.cafe-feed-preview video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: var(--bg); }
++.cafe-preview-placeholder { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: var(--space-1); min-height: 0; padding: var(--space-2); color: var(--muted); text-align: center; font-size: var(--text-xs); overflow: auto; }
++.cafe-preview-placeholder strong { color: var(--fg); font-size: var(--text-sm); }
++.cafe-preview-role { position: absolute; left: var(--space-1); bottom: var(--space-1); padding: var(--space-1); background: var(--surface); color: var(--muted); font-size: var(--text-xs); }
++.cafe-desktop-capsule .cafe-actions { flex: 0 0 auto; padding: var(--space-1); }
++.cafe-desktop-capsule .cafe-action-feedback { height: 3.4em; overflow: auto; }
++.cafe-desktop-capsule .cafe-reason { margin-top: var(--space-1); }
++.cafe-desktop-capsule .cafe-button { padding: var(--space-1) var(--space-3); }
++.cafe-tile-feed-details { padding: 0 var(--space-1); color: var(--muted); font-size: var(--text-xs); }
++.cafe-tile-feed-details summary { cursor: pointer; }
++.cafe-tile-feed-details summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
++.cafe-tile-recording-state { margin: 0; padding-inline: var(--space-1); color: var(--muted); font-size: var(--text-xs); }
++.cafe-organizer-plan { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-4); padding: var(--space-4); margin-bottom: var(--space-3); border: 2px solid var(--accent); border-radius: var(--radius-sm); background: var(--surface); }
++.cafe-organizer-plan h2 { font-size: var(--text-lg); margin: 0; }
++.cafe-organizer-plan p { margin: var(--space-2) 0; }
++.cafe-organizer-plan ul { max-height: 10rem; overflow: auto; padding-inline-start: var(--space-5); overflow-wrap: anywhere; }
++.cafe-organizer-actions { display: grid; align-content: start; gap: var(--space-2); max-width: 18rem; }
++.cafe-organizer-actions p { font-size: var(--text-sm); }
++.cafe-auto-anchor { display: flex; gap: var(--space-2); align-items: center; margin: var(--space-3) 0; }
++@media (max-width: 45rem) { .cafe-organizer-plan { grid-template-columns: minmax(0, 1fr); }.cafe-organizer-actions { max-width: none; } }
+diff --git a/ui/src/capsule/capture.js b/ui/src/capsule/capture.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..0851323a31979ecece066c4f9f0eade117007d00
+--- /dev/null
++++ b/ui/src/capsule/capture.js
+@@ -0,0 +1,157 @@
++// @ts-check
++/** Display-only preview proposal. Real Electron/Windows capture is PENDING-LIVE. */
++const RETRY_DELAYS = Object.freeze([500, 1500, 3000]);
++let acquisitionQueue = Promise.resolve();
++
++/** A main-frame grant belongs to one capture call. Never interleave tile grants.
++ * @param {()=>Promise<any>} acquire @returns {Promise<any>} */
++function serial(acquire) {
++  const next = acquisitionQueue.then(acquire, acquire);
++  acquisitionQueue = next.then(() => undefined, () => undefined);
++  return next;
++}
++
++/** @param {any} stream */
++export function stopPreviewTracks(stream) {
++  for (const track of stream?.getTracks?.() || []) {
++    try { track.stop(); } catch { /* Every other track still needs cleanup. */ }
++  }
++}
++
++/** @param {number} width @param {number} height */
++export function previewLimits(width, height) {
++  return { width: Math.max(1, Math.min(1920, Math.floor(Number.isFinite(width) ? width : 1))),
++    height: Math.max(1, Math.min(1080, Math.floor(Number.isFinite(height) ? height : 1))), frameRate: 15 };
++}
++
++/** @param {any} track @param {{width:number,height:number,frameRate:number}} limits */
++async function constrain(track, limits) {
++  await track.applyConstraints({ width: { max: limits.width }, height: { max: limits.height }, frameRate: { max: limits.frameRate } });
++  const actual = track.getSettings();
++  if (!Number.isFinite(actual.width) || actual.width <= 0 || actual.width > limits.width
++    || !Number.isFinite(actual.height) || actual.height <= 0 || actual.height > limits.height
++    || !Number.isFinite(actual.frameRate) || actual.frameRate <= 0 || actual.frameRate > 15) throw new Error('preview_unavailable');
++}
++
++/** Lifecycle owns only display tracks, never recording.
++ * @param {{bridge:any,getDisplayMedia:(constraints:any)=>Promise<any>,onState:(state:string,reason:string)=>void,onStream:(stream:any)=>void,
++ * size:()=>{width:number,height:number},schedule?:(callback:()=>void,delay:number)=>any,cancel?:(timer:any)=>void}} options
++ */
++export function createPreviewSession(options) {
++  const schedule = options.schedule || ((callback, delay) => setTimeout(callback, delay));
++  const cancel = options.cancel || (timer => clearTimeout(timer));
++  let binding = null;
++  let bindingKey = '';
++  let enabled = false, visible = false, disposed = false;
++  let generation = 0, retry = 0, timer = null;
++  let stream = null;
++  let endListeners = [];
++  const acquisitionTimers = new Set();
++  let resizeQueue = Promise.resolve();
++  const active = () => !disposed && enabled && visible && binding !== null;
++  const state = (value, reason = '') => { if (!disposed) options.onState(value, reason); };
++  function clearStream() {
++    for (const [track, listener] of endListeners) track.removeEventListener?.('ended', listener);
++    endListeners = [];
++    stopPreviewTracks(stream); stream = null; options.onStream(null);
++  }
++  function stop() {
++    generation += 1;
++    if (timer !== null) { cancel(timer); timer = null; }
++    for (const timeout of acquisitionTimers) clearTimeout(timeout);
++    acquisitionTimers.clear();
++    clearStream();
++  }
++  function later(reason) {
++    state('no_preview', reason);
++    if (!active() || retry >= RETRY_DELAYS.length || ['preview_disabled', 'preview_denied', 'no_preview'].includes(reason)) return;
++    const delay = RETRY_DELAYS[retry++];
++    timer = schedule(() => { timer = null; void acquire(); }, delay);
++  }
++  async function acquire() {
++    if (!active()) return;
++    const attempt = generation;
++    const target = { ...binding };
++    state('connecting');
++    await serial(async () => {
++      if (!active() || attempt !== generation) return;
++      let captured = null;
++      let timedOut = false;
++      // A delayed getDisplayMedia call has no grant id. Keep its queue slot until
++      // it settles, so it cannot consume another tile's later grant after timeout.
++      const timeout = setTimeout(() => {
++        acquisitionTimers.delete(timeout);
++        if (!active() || attempt !== generation) return;
++        timedOut = true; state('no_preview', 'preview_unavailable');
++      }, 8000);
++      acquisitionTimers.add(timeout);
++      try {
++        if (typeof options.bridge?.previewSource !== 'function') { later('preview_disabled'); return; }
++        const grant = await options.bridge.previewSource({ capsule_id: target.capsule_id, feed_id: target.feed_id });
++        if (!active() || attempt !== generation) return;
++        if (timedOut) { later('preview_unavailable'); return; }
++        if (grant?.ok !== true || grant.capsule_id !== target.capsule_id || grant.feed_id !== target.feed_id) {
++          const reason = ['preview_disabled', 'no_preview', 'preview_busy', 'preview_denied', 'preview_unavailable'].includes(grant?.error) ? grant.error : 'preview_denied';
++          later(reason); return;
++        }
++        const size = options.size(), limits = previewLimits(size.width, size.height);
++        // getDisplayMedia rejects max/min constraints initially; enforce caps on the returned track before display.
++        captured = await options.getDisplayMedia({ audio: false,
++          video: { width: { ideal: limits.width }, height: { ideal: limits.height }, frameRate: { ideal: 15 } } });
++        if (!active() || attempt !== generation) { stopPreviewTracks(captured); return; }
++        if (timedOut) { stopPreviewTracks(captured); later('preview_unavailable'); return; }
++        const tracks = captured?.getVideoTracks?.() || [];
++        if (tracks.length !== 1 || (captured?.getAudioTracks?.() || []).length !== 0) throw new Error('preview_denied');
++        const currentSize = options.size();
++        await constrain(tracks[0], previewLimits(currentSize.width, currentSize.height));
++        if (!active() || attempt !== generation || tracks[0].readyState === 'ended') { stopPreviewTracks(captured); return; }
++        if (timedOut) { stopPreviewTracks(captured); later('preview_unavailable'); return; }
++        clearStream(); stream = captured;
++        const ended = () => {
++          if (attempt !== generation || disposed) return;
++          clearStream(); later('preview_unavailable');
++        };
++        for (const track of captured.getTracks()) {
++          track.addEventListener?.('ended', ended, { once: true }); endListeners.push([track, ended]);
++        }
++        options.onStream(stream); state('live');
++      } catch (error) {
++        stopPreviewTracks(captured);
++        if (active() && attempt === generation) {
++          const denied = error?.name === 'NotAllowedError' || error?.message === 'preview_denied';
++          later(denied ? 'preview_denied' : 'preview_unavailable');
++        }
++      } finally {
++        clearTimeout(timeout); acquisitionTimers.delete(timeout);
++      }
++    });
++  }
++  /** @param {{capsule_id:string,feed_id:string,generation:string}|null} value */
++  function setBinding(value) {
++    const key = value === null ? '' : JSON.stringify([value.capsule_id, value.feed_id, value.generation]);
++    if (key === bindingKey) return;
++    stop(); bindingKey = key; binding = value === null ? null : { ...value }; retry = 0;
++    state('no_preview'); if (active()) void acquire();
++  }
++  /** @param {boolean} show @param {boolean} allow */
++  function setVisibility(show, allow) {
++    if (visible === show && enabled === allow) return;
++    stop(); visible = show; enabled = allow; retry = 0;
++    state('no_preview', allow ? '' : 'preview_disabled'); if (active()) void acquire();
++  }
++  function resize() {
++    const work = resizeQueue.then(async () => {
++      if (!stream || !active()) return;
++      const selected = stream, attempt = generation;
++      const size = options.size();
++      try { await constrain(selected.getVideoTracks()[0], previewLimits(size.width, size.height)); }
++      catch {
++        if (attempt === generation && stream === selected) { clearStream(); later('preview_unavailable'); }
++      }
++    });
++    resizeQueue = work.then(() => undefined, () => undefined);
++    return work;
++  }
++  function dispose() { if (disposed) return; stop(); disposed = true; }
++  return Object.freeze({ setBinding, setVisibility, resize, dispose });
++}
+diff --git a/ui/src/capsule/capture.vue b/ui/src/capsule/capture.vue
+new file mode 100644
+index 0000000000000000000000000000000000000000..51e44b4ce3cfa43de2c4e632ee669be2be6c6f25
+--- /dev/null
++++ b/ui/src/capsule/capture.vue
+@@ -0,0 +1,94 @@
++<script setup>
++// @ts-check
++import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
++import { createPreviewSession } from './capture.js';
++
++const props = defineProps({
++  capsuleId: { type: String, required: true },
++  feed: { type: Object, required: true },
++  enabled: { type: Boolean, default: false },
++  visible: { type: Boolean, default: true },
++});
++const emit = defineEmits(['state']);
++const surface = ref(null);
++const video = ref(null);
++const state = ref('no_preview');
++const reason = ref('preview_disabled');
++const intersecting = ref(false);
++const documentVisible = ref(true);
++let session = null, intersection = null, resizeObserver = null, resizeTimer = null;
++const externalState = computed(() => ['window_minimized', 'window_closed'].includes(props.feed.window_state) ? props.feed.window_state : '');
++const placeholder = computed(() => externalState.value === 'window_closed' ? 'Window closed'
++  : externalState.value === 'window_minimized' ? 'Window minimized'
++    : state.value === 'connecting' ? 'Connecting preview' : 'No preview');
++const note = computed(() => externalState.value === 'window_minimized' ? 'Restore it in Windows'
++  : externalState.value === 'window_closed' ? 'Remove the capsule, then anchor a new pop-out.'
++    : reason.value === 'preview_denied' ? 'Preview permission unavailable; recording setup is separate.'
++      : state.value === 'connecting' ? 'Waiting for an approved window source.'
++        : 'Recording may still work. Preview validation is PENDING-LIVE.');
++
++function publish(value, why) { state.value = value; reason.value = why; emit('state', value); }
++function visibility() {
++  session?.setVisibility(props.visible && intersecting.value && documentVisible.value && externalState.value === '', props.enabled);
++}
++function pageVisibility() {
++  documentVisible.value = typeof document === 'undefined' || document.visibilityState !== 'hidden'; visibility();
++}
++function binding() {
++  session?.setBinding({ capsule_id: props.capsuleId, feed_id: props.feed.feed_id, generation: props.feed.generation });
++}
++watch(() => [props.capsuleId, props.feed.feed_id, props.feed.generation], binding);
++watch(() => [props.enabled, props.visible, externalState.value], visibility);
++onMounted(() => {
++  const scope = typeof window === 'undefined' ? {} : /** @type {{cafe?:unknown}} */ (/** @type {unknown} */ (window));
++  session = createPreviewSession({
++    bridge: scope.cafe,
++    getDisplayMedia: constraints => {
++      if (typeof navigator === 'undefined' || typeof navigator.mediaDevices?.getDisplayMedia !== 'function') return Promise.reject(new Error('preview_unavailable'));
++      return navigator.mediaDevices.getDisplayMedia(constraints);
++    },
++    onState: publish,
++    onStream: stream => {
++      if (!video.value) return;
++      video.value.srcObject = stream;
++      if (stream && typeof video.value.play === 'function') {
++        const result = video.value.play();
++        result?.catch(() => { session?.setVisibility(false, props.enabled); publish('no_preview', 'preview_denied'); });
++      }
++    },
++    size: () => ({ width: surface.value?.clientWidth || 1, height: surface.value?.clientHeight || 1 }),
++  });
++  binding(); pageVisibility();
++  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', pageVisibility);
++  if (typeof IntersectionObserver !== 'undefined' && surface.value) {
++    intersection = new IntersectionObserver(entries => {
++      intersecting.value = entries.some(entry => entry.isIntersecting && entry.intersectionRatio > 0); visibility();
++    }, { threshold: 0.01 });
++    intersection.observe(surface.value);
++  }
++  if (typeof ResizeObserver !== 'undefined' && surface.value) {
++    resizeObserver = new ResizeObserver(() => {
++      if (resizeTimer !== null) clearTimeout(resizeTimer);
++      resizeTimer = setTimeout(() => { resizeTimer = null; void session?.resize(); }, 120);
++    });
++    resizeObserver.observe(surface.value);
++  }
++});
++onBeforeUnmount(() => {
++  intersection?.disconnect(); resizeObserver?.disconnect();
++  if (resizeTimer !== null) clearTimeout(resizeTimer);
++  if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', pageVisibility);
++  session?.dispose(); session = null;
++  if (video.value) video.value.srcObject = null;
++});
++</script>
++
++<template>
++  <div ref="surface" class="cafe-feed-preview" :data-preview-state="externalState || state">
++    <video ref="video" :hidden="state !== 'live' || externalState !== ''" muted autoplay playsinline :aria-label="feed.role === 'camera' ? 'Camera window preview' : 'Anchored window preview'"></video>
++    <div v-if="state !== 'live' || externalState !== ''" class="cafe-preview-placeholder" role="status">
++      <strong>{{ placeholder }}</strong><span>{{ note }}</span>
++    </div>
++    <span class="cafe-preview-role">{{ feed.role === 'camera' ? 'Camera' : 'Window' }}</span>
++  </div>
++</template>
+diff --git a/ui/src/capsule/control.js b/ui/src/capsule/control.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..85140f974e1ce24633e61f387e8132842223c868
+--- /dev/null
++++ b/ui/src/capsule/control.js
+@@ -0,0 +1,89 @@
++// @ts-check
++/** Presentation helpers. Recording state and elapsed time come only from authority. */
++
++/** @param {unknown} value @returns {string} */
++export function elapsedLabel(value) {
++  if (typeof value !== 'string' || !/^(0|[1-9][0-9]{0,19})$/.test(value)) return '—';
++  const seconds = BigInt(value) / 1000n;
++  const hours = seconds / 3600n;
++  const minutes = (seconds / 60n) % 60n;
++  const rest = seconds % 60n;
++  return (hours > 0n ? hours.toString().padStart(2, '0') + ':' : '')
++    + minutes.toString().padStart(2, '0') + ':' + rest.toString().padStart(2, '0');
++}
++
++/** @param {unknown} expiry @param {number} now @returns {number|null} */
++export function planSecondsRemaining(expiry, now) {
++  if (typeof expiry !== 'string' || !/^(0|[1-9][0-9]{0,19})$/.test(expiry)
++    || !Number.isSafeInteger(now) || now < 0) return null;
++  const remaining = BigInt(expiry) - BigInt(now);
++  const seconds = remaining <= 0n ? 0n : remaining / 1000n + (remaining % 1000n === 0n ? 0n : 1n);
++  return seconds > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(seconds);
++}
++
++/** @param {any} capsule @param {any} recording @param {Record<string,string>} previews */
++export function tileState(capsule, recording, previews) {
++  if (recording?.state === 'Running') return 'recording';
++  const feeds = Array.isArray(capsule?.feeds) ? capsule.feeds : [];
++  if (feeds.some(feed => feed.window_state === 'window_closed') || recording?.reason === 'recording_capture_closed') return 'window_closed';
++  if (feeds.some(feed => feed.window_state === 'window_minimized') || recording?.reason === 'recording_capture_minimized') return 'window_minimized';
++  if (['Failed', 'Interrupted', 'Blocked'].includes(recording?.state)
++    || (typeof recording?.reason === 'string' && recording.reason !== '')) return 'recording_failed';
++  const states = feeds.map(feed => previews[feed.feed_id]);
++  if (states.includes('live')) return 'live';
++  if (states.includes('connecting')) return 'connecting';
++  return 'no_preview';
++}
++
++/** @param {string} state @returns {string} */
++export function tileStateLabel(state) {
++  return ({ live: 'Live preview', connecting: 'Connecting preview', window_minimized: 'Window minimized',
++    window_closed: 'Window closed', no_preview: 'No preview', recording: 'Recording',
++    recording_failed: 'Recording failed' })[state] || 'No preview';
++}
++
++/** Fixed actionable descriptions; never display exception messages. @param {any} result */
++export function actionResultLabel(result) {
++  if (result?.code === 'request_or_capacity_conflict') return 'Core refused the request or capsule limit. Wait for the core update, then retry.';
++  if (result?.status === 'queued') return 'Request submitted · waiting for authority';
++  if (result?.status === 'unconfirmed') return 'No authority confirmation. Refresh diagnostics before retrying.';
++  if (result?.status === 'cancelled') return 'Request cancelled.';
++  if (result?.status === 'blocked') return 'Request not sent. Resolve the requirement shown for this capsule.';
++  if (['rejected', 'blocked', 'interrupted'].includes(result?.state)) return 'Authority refused the request. Review the capsule state and diagnostics, then retry.';
++  if (['observed', 'committed', 'configured'].includes(result?.state)) return 'Authority acknowledged the request.';
++  return 'Request failed. Refresh diagnostics and try again.';
++}
++
++/** Wait for the matching authority result, never infer success from queued.
++ * @param {{getState:()=>any,subscribe:(listener:(view:any)=>void)=>()=>void}} controls
++ * @param {string} requestId
++ * @param {{signal?:AbortSignal,timeoutMs?:number}} [options]
++ * @returns {Promise<any>}
++ */
++export function waitForAuthorityResult(controls, requestId, options = {}) {
++  return new Promise(resolve => {
++    let settled = false;
++    let unsubscribe = () => {};
++    let timer;
++    const finish = result => {
++      if (settled) return;
++      settled = true; clearTimeout(timer); unsubscribe();
++      options.signal?.removeEventListener('abort', cancel);
++      resolve(result);
++    };
++    const cancel = () => finish({ status: 'cancelled' });
++    const accept = view => {
++      if (view?.availability !== 'available') { finish({ status: 'unconfirmed' }); return; }
++      const result = view?.lastResult;
++      if (result?.requestId === requestId && result.state !== 'pending') finish(result);
++    };
++    if (options.signal?.aborted) { cancel(); return; }
++    options.signal?.addEventListener('abort', cancel, { once: true });
++    timer = setTimeout(() => finish({ status: 'unconfirmed' }), options.timeoutMs ?? 8000);
++    try {
++      unsubscribe = controls.subscribe(accept);
++      if (settled) unsubscribe();
++      else accept(controls.getState());
++    } catch { finish({ status: 'unconfirmed' }); }
++  });
++}
+diff --git a/ui/src/capsule/control.vue b/ui/src/capsule/control.vue
+index c1d26ced071a9d8487a081119f4a2c9e4b6d8d1e..45e0a65762a2feefb813165559e0274753da9c3d 100644
+--- a/ui/src/capsule/control.vue
++++ b/ui/src/capsule/control.vue
+@@ -1,13 +1,19 @@
+ <template>
+   <div class="cafe-actions" :aria-busy="busy ? 'true' : 'false'">
+     <div class="cafe-row">
+-      <button class="cafe-button" type="button" :disabled="recDisabled" @click="onRecord">REC</button>
+-      <button class="cafe-button" type="button" :disabled="stopDisabled" @click="onStop">Stop</button>
++      <button v-if="state === 'recording'" class="cafe-button cafe-stop" type="button" :disabled="stopDisabled" @click="onStop">Stop</button>
++      <button v-else-if="state === 'window_closed'" class="cafe-button" type="button" :disabled="busy" @click="emit('remove')">Remove capsule</button>
++      <button v-else class="cafe-button" type="button" :disabled="recDisabled || state === 'connecting' || state === 'window_minimized'" @click="onRecord">{{ state === 'recording_failed' ? 'Retry' : 'REC' }}</button>
+       <button class="cafe-button" type="button" :disabled="obsDisabled" @click="onObs">OBS</button>
+     </div>
+-    <p v-if="recReasonText !== ''" class="cafe-reason" aria-live="polite">{{ recReasonText }}</p>
+-    <p v-if="stopReasonText !== ''" class="cafe-reason" aria-live="polite">{{ stopReasonText }}</p>
+-    <p v-if="obsReasonText !== ''" class="cafe-reason" aria-live="polite">{{ obsReasonText }}</p>
++    <div class="cafe-action-feedback" aria-live="polite">
++      <p v-if="state === 'window_minimized'" class="cafe-reason">Restore it in Windows</p>
++      <p v-else-if="state === 'recording' && stopReasonText !== ''" class="cafe-reason">{{ stopReasonText }}</p>
++      <p v-else-if="recReasonText !== '' && state !== 'recording'" class="cafe-reason">{{ recReasonText }} <button v-if="resolveLabel" class="cafe-inline-action" type="button" @click="emit('resolve')">{{ resolveLabel }}</button></p>
++      <p v-else-if="obsReasonText !== ''" class="cafe-reason">{{ obsReasonText }}</p>
++      <p v-if="state === 'recording_failed'" class="cafe-reason">{{ failureReason }}</p>
++      <p v-if="result" class="cafe-reason">{{ result }}</p>
++    </div>
+   </div>
+ </template>
+ 
+@@ -25,9 +31,13 @@ const props = defineProps({
+   stopReason: { type: String, default: 'Runtime unavailable' },
+   obsReason: { type: String, default: 'OBS not ready' },
+   busy: { type: Boolean, default: false },
++  state: { type: String, default: 'no_preview' },
++  resolveLabel: { type: String, default: '' },
++  failureReason: { type: String, default: 'Recording reason unavailable. Open diagnostics before retrying.' },
++  result: { type: String, default: '' },
+ });
+ 
+-const emit = defineEmits(['record', 'stop', 'obs']);
++const emit = defineEmits(['record', 'stop', 'obs', 'resolve', 'remove']);
+ 
+ const recReasonText = computed(() => (typeof props.recordReason === 'string' ? props.recordReason : 'Runtime unavailable'));
+ const stopReasonText = computed(() => (typeof props.stopReason === 'string' ? props.stopReason : 'Runtime unavailable'));
+@@ -68,6 +78,7 @@ function onObs() {
+   flex-wrap: wrap;
+   gap: var(--space-2);
+ }
++.cafe-row > button:first-child { min-width: 8.5rem; }
+ 
+ .cafe-button {
+   background: var(--surface-warm);
+@@ -95,5 +106,10 @@ function onObs() {
+   font-family: var(--font-body);
+   font-size: var(--text-xs);
+   margin: var(--space-2) 0 0;
++  overflow-wrap: anywhere;
+ }
++.cafe-action-feedback { min-height: 3.2em; }
++.cafe-inline-action { border: 0; background: transparent; color: var(--accent); padding: 0; font: inherit; text-decoration: underline; cursor: pointer; }
++.cafe-inline-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
++.cafe-stop { border-color: var(--danger); }
+ </style>
+diff --git a/ui/src/capsule/grid.vue b/ui/src/capsule/grid.vue
+index 52c4c6d2c805481e926256f697327524476c365b..b3a624edbdfbfbf47f1ce34c0222c71731407ca9 100644
+--- a/ui/src/capsule/grid.vue
++++ b/ui/src/capsule/grid.vue
+@@ -6,7 +6,7 @@
+  * authority calls; unknown availability is never rendered as zero.
+  */
+ 
+-import { computed, defineComponent, h, markRaw, onBeforeUnmount, useSlots, watch } from 'vue';
++import { computed, defineComponent, h, markRaw, onBeforeUnmount, onMounted, ref, useSlots, watch } from 'vue';
+ import { DockviewVue } from 'dockview-vue';
+ import 'dockview-vue/dist/styles/dockview.css';
+ import '../workspace.css';
+@@ -72,6 +72,11 @@ const isReady = computed(() => gridState.value === 'ready');
+ 
+ const emit = defineEmits(['add-capsule']);
+ const slots = useSlots();
++const region = ref(null);
++const availableWidth = ref(960);
++const columns = computed(() => Math.max(1, Math.min(4, Math.ceil(Math.sqrt(capsules.value.length || 1)), Math.floor(availableWidth.value / 300))));
++const wallRows = computed(() => Math.max(1, Math.ceil(capsules.value.length / columns.value)));
++let resizeObserver = null;
+ /** @type {import('dockview-core').DockviewApi | null} */
+ let desktopApi = null;
+ /** @type {{ dispose: () => void } | null} */
+@@ -85,11 +90,14 @@ const panelId = (id) => `capsule:${id}`;
+ const CapsulePanel = markRaw(defineComponent({
+   props: { params: { type: Object, required: true } },
+   setup(router) {
++    const visible = ref(router.params.api?.isVisible !== false);
++    const subscription = router.params.api?.onDidVisibilityChange?.(event => { visible.value = event.isVisible === true; });
++    onBeforeUnmount(() => subscription?.dispose());
+     return () => {
+       const id = router.params.params?.capsuleId;
+       if (!isReady.value || !capsules.value.includes(id)) return null;
+       return h('div', { class: 'cafe-desktop-panel', 'data-capsule-id': id },
+-        slots.capsule ? slots.capsule({ id }) : [
++        slots.capsule ? slots.capsule({ id, visible: visible.value }) : [
+           h('p', { class: 'cafe-capsule-grid-fallback' }, `No capsule view supplied. ${id}`),
+         ]);
+     };
+@@ -114,22 +122,41 @@ function reconcile() {
+     for (const panel of [...desktopApi.panels]) {
+       if (!wanted.has(panel.id)) desktopApi.removePanel(panel);
+     }
+-    let previous = null;
+-    for (const id of capsules.value) {
++    for (const [index, id] of capsules.value.entries()) {
+       const exactPanelId = panelId(id);
+       if (!desktopApi.getPanel(exactPanelId)) {
+         desktopApi.addPanel({
+           id: exactPanelId, component: 'CapsulePanel', tabComponent: 'CapsuleTab',
+           title: id, params: { capsuleId: id }, renderer: 'always',
+-          minimumWidth: 240, minimumHeight: 200,
+-          ...(previous ? { position: { referencePanel: previous, direction: 'right' } } : {}),
++          minimumWidth: 240, minimumHeight: 280,
++          ...(index >= columns.value
++            ? { position: { referencePanel: panelId(capsules.value[index - columns.value]), direction: 'below' } }
++            : index > 0 ? { position: { direction: 'right' } } : {}),
+         });
+       }
+-      previous = exactPanelId;
+     }
+   } finally { reconciling = false; }
+ }
+ 
++/** Arrange existing panels without changing capsule identity or authority state. */
++function arrange() {
++  if (!desktopApi || disposed || reconciling) return;
++  const panels = capsules.value.map(id => desktopApi.getPanel(panelId(id))).filter(Boolean);
++  if (!panels.length || typeof panels[0].api?.moveTo !== 'function') return;
++  reconciling = true;
++  try {
++    for (const panel of panels.slice(1)) panel.api.moveTo({ group: panels[0].group, position: 'center', skipSetActive: true });
++    for (let index = 1; index < panels.length; index += 1) {
++      const panel = panels[index];
++      if (index < columns.value) panel.api.moveTo({ position: 'right', skipSetActive: true });
++      else panel.api.moveTo({ group: panels[index - columns.value].group, position: 'bottom', skipSetActive: true });
++    }
++    const width = Math.max(240, Math.floor(desktopApi.width / columns.value));
++    const height = Math.max(280, Math.floor(desktopApi.height / wallRows.value));
++    for (const panel of panels) panel.api.setSize({ width, height });
++  } finally { reconciling = false; }
++}
++
+ function onReady(event) {
+   desktopApi = event.api;
+   removalSubscription = desktopApi.onDidRemovePanel(() => {
+@@ -137,17 +164,29 @@ function onReady(event) {
+     if (!reconciling) queueMicrotask(reconcile);
+   });
+   reconcile();
++  arrange();
+ }
+-watch(capsules, reconcile);
++watch(() => capsules.value.join('\0'), () => { reconcile(); arrange(); });
++watch(columns, arrange);
++onMounted(() => {
++  if (typeof ResizeObserver === 'undefined' || !region.value) return;
++  resizeObserver = new ResizeObserver(entries => {
++    const width = entries[0]?.contentRect.width;
++    if (typeof width === 'number' && width > 0) availableWidth.value = width;
++  });
++  resizeObserver.observe(region.value);
++});
+ onBeforeUnmount(() => {
+   disposed = true;
++  resizeObserver?.disconnect();
+   removalSubscription?.dispose();
+   desktopApi = null;
+ });
+ </script>
+ 
+ <template>
+-  <section class='cafe-capsule-grid-region cafe-desktop' aria-label='Capsules' :data-state='gridState'>
++  <section ref='region' class='cafe-capsule-grid-region cafe-desktop' aria-label='Capsules' :data-state='gridState' :data-wall-rows='wallRows'>
++    <div v-if='isReady' class='cafe-wall-layout-tools'><span>{{ capsules.length }} / 12 capsules</span><button class='cafe-button' type='button' @click='arrange'>Arrange wall</button></div>
+     <p v-if='isUnavailable' class='cafe-capsule-grid-note' role='status'>
+       Capsules unavailable.
+     </p>
+diff --git a/ui/src/capsule/operator.vue b/ui/src/capsule/operator.vue
+new file mode 100644
+index 0000000000000000000000000000000000000000..b25ae81b5aaf52e56f0f06c7b2c09638ccc5a54c
+--- /dev/null
++++ b/ui/src/capsule/operator.vue
+@@ -0,0 +1,37 @@
++<script setup>
++// @ts-check
++import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
++import { planSecondsRemaining } from './control.js';
++
++const props = defineProps({ plan: { type: Object, required: true }, busy: { type: Boolean, default: false }, result: { type: String, default: '' } });
++const emit = defineEmits(['confirm', 'reject']);
++const now = ref(Date.now());
++let timer = null;
++const remaining = computed(() => planSecondsRemaining(props.plan.expires_unix_ms, now.value));
++const countdown = computed(() => remaining.value === null ? 'Expiry unavailable'
++  : remaining.value === 0 ? 'Expired · request a new plan' : `Expires in ${remaining.value}s`);
++function confirm() {
++  if (props.busy || remaining.value === null || remaining.value <= 0) return;
++  emit('confirm', props.plan.plan_id);
++}
++function reject() { if (!props.busy) emit('reject', props.plan.plan_id); }
++onMounted(() => { timer = setInterval(() => { now.value = Date.now(); }, 1000); });
++onBeforeUnmount(() => { if (timer !== null) clearInterval(timer); });
++</script>
++
++<template>
++  <section class="cafe-organizer-plan" aria-labelledby="cafe-organizer-title" :aria-busy="busy ? 'true' : 'false'">
++    <div>
++      <h2 id="cafe-organizer-title">Codex plan · approval required</h2>
++      <p>Review the windows and destination. Confirm submits approval to the authority.</p>
++      <ul><li v-for="(entry, index) in plan.windows" :key="index">{{ entry.title }}</li></ul>
++      <p><strong>Folder:</strong> {{ plan.folder_name }}</p>
++    </div>
++    <div class="cafe-organizer-actions">
++      <p>{{ countdown }}</p>
++      <button class="cafe-button" type="button" :disabled="busy || remaining === null || remaining <= 0" @click="confirm">Confirm</button>
++      <button class="cafe-button cafe-button-secondary" type="button" :disabled="busy" @click="reject">Reject</button>
++      <p v-if="result" role="status">{{ result }}</p>
++    </div>
++  </section>
++</template>
+diff --git a/ui/src/capsule/topbar.vue b/ui/src/capsule/topbar.vue
+index 2041cef4da2189f2d1f178df3baedaf92394f69c..86755b894e272f49dc3ecd9549514aa7258c318a 100644
+--- a/ui/src/capsule/topbar.vue
++++ b/ui/src/capsule/topbar.vue
+@@ -19,14 +19,15 @@ import { computed } from 'vue';
+  * Known backend lifecycle truth, never extended locally.
+  * [CITED; METAVIEWER_READONLY/ui/src/wall/SurfacePanel.vue:24]
+  */
+-const KNOWN_STATES = Object.freeze(['active', 'standby', 'ceded', 'destroyed', 'lost']);
++const KNOWN_STATES = Object.freeze(['active', 'standby', 'ceded', 'destroyed', 'lost', 'live', 'connecting', 'window_minimized', 'window_closed', 'no_preview', 'recording', 'recording_failed']);
+ /** Explicit fallback; never invents a backend value. */
+ const UNKNOWN_LABEL = 'unknown';
+ 
+ const props = defineProps({
+   slotLabel: { type: String, required: true },
+   capsuleLabel: { type: String, required: true },
+-  state: { type: String, required: true }
++  state: { type: String, required: true },
++  elapsed: { type: String, default: '—' },
+ });
+ 
+ /** @returns {string} */
+@@ -53,7 +54,7 @@ const isKnownState = computed(() => {
+  * @returns {string}
+  */
+ const displayState = computed(() => {
+-  return isKnownState.value ? props.state : UNKNOWN_LABEL;
++  return isKnownState.value ? ({live:'Live preview',connecting:'Connecting',window_minimized:'Window minimized',window_closed:'Window closed',no_preview:'No preview',recording:'Recording',recording_failed:'Recording failed'}[props.state] || props.state) : UNKNOWN_LABEL;
+ });
+ 
+ /** Stable key for styling; unknown collapses to one explicit key. @returns {string} */
+@@ -70,6 +71,7 @@ const stateKey = computed(() => {
+       <span class="cafe-capsule-dot" aria-hidden="true"></span>
+       <span class="cafe-capsule-state">{{ displayState }}</span>
+     </p>
++    <p class="cafe-capsule-elapsed" :aria-label="elapsed === '—' ? 'Elapsed time unavailable from authority' : 'Authority recording elapsed time'">{{ elapsed }}</p>
+   </header>
+ </template>
+ 
+@@ -124,4 +126,18 @@ const stateKey = computed(() => {
+ .cafe-capsule-state {
+   font-family: var(--font-mono);
+ }
++.cafe-capsule-elapsed {
++  margin: 0;
++  width: 8ch;
++  color: var(--muted);
++  font-variant-numeric: tabular-nums;
++  font-size: var(--text-sm);
++}
++.cafe-capsule-header[data-state-key="recording"] .cafe-capsule-dot {
++  background: var(--danger);
++}
++.cafe-capsule-header[data-state-key="recording"] .cafe-capsule-status {
++  color: var(--fg);
++  border-color: var(--danger);
++}
+ </style>
+diff --git a/ui/src/workspace.css b/ui/src/workspace.css
+index c392019ba0fec5779213f5c85450557a5e603b40..3b8472bc98afb6e81bb87a52eb1ba0af3d4e6aab 100644
+--- a/ui/src/workspace.css
++++ b/ui/src/workspace.css
+@@ -7,7 +7,7 @@
+   min-width: 0;
+   min-height: 28rem;
+   height: calc(100dvh - 12rem);
+-  overflow: hidden;
++  overflow: auto;
+   background: var(--bg);
+   color: var(--fg);
+   font-family: system-ui, sans-serif;
+@@ -16,7 +16,7 @@
+   flex: 1;
+   width: 100%;
+   height: 100%;
+-  min-height: 0;
++  min-height: 280px;
+   --dv-group-view-background-color: var(--surface);
+   --dv-tabs-and-actions-container-background-color: var(--surface);
+   --dv-activegroup-visiblepanel-tab-background-color: var(--surface);
+@@ -54,6 +54,27 @@
+   --dv-tabs-and-actions-container-height: 36px;
+   --dv-tab-font-size: var(--text-sm, .875rem);
+ }
++.cafe-desktop[data-wall-rows="2"] .cafe-desktop-wall { min-height: 560px; }
++.cafe-desktop[data-wall-rows="3"] .cafe-desktop-wall { min-height: 840px; }
++.cafe-desktop[data-wall-rows="4"] .cafe-desktop-wall { min-height: 1120px; }
++.cafe-desktop[data-wall-rows="5"] .cafe-desktop-wall { min-height: 1400px; }
++.cafe-desktop[data-wall-rows="6"] .cafe-desktop-wall { min-height: 1680px; }
++.cafe-desktop[data-wall-rows="7"] .cafe-desktop-wall { min-height: 1960px; }
++.cafe-desktop[data-wall-rows="8"] .cafe-desktop-wall { min-height: 2240px; }
++.cafe-desktop[data-wall-rows="9"] .cafe-desktop-wall { min-height: 2520px; }
++.cafe-desktop[data-wall-rows="10"] .cafe-desktop-wall { min-height: 2800px; }
++.cafe-desktop[data-wall-rows="11"] .cafe-desktop-wall { min-height: 3080px; }
++.cafe-desktop[data-wall-rows="12"] .cafe-desktop-wall { min-height: 3360px; }
++.cafe-wall-layout-tools {
++  display: flex;
++  flex: 0 0 auto;
++  align-items: center;
++  justify-content: space-between;
++  gap: var(--space-2);
++  color: var(--muted);
++  font-size: var(--text-xs);
++  padding-bottom: var(--space-2);
++}
+ .cafe-desktop .cafe-desktop-panel {
+   height: 100%;
+   min-width: 0;
