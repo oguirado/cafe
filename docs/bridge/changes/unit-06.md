@@ -952,5 +952,5 @@
 - Null role means no role on non-bind operations; all six view fields are required.
 - Presentation milliseconds are safe nonnegative JavaScript integers; native u64 clocks stay outside this view and native expiry remains authoritative.
 - Pending is a real session Set of at most 64 valid proposal identifiers; only the exact available status permits confirmation.
-- The parent supplies session aliases, the existing token-backed application skin and fresh views, and remounts the presenter on a new native session.
+- The parent supplies session aliases, the existing token-backed skin and reactive or replaced props, and remounts the presenter on a new native session.
 - The live proposal adapter and reviewed native confirmation wiring are absent; synthetic presentation tests do not establish live control.

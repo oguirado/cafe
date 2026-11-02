@@ -81,10 +81,99 @@
       "command": "python -B tools/claims_check.py",
       "status": "pass",
       "findings": 0
+    },
+    {
+      "command": "Read-only source-profile and document-route diagnosis against base/current inventories",
+      "status": "confirmed_scope_blocker",
+      "missing_profile_paths": [
+        "docs/bridge/changes/unit-06.md"
+      ],
+      "missing_route_id": "unit-06"
     }
   ],
   "ci": {
-    "status": "not_observed_for_delivery",
+    "status": "failure",
+    "evidence_commit": "a085f57868278036397ac8f6d0e1a6a237829925",
+    "run_url": "https://github.com/oguirado/cafe/actions/runs/41377366327",
+    "jobs": [
+      {
+        "name": "WGC availability assessment (not native pass)",
+        "job_id": 125060422282,
+        "status": "completed",
+        "conclusion": "success",
+        "failed_steps": []
+      },
+      {
+        "name": "gitleaks full history and real negative controls",
+        "job_id": 125060422529,
+        "status": "completed",
+        "conclusion": "success",
+        "failed_steps": []
+      },
+      {
+        "name": "verify (ubuntu-latest)",
+        "job_id": 125060422544,
+        "status": "completed",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Gate python"
+        ]
+      },
+      {
+        "name": "verify (windows-latest)",
+        "job_id": 125060422617,
+        "status": "completed",
+        "conclusion": "failure",
+        "failed_steps": [
+          "Gate python"
+        ]
+      },
+      {
+        "name": "Synthetic owned-window WGC capture",
+        "job_id": 125061061823,
+        "status": "completed",
+        "conclusion": "success",
+        "failed_steps": []
+      }
+    ],
+    "required_component_tests": {
+      "status": "not_run",
+      "reason": "Gate python fails before Gate node on both verification jobs."
+    },
+    "scope_blocker": {
+      "classification": "new_failure_triggered_by_required_transport_document",
+      "path": "docs/bridge/changes/unit-06.md",
+      "preexisting": false,
+      "errors": [
+        "source_profile_coverage_incomplete",
+        "document primary id missing from generic lookup"
+      ],
+      "linux_python": {
+        "tests": 342,
+        "failures": 5,
+        "errors": 8
+      },
+      "windows_python": {
+        "tests": 342,
+        "failures": 5,
+        "errors": 8
+      },
+      "read_only_diagnosis": "The base inventory passes read_profile; the current inventory has exactly one missing source-profile path, the required transport Markdown. Its unit-06 document id is absent from routes.tsv.",
+      "authorized_fix_available": false,
+      "reason": "The task permits only three implementation/test paths and two transport paths; catalogue registrations and generated indexes are outside that set.",
+      "integration_paths": [
+        "catalogue/source_profile.json",
+        "catalogue/nodes.jsonl",
+        "catalogue/coordinates.jsonl",
+        "catalogue/routes.tsv",
+        "catalogue/router_sources.json",
+        "catalogue/router/manifest.json",
+        "catalogue/router/ID",
+        "catalogue/router/cols.json"
+      ],
+      "derived_outputs": "Existing builders must also regenerate affected catalogue/router/docs, catalogue/router/digest and index shards; exact files are builder-derived.",
+      "next_owner_action": "Register the required Markdown source and rebuild its existing catalogue/index through the integration owner, then rerun CI. Do not weaken validators or exclude the report."
+    },
     "baseline": {
       "commit": "f1e874050e305645a90e64267e50f8625daae9bc",
       "run_url": "https://github.com/oguirado/cafe/actions/runs/41372699114",
