@@ -9,6 +9,7 @@ js-ffmpeg-selection	src/main/ffmpegSelection.js
 js-preload-security	src/preload/preloadSecurity.js
 js-renderer-assets	src/main/rendererAssets.js
 js-renderer-control	src/renderer/control.js
+js-renderer-control-p2	src/renderer/control.js
 js-runtime-backend	src/main/runtimeBackend.js
 js-shell-main	src/main/index.js
 js-shell-preload	src/preload/index.js

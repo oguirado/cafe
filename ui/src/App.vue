@@ -11,12 +11,16 @@
  * failure note. Unmount only removes renderer listeners; authority and
  * recording are never stopped from here.
  *
+ * Diagnostics are read only on an explicit operator click (show/refresh)
+ * through the parent read-only helper; only allowlisted report fields are
+ * rendered as plain text, never logged, stored, copied or serialized.
+ *
  * @module ui/App
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import TopBar from './kit/shell/TopBar.vue';
 import StatusBar from './kit/shell/StatusBar.vue';
-import { createControls } from '../../src/renderer/control.js';
+import { createControls, readDiagnostics } from '../../src/renderer/control.js';
 
 /** Fixed note for any failed controller request; raw errors never surface. */
 const REQUEST_FAILED = 'Request failed; refresh and try again';
@@ -36,6 +40,27 @@ const REASON_CHAT_PENDING = 'Chat setup pending';
 const REASON_NOT_RECORDING = 'Not recording';
 const REASON_NO_PREV = 'No previous page';
 const REASON_NO_NEXT = 'No next page';
+
+/** Fixed diagnostics notes; raw errors and unknown values never surface. */
+const DIAGNOSTICS_FAILED = 'Diagnóstico no disponible';
+const DIAGNOSTICS_NONE = 'sin dato';
+const DIAGNOSTICS_UNKNOWN = 'desconocido';
+
+/**
+ * Allowlisted diagnostic report fields, in display order, with fixed labels.
+ * Anything else the report might carry is never rendered.
+ */
+const DIAGNOSTIC_FIELDS = Object.freeze([
+  Object.freeze({ key: 'schema', label: 'Esquema' }),
+  Object.freeze({ key: 'bridge', label: 'Puente' }),
+  Object.freeze({ key: 'result_state', label: 'Estado del último resultado' }),
+  Object.freeze({ key: 'result_code', label: 'Código del último resultado' }),
+  Object.freeze({ key: 'capsule_count', label: 'Cápsulas' }),
+  Object.freeze({ key: 'paired_feed_count', label: 'Feeds emparejados' }),
+  Object.freeze({ key: 'listed_window_count', label: 'Ventanas listadas' }),
+  Object.freeze({ key: 'minimized_window_count', label: 'Ventanas minimizadas' }),
+  Object.freeze({ key: 'visible_window_count', label: 'Ventanas visibles' }),
+]);
 
 /** Pairing roles, exactly the parent contract. */
 const pairRoles = ['game', 'camera'];
@@ -89,6 +114,16 @@ const obsPort = ref('');
 const pairForms = ref({});
 /** @type {import('vue').Ref<number[]>} Visited window offsets for paging back. */
 const prevOffsets = ref([]);
+/** @type {import('vue').Ref<boolean>} Diagnostics panel visibility. */
+const diagnosticsOpen = ref(false);
+/** @type {import('vue').Ref<boolean>} One explicit diagnostics read in flight. */
+const diagnosticsPending = ref(false);
+/** @type {import('vue').Ref<Array<{ key: string, label: string, value: string }>>} */
+const diagnosticsRows = ref([]);
+/** @type {import('vue').Ref<string>} Fixed diagnostics note, '' when none. */
+const diagnosticsNote = ref('');
+/** Read sequence; results of closed or unmounted reads are dropped. */
+let diagnosticsSeq = 0;
 
 /** @type {ReturnType<typeof createControls> | null} Parent-owned controller. */
 let controls = null;
@@ -692,6 +727,81 @@ function toggleTheme() {
   applyTheme(theme.value === 'light' ? 'dark' : 'light');
 }
 
+/**
+ * Render one diagnostic value. Only fixed lowercase codes and non-negative
+ * safe-integer counts pass; null stays "no data", everything else is unknown.
+ *
+ * @param {unknown} value
+ * @returns {string}
+ */
+function diagnosticValue(value) {
+  if (value === null) return DIAGNOSTICS_NONE;
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value >= 0 ? String(value) : DIAGNOSTICS_UNKNOWN;
+  }
+  if (typeof value === 'string' && /^[a-z0-9_.]{1,64}$/.test(value)) return value;
+  return DIAGNOSTICS_UNKNOWN;
+}
+
+/**
+ * Project a report through the field allowlist. Own data only; the report
+ * object itself is never kept or serialized.
+ *
+ * @param {unknown} report
+ * @returns {Array<{ key: string, label: string, value: string }>}
+ */
+function diagnosticRows(report) {
+  const fields = /** @type {Record<string, unknown>} */ (
+    report !== null && typeof report === 'object' ? report : {}
+  );
+  return DIAGNOSTIC_FIELDS.map((field) => ({
+    key: field.key,
+    label: field.label,
+    value: diagnosticValue(
+      Object.prototype.hasOwnProperty.call(fields, field.key) ? fields[field.key] : null,
+    ),
+  }));
+}
+
+/**
+ * Read diagnostics once, on explicit operator request only (show or
+ * refresh). The parent helper only uses the read-only snapshot query; no
+ * intent is submitted. Failures resolve to the fixed note.
+ *
+ * @returns {Promise<void>}
+ */
+async function onReadDiagnostics() {
+  if (diagnosticsPending.value) return;
+  diagnosticsSeq += 1;
+  const seq = diagnosticsSeq;
+  diagnosticsOpen.value = true;
+  diagnosticsPending.value = true;
+  diagnosticsNote.value = '';
+  /** @type {Array<{ key: string, label: string, value: string }> | null} */
+  let rows = null;
+  try {
+    rows = diagnosticRows(await readDiagnostics(cafeFacade()));
+  } catch {
+    rows = null;
+  }
+  if (seq !== diagnosticsSeq) return;
+  diagnosticsPending.value = false;
+  if (rows === null) {
+    diagnosticsRows.value = [];
+    diagnosticsNote.value = DIAGNOSTICS_FAILED;
+    return;
+  }
+  diagnosticsRows.value = rows;
+}
+
+function onCloseDiagnostics() {
+  diagnosticsSeq += 1;
+  diagnosticsOpen.value = false;
+  diagnosticsPending.value = false;
+  diagnosticsRows.value = [];
+  diagnosticsNote.value = '';
+}
+
 onMounted(() => {
   applyTheme(theme.value);
   const facade = cafeFacade();
@@ -721,6 +831,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  diagnosticsSeq += 1;
   if (stopControls !== null) {
     try {
       stopControls();
@@ -758,6 +869,45 @@ onBeforeUnmount(() => {
           <button class="cafe-button" type="button" @click="toggleTheme">
             Switch to {{ themeLabel }} theme
           </button>
+          <button
+            v-if="!diagnosticsOpen"
+            class="cafe-button"
+            type="button"
+            :disabled="diagnosticsPending"
+            @click="onReadDiagnostics"
+          >
+            Mostrar diagnóstico
+          </button>
+          <template v-else>
+            <button
+              class="cafe-button"
+              type="button"
+              :disabled="diagnosticsPending"
+              @click="onReadDiagnostics"
+            >
+              Actualizar diagnóstico
+            </button>
+            <button class="cafe-button" type="button" @click="onCloseDiagnostics">
+              Cerrar diagnóstico
+            </button>
+          </template>
+        </div>
+        <div
+          v-if="diagnosticsOpen"
+          id="cafe-diagnostics-panel"
+          role="region"
+          aria-labelledby="cafe-diagnostics-title"
+        >
+          <h2 id="cafe-diagnostics-title" class="cafe-heading">Diagnóstico</h2>
+          <p class="cafe-text">Solo lectura: códigos fijos y recuentos, sin títulos, cuentas, contraseñas ni rutas.</p>
+          <p v-if="diagnosticsPending" class="cafe-status" role="status">Leyendo diagnóstico…</p>
+          <p v-if="diagnosticsNote !== ''" class="cafe-error" role="alert">{{ diagnosticsNote }}</p>
+          <ul v-if="diagnosticsRows.length > 0" class="cafe-list">
+            <li v-for="row in diagnosticsRows" :key="row.key" class="cafe-row">
+              <span class="cafe-row-main">{{ row.label }}</span>
+              <span class="cafe-row-sub">{{ row.key }}: {{ row.value }}</span>
+            </li>
+          </ul>
         </div>
       </section>
       <section class="cafe-panel" aria-labelledby="cafe-capsules-title">

@@ -32,6 +32,29 @@ fn snapshot(runtime:&ControlRuntime<ControlCommandSender>,windows:&WindowRegistr
  if serde_json::to_vec(&state).map_or(true,|bytes|bytes.len()>3500){state=json!({"runtime":"projection_unavailable","code":"projection_budget_exceeded"});}
  json!({"kind":"snapshot","authority_epoch":runtime.capsule_snapshot().authority_epoch,"revision":runtime.revision(),"state":state})
 }
+// Static diagnostic categories only; admission and journal semantics are unchanged.
+fn pair_rejection_code(error:&crate::capsule_pairing::PairError)->&'static str {
+ use crate::capsule_pairing::PairError;
+ use crate::windows_window_registry::WindowError;
+ match error {
+  PairError::Window(WindowError::Unavailable)=>"pair_window_unavailable",
+  PairError::Window(WindowError::AmbiguousDescriptor)=>"pair_window_ambiguous",
+  PairError::Window(WindowError::StaleWindow)=>"pair_window_stale",
+  PairError::Window(WindowError::Unsupported)=>"pair_platform_unsupported",
+  PairError::Window(WindowError::IdentityExhausted)=>"pair_identity_exhausted",
+  PairError::Window(WindowError::NativeFailure)=>"pair_native_failure",
+  PairError::Window(WindowError::InvalidDescriptor|WindowError::DuplicateObservation)=>"pair_window_invalid",
+  PairError::WrongPerson=>"pair_person_mismatch",
+  PairError::InvalidCrop=>"pair_crop_invalid",
+  PairError::StaleCrop=>"pair_crop_stale",
+  PairError::UnknownCapsule=>"pair_capsule_unknown",
+  PairError::AlreadyPaired=>"pair_role_already_paired",
+  PairError::FeedUnavailable=>"pair_feed_unavailable",
+  PairError::AuthorityRejected(_)=>"pair_authority_rejected",
+  PairError::GenerationExhausted=>"pair_generation_exhausted",
+  PairError::ExecutableOnlyForbidden=>"pair_executable_only_forbidden",
+ }
+}
 fn mutate(request:OperatorRequest,runtime:&mut ControlRuntime<ControlCommandSender>,windows:&mut WindowRegistry,adapter:&mut NativeAdapter,book:&mut PairingBook,bindings:&Arc<std::sync::RwLock<Vec<crate::capsule_pairing::Binding>>>,ffmpeg:&mut Option<ExternalFfmpeg>,window_offset:&mut u32,services:&mut ServiceClient)->Value{
  let epoch=runtime.capsule_snapshot().authority_epoch;
  if request.authority_epoch!=epoch{return result("rejected","old_authority_epoch");}
@@ -54,7 +77,7 @@ fn mutate(request:OperatorRequest,runtime:&mut ControlRuntime<ControlCommandSend
    let matching=windows.snapshots().into_iter().filter(|view|serde_json::to_value(&view.handle).ok()==Some(json!(window_token))).collect::<Vec<_>>();
    if matching.len()!=1{return result("rejected","window_token_unknown_or_ambiguous");}
    let request_pair=PairRequest{request_id:request.request_id.clone(),authority_epoch:epoch,expected_revision:state.revision,capsule_id,person_label,feed_id,role,window:matching[0].handle.clone(),window_generation,layout_revision,crop:Crop{x:crop.x,y:crop.y,width:crop.width,height:crop.height}};
-   let proposal=match book.propose(&state,windows,request_pair){Ok(value)=>value,Err(_)=>return result("rejected","pair_proposal_rejected")};
+   let proposal=match book.propose(&state,windows,request_pair){Ok(value)=>value,Err(error)=>return result("rejected",pair_rejection_code(&error))};
    if runtime.journal_for_media_actor().append_control(&request.request_id,proposal.envelope().clone()).is_err(){return result("rejected","pair_not_durable");}
    if book.commit_proposed(proposal,&runtime.capsule_snapshot(),windows).is_err(){return result("blocked","pair_reconfirmation_required");}
    match bindings.write(){Ok(mut shared)=>*shared=book.bindings(),Err(_)=>return result("blocked","binding_state_unavailable")};result("committed","window_paired")
@@ -156,5 +179,20 @@ pub(crate) fn run()->Result<(),&'static str>{
   let mut registry=WindowRegistry::new(Clock(7));let input=(0..7).map(|index|FixtureWindow{slot:format!("slot-{index}"),incarnation:1,process_id:100+index,process_birth:1,executable:format!("synthetic-{index}.exe"),title:format!("Synthetic {index}"),class:format!("Class{index}"),rect:Rect{x:0,y:0,width:100,height:80},visible:true,minimized:false,layout:"one".into()}).collect::<Vec<_>>();registry.refresh_fixtures(&input).unwrap();
   let mut identities=std::collections::BTreeSet::new();for (offset,count,next) in [(0,3,Some(3)),(3,3,Some(6)),(6,1,None)]{let (page,total,actual_next)=window_page(&registry,offset);assert_eq!(total,7);assert_eq!(page.len(),count);assert_eq!(actual_next,next);for row in page{assert!(identities.insert(row.handle));}}
   assert_eq!(identities.len(),7);
+ }
+}
+
+#[cfg(test)]mod pairing_diagnostic_tests {
+ use super::pair_rejection_code;
+ use crate::capsule_pairing::PairError;
+ use crate::windows_window_registry::WindowError;
+ #[test]fn pairing_rejections_have_distinct_static_categories(){
+  assert_eq!(pair_rejection_code(&PairError::Window(WindowError::Unavailable)),"pair_window_unavailable");
+  assert_eq!(pair_rejection_code(&PairError::Window(WindowError::AmbiguousDescriptor)),"pair_window_ambiguous");
+  assert_eq!(pair_rejection_code(&PairError::InvalidCrop),"pair_crop_invalid");
+  assert_eq!(pair_rejection_code(&PairError::StaleCrop),"pair_crop_stale");
+ }
+ #[test]fn pairing_authority_error_never_exposes_its_payload(){
+  assert_eq!(pair_rejection_code(&PairError::AuthorityRejected("SYNTHETIC_SECRET_CANARY".into())),"pair_authority_rejected");
  }
 }

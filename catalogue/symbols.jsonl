@@ -357,6 +357,16 @@
 {"line":12,"name":"invoke","path":"src/preload/preloadSecurity.js","symbol":"cafe_shell::preload::preloadSecurity::closedTransport::invoke"}
 {"line":19,"name":"subscribe","path":"src/preload/preloadSecurity.js","symbol":"cafe_shell::preload::preloadSecurity::closedTransport::subscribe"}
 {"line":40,"name":"exposeClosedBridge","path":"src/preload/preloadSecurity.js","symbol":"cafe_shell::preload::preloadSecurity::exposeClosedBridge"}
+{"line":118,"name":"buildDiagnosticReport","path":"src/renderer/control.js","symbol":"cafe_shell::renderer::control::buildDiagnosticReport"}
+{"line":126,"name":"bridge","path":"src/renderer/control.js","symbol":"cafe_shell::renderer::control::buildDiagnosticReport::bridge"}
+{"line":129,"name":"capsule_count","path":"src/renderer/control.js","symbol":"cafe_shell::renderer::control::buildDiagnosticReport::capsule_count"}
+{"line":131,"name":"listed_window_count","path":"src/renderer/control.js","symbol":"cafe_shell::renderer::control::buildDiagnosticReport::listed_window_count"}
+{"line":132,"name":"minimized_window_count","path":"src/renderer/control.js","symbol":"cafe_shell::renderer::control::buildDiagnosticReport::minimized_window_count"}
+{"line":130,"name":"paired_feed_count","path":"src/renderer/control.js","symbol":"cafe_shell::renderer::control::buildDiagnosticReport::paired_feed_count"}
+{"line":128,"name":"result_code","path":"src/renderer/control.js","symbol":"cafe_shell::renderer::control::buildDiagnosticReport::result_code"}
+{"line":127,"name":"result_state","path":"src/renderer/control.js","symbol":"cafe_shell::renderer::control::buildDiagnosticReport::result_state"}
+{"line":125,"name":"schema","path":"src/renderer/control.js","symbol":"cafe_shell::renderer::control::buildDiagnosticReport::schema"}
+{"line":133,"name":"visible_window_count","path":"src/renderer/control.js","symbol":"cafe_shell::renderer::control::buildDiagnosticReport::visible_window_count"}
 {"line":17,"name":"createControls","path":"src/renderer/control.js","symbol":"cafe_shell::renderer::control::createControls"}
 {"line":90,"name":"chooseFfmpeg","path":"src/renderer/control.js","symbol":"cafe_shell::renderer::control::createControls::chooseFfmpeg"}
 {"line":89,"name":"chooseFolder","path":"src/renderer/control.js","symbol":"cafe_shell::renderer::control::createControls::chooseFolder"}
@@ -372,3 +382,4 @@
 {"line":92,"name":"startRecording","path":"src/renderer/control.js","symbol":"cafe_shell::renderer::control::createControls::startRecording"}
 {"line":94,"name":"stopRecording","path":"src/renderer/control.js","symbol":"cafe_shell::renderer::control::createControls::stopRecording"}
 {"line":66,"name":"subscribe","path":"src/renderer/control.js","symbol":"cafe_shell::renderer::control::createControls::subscribe"}
+{"line":138,"name":"readDiagnostics","path":"src/renderer/control.js","symbol":"cafe_shell::renderer::control::readDiagnostics"}

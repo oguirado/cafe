@@ -100,3 +100,44 @@ export function createControls(bridge, idFactory = () => globalThis.crypto.rando
   async function configureTwitch(channel){if(!getState().chatConfigurable||typeof channel!=='string'||!(/^[a-z0-9_]{1,25}$/).test(channel))throw rejected();return send({op:'configure_twitch',channel});}
   return Object.freeze({getState,subscribe,connect,dispose,createCapsule,refreshWindows,pairWindow,chooseFolder,chooseFfmpeg,startRecording,stopRecording,sendToObs,configureObs,configureTwitch});
 }
+
+/** Fixed public diagnostic vocabulary. Unknown values never become text output. */
+const DIAGNOSTIC_CODES = new Set([
+  'pair_window_unavailable', 'pair_window_ambiguous', 'pair_window_stale',
+  'pair_platform_unsupported', 'pair_identity_exhausted', 'pair_native_failure',
+  'pair_window_invalid', 'pair_person_mismatch', 'pair_crop_invalid', 'pair_crop_stale',
+  'pair_capsule_unknown', 'pair_role_already_paired', 'pair_feed_unavailable',
+  'pair_authority_rejected', 'pair_generation_exhausted', 'pair_executable_only_forbidden',
+  'pair_proposal_rejected', 'pair_not_durable', 'pair_reconfirmation_required',
+  'binding_state_unavailable', 'window_token_unknown_or_ambiguous', 'stale_revision',
+  'old_authority_epoch', 'request_id_conflict', 'operator_frame_rejected',
+  'window_paired', 'windows_refreshed', 'capsule_created', 'authority_started',
+  'native_enumeration_unavailable', 'window_page_invalidated', 'projection_budget_exceeded',
+]);
+/** @param {unknown} snapshot */
+export function buildDiagnosticReport(snapshot) {
+  const s=object(snapshot)?snapshot:{};
+  const st=object(s.state)?s.state:{};
+  const last=object(st.last_result)?st.last_result:{};
+  const windows=Array.isArray(st.windows)&&st.windows.length<=3?st.windows:null;
+  const caps=object(st.capsules)&&Object.keys(st.capsules).length<=2?Object.values(st.capsules):null;
+  const validCaps=caps!==null&&caps.every(c=>object(c)&&object(c.feeds)&&Object.keys(c.feeds).length<=2);
+  return Object.freeze({schema:'cafe.diagnostic.v1',
+    bridge:['available','starting','unavailable'].includes(s.availability)?s.availability:'unknown',
+    result_state:['observed','committed','rejected','pending','blocked','interrupted','configured'].includes(last.state)?last.state:'unknown',
+    result_code:DIAGNOSTIC_CODES.has(last.code)?last.code:'unknown_result',
+    capsule_count:validCaps?caps.length:null,
+    paired_feed_count:validCaps?caps.reduce((n,c)=>n+Object.keys(c.feeds).length,0):null,
+    listed_window_count:windows===null?null:windows.length,
+    minimized_window_count:windows===null||windows.some(w=>!object(w)||typeof w.minimized!=='boolean')?null:windows.filter(w=>w.minimized===true).length,
+    visible_window_count:windows===null||windows.some(w=>!object(w)||typeof w.visible!=='boolean')?null:windows.filter(w=>w.visible===true).length,
+  });
+}
+/** Only the existing read-only bridge query is permitted; never submit an intent.
+ * @param {unknown} bridge */
+export async function readDiagnostics(bridge) {
+  try {
+    if(!object(bridge)||typeof bridge.getSnapshot!=='function')throw new Error('DIAGNOSTIC_UNAVAILABLE');
+    return buildDiagnosticReport(await bridge.getSnapshot());
+  } catch {return buildDiagnosticReport(null);}
+}
