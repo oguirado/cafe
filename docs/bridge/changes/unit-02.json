@@ -1,0 +1,84 @@
+{
+  "id": "PRO-02",
+  "base_commit": "f1e874050e305645a90e64267e50f8625daae9bc",
+  "patch_sha256": "395b8b45bfbf5df344bcfa97f28a4fe1c6f0b450003b474f539dac6c83d2642c",
+  "paths": [
+    "connectors/cafe/mcp_jsonl_stats.py",
+    "tests/integration/test_mcp_jsonl_stats.py"
+  ],
+  "tests_written": [
+    "test_activity_pages_equal_aggregate_and_complete_describes_whole_scan",
+    "test_available_results_fit_existing_doubled_mcp_wire_envelope",
+    "test_bucket_limit_uses_ceiling_and_rejects_1001_before_iteration",
+    "test_calendar_rollovers_and_extreme_valid_years",
+    "test_canonical_clock_boundaries_preserve_strings_and_null",
+    "test_channels_are_strict_lowercase_ascii_and_bounded",
+    "test_corrupt_truncated_and_limited_scans_preserve_counts_and_identity",
+    "test_cursor_chain_is_deterministic_and_defaults_are_normalized",
+    "test_cursor_is_bound_to_events_outside_filter_and_scan_identity",
+    "test_cursor_is_bound_to_every_query_parameter",
+    "test_cursor_tampering_wrong_types_and_utf8_byte_limit",
+    "test_default_and_custom_buckets_are_anchored_at_from",
+    "test_default_and_custom_top_limits",
+    "test_descriptor_results_and_existing_six_tools_are_not_mutated",
+    "test_each_aggregate_uses_one_pass_and_never_mutates_loaded_inputs",
+    "test_empty_and_inverted_intervals_are_invalid",
+    "test_empty_history_and_unknown_channel_include_zero_buckets",
+    "test_equivalent_fraction_spellings_compare_as_instants",
+    "test_exactly_two_typed_closed_readonly_descriptors",
+    "test_failed_or_changed_provider_discards_partial_work",
+    "test_frozen_signatures_and_closed_error_enum",
+    "test_half_open_interval_and_bucket_edges_keep_nanosecond_precision",
+    "test_incomplete_scan_stays_incomplete_on_every_activity_page",
+    "test_invalid_utc_formats_and_impossible_calendar_fields",
+    "test_lazy_data_reader_is_rejected_before_its_file_reading_body",
+    "test_malformed_event_fields_cannot_be_silently_ignored",
+    "test_missing_raw_json_and_malformed_providers_are_unavailable",
+    "test_noncanonical_clocks_fail_as_unavailable_provider",
+    "test_null_and_missing_logins_never_become_chatters",
+    "test_numeric_arguments_reject_wrong_types_booleans_and_range_errors",
+    "test_oversized_aggregate_fails_closed_while_bucket_pages_fit",
+    "test_scan_schema_is_exact_and_rejects_wrong_counter_types",
+    "test_small_aggregate_matches_hand_counted_result",
+    "test_success_error_and_pagination_paths_never_do_io_control_or_logging",
+    "test_unicode_words_follow_documented_rule_exactly",
+    "test_unknown_tools_missing_and_unknown_arguments_are_closed",
+    "test_word_and_peak_ties_do_not_depend_on_event_order"
+  ],
+  "tests_run": [
+    {
+      "command": "python -B -m unittest discover -s tests/integration -p test_mcp_jsonl_stats.py",
+      "tests": 37,
+      "result": "passed",
+      "exit_code": 0
+    },
+    {
+      "command": "python -B -m unittest discover -s tests/integration -p test_mcp_server.py",
+      "tests": 31,
+      "result": "passed",
+      "exit_code": 0
+    },
+    {
+      "command": "git apply --check unit-02.diff",
+      "result": "passed",
+      "exit_code": 0
+    },
+    {
+      "command": "git apply unit-02.diff",
+      "result": "passed; both created files match the delivered files byte-for-byte",
+      "exit_code": 0
+    }
+  ],
+  "scope": "unverified_proposal",
+  "runtime": {
+    "local_python": "3.12.14",
+    "repository_python_pin": "3.13.16",
+    "dependency_installation": false
+  },
+  "ci": {
+    "status": "not_yet_observed_for_proposal",
+    "new_stats_test_auto_discovered": false,
+    "discovery_evidence": "The immutable base tools/run_ci.py enumerates named integration files and does not include test_mcp_jsonl_stats.py.",
+    "anticipated_inherited_constraint": "The existing publication filename vocabulary lacks stats; both mandated new filenames conflict with that unchanged validator. Awaiting remote observation."
+  }
+}
