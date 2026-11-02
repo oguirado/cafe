@@ -174,6 +174,13 @@ impl NativeAdapter {
     }
 }
 
+/// Native enumeration offers only windows that are visible and not minimized;
+/// anything else could never pass `resolve`, so it is not published at all.
+#[allow(dead_code)]
+fn is_capture_candidate(visible: bool, minimized: bool) -> bool {
+    visible && !minimized
+}
+
 /// Collects per-window observations, dropping windows that are ineligible
 /// (`Ok(None)`) or that fail natively. A single foreign window that vanishes,
 /// denies access or reports a degenerate rect must not hide every other window;
@@ -199,7 +206,7 @@ where
 
 #[cfg(test)]
 mod collect_eligible_tests {
-    use super::{collect_eligible, WindowError};
+    use super::{collect_eligible, is_capture_candidate, WindowError};
 
     #[test]
     fn one_failing_window_does_not_hide_the_others() {
@@ -215,6 +222,39 @@ mod collect_eligible_tests {
     #[test]
     fn identity_exhaustion_still_aborts() {
         let got = collect_eligible(0..3usize, |i| if i == 1 { Err(WindowError::IdentityExhausted) } else { Ok(Some(i)) });
+        assert_eq!(got, Err(WindowError::IdentityExhausted));
+    }
+
+    #[test]
+    fn capture_candidate_truth_table() {
+        assert!(is_capture_candidate(true, false));
+        assert!(!is_capture_candidate(true, true));
+        assert!(!is_capture_candidate(false, false));
+        assert!(!is_capture_candidate(false, true));
+    }
+
+    // Synthetic (visible, minimized) states; index 4 changes to minimized
+    // between the pre-check and the final observed state.
+    const PRE: [(bool, bool); 6] = [(true, false), (true, true), (false, false), (true, false), (true, false), (false, true)];
+    const FINAL: [(bool, bool); 6] = [(true, false), (true, true), (false, false), (true, false), (true, true), (false, true)];
+
+    fn observe_synthetic(i: usize) -> Result<Option<usize>, WindowError> {
+        let (v, m) = PRE[i];
+        if !is_capture_candidate(v, m) { return Ok(None); }
+        let (v, m) = FINAL[i];
+        if !is_capture_candidate(v, m) { return Ok(None); }
+        Ok(Some(i))
+    }
+
+    #[test]
+    fn hidden_and_minimized_candidates_are_excluded() {
+        let got = collect_eligible(0..PRE.len(), observe_synthetic).unwrap();
+        assert_eq!(got, vec![0, 3]);
+    }
+
+    #[test]
+    fn identity_exhaustion_still_aborts_with_ineligible_windows() {
+        let got = collect_eligible(0..PRE.len(), |i| if i == 3 { Err(WindowError::IdentityExhausted) } else { observe_synthetic(i) });
         assert_eq!(got, Err(WindowError::IdentityExhausted));
     }
 }
@@ -282,10 +322,16 @@ impl NativeAdapter {
         let store = &mut self.store;
         let observations = collect_eligible(ctx.hwnds, |raw| {
             let hwnd = HWND(raw as *mut core::ffi::c_void);
-            // Hidden helper windows (often zero-sized or owned by other
-            // integrity levels) are never capture candidates; skip them before
-            // touching identity so one of them cannot empty the whole list.
-            if unsafe { !IsWindowVisible(hwnd).as_bool() } {
+            // Hidden helper windows and minimized windows are never capture
+            // candidates; skip them before touching identity so they are not
+            // offered for pairing and cannot empty the whole list.
+            let (pre_visible, pre_minimized) = unsafe {
+                (
+                    IsWindowVisible(hwnd).as_bool(),
+                    IsIconic(hwnd).as_bool(),
+                )
+            };
+            if !is_capture_candidate(pre_visible, pre_minimized) {
                 return Ok(None);
             }
             let (cookie, process_birth, pid, executable) = store.observe(hwnd)?;
@@ -301,6 +347,10 @@ impl NativeAdapter {
             let again = store.observe(hwnd)?;
             if again != (cookie, process_birth, pid, executable.clone()) {
                 return Err(WindowError::NativeFailure);
+            }
+            // A window hidden or minimized while being observed is skipped.
+            if !is_capture_candidate(visible, minimized) {
+                return Ok(None);
             }
             Ok(Some(Observation {
                 key: WindowKey::Native(raw),
@@ -670,5 +720,94 @@ impl WindowRegistry {
         let native_key=match entry.observation.key { WindowKey::Native(key)=>key,_=>return Err(WindowError::Unsupported) };
         let permit=CapturePermit { item,native_key,cookie:entry.observation.witness,birth:entry.observation.process_birth,pid:entry.observation.process_id,property:adapter.store.cleanup_property_name() };
         permit.check()?;Ok(permit)
+    }
+}
+
+// Native effects stay inside this module and only target its newly created window.
+#[cfg(all(test, windows))]
+mod native_candidate_eligibility_tests {
+    use super::{NativeAdapter, WindowKey, WindowRegistry, WindowError};
+    use crate::capsule_registry::Clock;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DefWindowProcW,
+        DestroyWindow, GetWindowThreadProcessId, IsIconic, IsWindowVisible, RegisterClassW,
+        ShowWindow, UnregisterClassW, WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+        SW_SHOWNORMAL, SW_MINIMIZE, SW_RESTORE};
+
+    unsafe extern "system" fn procedure(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+        unsafe { DefWindowProcW(h, m, w, l) }
+    }
+    struct Owned {
+        hwnd: Option<HWND>, instance: HINSTANCE, class: Vec<u16>, registered: bool,
+    }
+    impl Owned {
+        fn hwnd(&self) -> HWND {
+            let h = self.hwnd.expect("owned window missing");
+            let mut pid = 0;
+            unsafe { GetWindowThreadProcessId(h, Some(&mut pid)); }
+            assert!(pid == std::process::id(), "window ownership not proven");
+            h
+        }
+        fn close(&mut self) {
+            if self.hwnd.is_some() {
+                let h = self.hwnd();
+                unsafe { DestroyWindow(h).expect("owned window cleanup failed"); }
+                self.hwnd = None;
+            }
+            if self.registered {
+                unsafe { UnregisterClassW(PCWSTR(self.class.as_ptr()), Some(self.instance)).expect("owned class cleanup failed"); }
+                self.registered = false;
+            }
+        }
+    }
+    impl Drop for Owned { fn drop(&mut self) { self.close(); } }
+
+    #[test]
+    fn native_minimized_candidate_is_excluded_and_restored_as_fresh_identity() {
+        let instance = HINSTANCE(unsafe { GetModuleHandleW(None).expect("module unavailable") }.0);
+        let class: Vec<u16> = "CafeEligibilityOwnedTest".encode_utf16().chain(Some(0)).collect();
+        let caption: Vec<u16> = "Owned Synthetic Window".encode_utf16().chain(Some(0)).collect();
+        let mut owned = Owned { hwnd: None, instance, class, registered: false };
+        let desc = WNDCLASSW { lpfnWndProc: Some(procedure), hInstance: instance,
+            lpszClassName: PCWSTR(owned.class.as_ptr()), ..Default::default() };
+        assert!(unsafe { RegisterClassW(&desc) } != 0, "owned class unavailable");
+        owned.registered = true;
+        owned.hwnd = Some(unsafe { CreateWindowExW(WINDOW_EX_STYLE::default(),
+            PCWSTR(owned.class.as_ptr()), PCWSTR(caption.as_ptr()), WS_OVERLAPPEDWINDOW,
+            40, 40, 320, 240, None, None, Some(instance), None) }.expect("owned creation failed"));
+        let h = owned.hwnd();
+        unsafe { let _ = ShowWindow(h, SW_SHOWNORMAL); }
+        let initially_visible = unsafe { IsWindowVisible(h).as_bool() };
+        assert!(!unsafe { IsIconic(h).as_bool() }, "owned initial state minimized");
+        let mut registry = WindowRegistry::new(Clock(88117));
+        let mut adapter = NativeAdapter::new(Clock(88117));
+        let views = adapter.enumerate(&mut registry).expect("initial enumerate failed");
+        let own_handle = registry.entries.values().find(|e| matches!(e.observation.key, WindowKey::Native(raw) if raw == h.0 as usize)).map(|e| e.view.clone());
+        assert!(views.iter().all(|v| v.visible && !v.minimized), "ineligible published");
+        assert!(own_handle.is_some() == initially_visible, "native visibility admission mismatch");
+        unsafe { let _ = ShowWindow(owned.hwnd(), SW_MINIMIZE); }
+        assert!(unsafe { IsIconic(h).as_bool() }, "owned minimize not observed");
+        adapter.enumerate(&mut registry).expect("minimized enumerate failed");
+        assert!(!registry.entries.values().any(|e| matches!(e.observation.key, WindowKey::Native(raw) if raw == h.0 as usize)), "minimized window published");
+        if let Some(ref old) = own_handle {
+            assert!(matches!(registry.resolve(&old.handle, old.generation), Err(WindowError::StaleWindow)), "minimized identity retained");
+        }
+        unsafe { let _ = ShowWindow(owned.hwnd(), SW_RESTORE); }
+        assert!(!unsafe { IsIconic(h).as_bool() }, "owned restore not observed");
+        let restored_visible = unsafe { IsWindowVisible(h).as_bool() };
+        adapter.enumerate(&mut registry).expect("restored enumerate failed");
+        let restored = registry.entries.values().find(|e| matches!(e.observation.key, WindowKey::Native(raw) if raw == h.0 as usize)).map(|e| e.view.clone());
+        assert!(restored.is_some() == restored_visible, "restored visibility admission mismatch");
+        if let (Some(old), Some(new)) = (own_handle, restored) {
+            assert!(old.handle != new.handle, "restored identity reused");
+            println!("F11_NATIVE_VISIBLE_MINIMIZE_RESTORE_PASS");
+        } else {
+            // Noninteractive SSH desktops can keep WS_VISIBLE windows invisible.
+            // This branch verifies exclusion, never claims visible-window restoration.
+            println!("F11_NATIVE_HIDDEN_DESKTOP_EXCLUSION_ONLY");
+        }
+        owned.close();
     }
 }
