@@ -11,7 +11,6 @@ Café is a Windows desktop tool for creators and Twitch streamers, built with Op
 
 - **Hardware [MEASURED]:** Only the MSI laptop with GTX 1060, i7-8750H, 16 GB RAM and Windows 10 was tested.
 - **Recording [MEASURED]:** Real Discord pop-outs produced valid MKV files, including simultaneous capture behind a maximized Café. Live tile previews worked. These short tests do not establish sustained reliability.
-- **Previous confirmation-mode evidence [MEASURED]:** Claude Code CLI proposed a recording plan; after local **Confirm**, Café created a capsule and recorded a valid MKV. This does not establish reliable Codex recording with the app window open.
 - **Known failure [MEASURED]:** Final tests had unexpected recording stops; the cause remains unknown. See the [guide's recovery steps](docs/JUDGES.md). Lag is possible; remote desktop capture in the demo may add lag, without a proven cause.
 - **Real OBS [MEASURED]:** One capsule sent with the OBS button created its scene, in one run.
 - **Unverified:** Repeated OBS use, reliable Codex recording with the app open, higher frame rates, other GPUs and long runs.
