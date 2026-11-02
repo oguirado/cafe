@@ -68,3 +68,29 @@ test('signal guard rejects dangerous or changed destinations without any kernel 
     assert.equal(killed, 0);
   }
 });
+
+
+test('external FFmpeg selection accepts the measured binary size with a streamed digest', () => fixture((resources, root) => {
+  const file = path.join(root, 'synthetic-ffmpeg.exe');
+  const fd = fs.openSync(file, 'wx');
+  try { fs.ftruncateSync(fd, 164748800); } finally { fs.closeSync(fd); }
+  const chosen = require('../../src/main/runtimeBackend').selectExternalFfmpeg(file);
+  assert.equal(chosen.path, file);
+  const hash = crypto.createHash('sha256'), block = Buffer.alloc(65536);
+  let left = 164748800;
+  while (left > 0) { const length = Math.min(left, block.length); hash.update(block.subarray(0, length)); left -= length; }
+  assert.equal(chosen.sha256, hash.digest('hex'));
+}));
+test('the authority limit stays unchanged when external FFmpeg has a larger allowance', () => fixture((resources, root) => {
+  const file = path.join(resources, 'backend', 'cafe-core.exe');
+  fs.truncateSync(file, 128 * 1024 * 1024 + 1);
+  assert.throws(() => createPackagedBackend(options(resources, root)), /AUTHORITY_FILE_REJECTED/);
+}));
+test('external FFmpeg rejects oversize and empty selections before hashing', () => fixture((resources, root) => {
+  const file = path.join(root, 'synthetic-ffmpeg.exe');
+  fs.writeFileSync(file, '');
+  const select = require('../../src/main/runtimeBackend').selectExternalFfmpeg;
+  assert.throws(() => select(file), /AUTHORITY_FILE_REJECTED/);
+  fs.truncateSync(file, 512 * 1024 * 1024 + 1);
+  assert.throws(() => select(file), /AUTHORITY_FILE_REJECTED/);
+}));

@@ -6,8 +6,9 @@ const crypto = require('node:crypto');
 const childProcess = require('node:child_process');
 const { createBackendSupervisor } = require('./backendSupervisor');
 
-/** @param {string} input @returns {string} */
-function regular(input) {
+/** @param {string} input @param {number} maximumBytes @returns {string} */
+function regular(input, maximumBytes) {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0 || maximumBytes > 512 * 1024 * 1024) throw new Error('AUTHORITY_FILE_REJECTED');
   if (!path.isAbsolute(input)) throw new Error('AUTHORITY_PATH_REJECTED');
   const absolute = path.resolve(input);
   let current = path.parse(absolute).root;
@@ -16,7 +17,7 @@ function regular(input) {
     if (fs.lstatSync(current).isSymbolicLink()) throw new Error('AUTHORITY_LINK_REJECTED');
   }
   const stat = fs.statSync(absolute);
-  if (!stat.isFile() || stat.size === 0 || stat.size > 128 * 1024 * 1024) throw new Error('AUTHORITY_FILE_REJECTED');
+  if (!stat.isFile() || stat.size === 0 || stat.size > maximumBytes) throw new Error('AUTHORITY_FILE_REJECTED');
   return absolute;
 }
 /** @param {string} file @returns {string} */
@@ -41,7 +42,7 @@ function digest(file) {
  */
 function createPackagedBackend(options) {
   if (!path.isAbsolute(options.resourcesPath) || !path.isAbsolute(options.runtimeRoot)) throw new Error('AUTHORITY_PATH_REJECTED');
-  const receiptPath = regular(path.join(options.resourcesPath, 'cafe-build.json'));
+  const receiptPath = regular(path.join(options.resourcesPath, 'cafe-build.json'), 128 * 1024 * 1024);
   if (fs.statSync(receiptPath).size > 1024 * 1024) throw new Error('AUTHORITY_RECEIPT_REJECTED');
   let receipt;
   try { receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8')); }
@@ -49,7 +50,7 @@ function createPackagedBackend(options) {
   if (receipt === null || typeof receipt !== 'object' ||
       receipt.schema !== 'cafe.unsigned-windows-app.v1' ||
       typeof receipt.authority_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(receipt.authority_sha256)) throw new Error('AUTHORITY_RECEIPT_REJECTED');
-  const command = regular(path.join(options.resourcesPath, 'backend', 'cafe-core.exe'));
+  const command = regular(path.join(options.resourcesPath, 'backend', 'cafe-core.exe'), 128 * 1024 * 1024);
   if (digest(command) !== receipt.authority_sha256) throw new Error('AUTHORITY_HASH_REJECTED');
   // No inherited API credentials, OBS password, broker bootstrap or NODE_OPTIONS.
   /** @type {NodeJS.ProcessEnv} */
@@ -70,7 +71,7 @@ exports.createPackagedBackend = createPackagedBackend;
 /** Native dialog result only, never a renderer input.
  * @param {string} file @returns {{path:string,sha256:string}} */
 function selectExternalFfmpeg(file) {
-  const selected = regular(file);
+  const selected = regular(file, 512 * 1024 * 1024);
   return { path: selected, sha256: digest(selected) };
 }
 exports.selectExternalFfmpeg = selectExternalFfmpeg;

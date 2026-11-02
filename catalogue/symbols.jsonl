@@ -299,10 +299,10 @@
 {"line":67,"name":"admitsResource","path":"src/main/rendererAssets.js","symbol":"cafe_shell::main::rendererAssets::admitsResource"}
 {"line":66,"name":"loadRendererBundle","path":"src/main/rendererAssets.js","symbol":"cafe_shell::main::rendererAssets::loadRendererBundle"}
 {"line":68,"name":"rendererResponse","path":"src/main/rendererAssets.js","symbol":"cafe_shell::main::rendererAssets::rendererResponse"}
-{"line":68,"name":"createPackagedBackend","path":"src/main/runtimeBackend.js","symbol":"cafe_shell::main::runtimeBackend::createPackagedBackend"}
-{"line":76,"name":"selectExternalFfmpeg","path":"src/main/runtimeBackend.js","symbol":"cafe_shell::main::runtimeBackend::selectExternalFfmpeg"}
-{"line":74,"name":"path","path":"src/main/runtimeBackend.js","symbol":"cafe_shell::main::runtimeBackend::selectExternalFfmpeg::path"}
-{"line":74,"name":"sha256","path":"src/main/runtimeBackend.js","symbol":"cafe_shell::main::runtimeBackend::selectExternalFfmpeg::sha256"}
+{"line":69,"name":"createPackagedBackend","path":"src/main/runtimeBackend.js","symbol":"cafe_shell::main::runtimeBackend::createPackagedBackend"}
+{"line":77,"name":"selectExternalFfmpeg","path":"src/main/runtimeBackend.js","symbol":"cafe_shell::main::runtimeBackend::selectExternalFfmpeg"}
+{"line":75,"name":"path","path":"src/main/runtimeBackend.js","symbol":"cafe_shell::main::runtimeBackend::selectExternalFfmpeg::path"}
+{"line":75,"name":"sha256","path":"src/main/runtimeBackend.js","symbol":"cafe_shell::main::runtimeBackend::selectExternalFfmpeg::sha256"}
 {"line":247,"name":"BOOT_URL","path":"src/main/shellSecurity.js","symbol":"cafe_shell::main::shellSecurity::BOOT_URL"}
 {"line":248,"name":"CSP","path":"src/main/shellSecurity.js","symbol":"cafe_shell::main::shellSecurity::CSP"}
 {"line":249,"name":"INVOKE_CHANNELS","path":"src/main/shellSecurity.js","symbol":"cafe_shell::main::shellSecurity::INVOKE_CHANNELS"}
