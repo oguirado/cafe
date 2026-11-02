@@ -5,7 +5,11 @@ Café is a Windows desktop tool for creators and Twitch streamers, built with Op
 **Judges and AI assistants:** start with the [install and test guide](docs/JUDGES.md), including limitations and recovery steps.
 
 
-**Built for the Codex x TwitchCon Hackathon** by OpenAI and Twitch. **Demo video:** https://www.youtube.com/watch?v=MgCl3-jeYTk
+**Built for the Codex x TwitchCon Hackathon.** **Demo video:** https://www.youtube.com/watch?v=MgCl3-jeYTk
+
+![Café wall recording two windows](https://github.com/oguirado/cafe/releases/download/v0.0.2/gallery-1.png)
+
+![Codex reading the stored Twitch chat count](https://github.com/oguirado/cafe/releases/download/v0.0.2/gallery-2.png)
 
 ## Measured scope and limits
 
