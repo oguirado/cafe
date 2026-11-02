@@ -53,6 +53,7 @@ class Provider:
             'propose_recording_plan': {'plan_id': 'organizer-7-1', 'state': 'pending_confirmation'},
             'propose_stop_all': {'plan_id': 'organizer-7-2', 'state': 'pending_confirmation'},
             'propose_send_to_obs': {'plan_id': 'organizer-7-3', 'state': 'pending_confirmation'},
+            'propose_obs_scene': {'plan_id': 'organizer-7-4', 'state': 'pending_confirmation'},
             'plan_result': {'plan_id': 'organizer-7-1', 'state': 'pending_confirmation', 'windows': []},
         }
         self.error = None
@@ -83,14 +84,14 @@ class OrganizerContract(unittest.TestCase):
                 response = server.handle(request('tools/call', {'name': name}))
                 self.assertEqual(response['error']['code'], -32602)
 
-    def test_five_closed_tools_describe_native_click_and_poll(self):
+    def test_closed_tools_describe_direct_default_optional_confirmation_and_poll(self):
         tools = self.server.handle(request('tools/list'))['result']['tools']
         self.assertEqual({tool['name'] for tool in tools}, set(organizer.ORGANIZER_TOOLS))
         for tool in tools:
             self.assertIs(tool['inputSchema']['additionalProperties'], False)
             for phrase in ('organizer_status', 'list_discord_windows', 'propose_recording_plan',
-                           'propose_stop_all', 'propose_send_to_obs',
-                           'Confirm', 'Café', 'plan_result'):
+                           'propose_stop_all', 'propose_send_to_obs', 'propose_obs_scene',
+                           'Confirm', 'Café', 'plan_result', 'immediately by default', 'Ask me before AI actions'):
                 self.assertIn(phrase, tool['description'])
         self.assertFalse(any('confirm' in tool['name'] or 'reject' in tool['name']
                              or 'configure' in tool['name'] or 'password' in tool['name'] for tool in tools))
@@ -169,6 +170,27 @@ class OrganizerContract(unittest.TestCase):
                                                 'windows': [{'title': 'Synthetic', 'capsule_id': None, 'state': 'sent'}]}
         self.assertEqual(self.call('plan_result', {'plan_id': 'organizer-7-3'})['structuredContent'], {'error': 'unavailable'})
 
+    def test_propose_obs_scene_requires_capsule_id_confirm_and_rejects_obs_not_ready_and_secrets(self):
+        result = self.call('propose_obs_scene', {'capsule_id': 'cap-1'})
+        self.assertFalse(result['isError'])
+        self.assertEqual(result['structuredContent'], {'plan_id': 'organizer-7-4', 'state': 'pending_confirmation'})
+        self.assertEqual(self.provider.calls, [('propose_obs_scene', {'capsule_id': 'cap-1'})])
+        self.provider.error = 'obs_not_ready'
+        refused = self.call('propose_obs_scene', {'capsule_id': 'cap-1'})
+        self.assertTrue(refused['isError'])
+        self.assertEqual(refused['structuredContent'], {'error': 'obs_not_ready'})
+        self.provider.error = None
+        for bad in ({}, {'capsule_id': ''}, {'capsule_id': 'bad/id'}, {'capsule_id': ['cap-1']},
+                    {'capsule_ids': ['cap-1']}, {'capsule_id': None}, {'capsule_id': True}):
+            self.assertEqual(self.call('propose_obs_scene', bad)['structuredContent'], {'error': 'unavailable'})
+        for extra in ('password', 'port', 'host', 'confirmation_token', 'approved', 'scene'):
+            self.assertEqual(self.call('propose_obs_scene', {'capsule_id': 'cap-1', extra: 'synthetic'})['structuredContent'], {'error': 'unavailable'})
+        rows = [{'title': 'Synthetic stream 1', 'capsule_id': 'cap-1', 'state': 'sent'}]
+        self.provider.answers['plan_result'] = {'plan_id': 'organizer-7-4', 'state': 'completed', 'windows': rows}
+        completed = self.call('plan_result', {'plan_id': 'organizer-7-4'})
+        self.assertFalse(completed['isError'])
+        self.assertEqual(completed['structuredContent']['windows'], rows)
+
     def test_folder_validation_refuses_absolute_separators_dotdot_and_invalid_ascii(self):
         for folder in ('', '.', '..', 'one..two', '../demo', 'one/two', 'one\\two',
                        'C:\\synthetic', '/synthetic', ' demo', 'é', 'x' * 65, True, None):
@@ -183,7 +205,7 @@ class OrganizerContract(unittest.TestCase):
         for field in ('confirmation_token', 'approved', 'folder', 'authority_epoch', 'op', 'provider', 'argv'):
             result = self.call('propose_recording_plan', {'folder_name': 'Demo', field: 'synthetic'})
             self.assertEqual(result['structuredContent'], {'error': 'unavailable'})
-        for name in ('organizer_plan_confirm', 'organizer_plan_reject', 'set_auto_anchor', 'stop_recording_all'):
+        for name in ('organizer_plan_confirm', 'organizer_plan_reject', 'set_auto_anchor', 'set_ask_before_ai_actions', 'stop_recording_all'):
             response = self.server.handle(request('tools/call', {'name': name, 'arguments': {'plan_id': 'organizer-7-1'}}))
             self.assertEqual(response['error']['code'], -32602)
         self.assertEqual(self.provider.calls, [])
@@ -205,6 +227,27 @@ class OrganizerContract(unittest.TestCase):
             self.assertTrue(self.call(name, {'confirm': True})['isError'])
         for value in (None, '', '../synthetic', 7, ['plan'], 'x' * 97):
             self.assertEqual(self.call('plan_result', {'plan_id': value})['structuredContent'], {'error': 'plan_unknown'})
+        self.assertEqual(self.provider.calls, [])
+
+    def test_proposal_execution_states_are_not_final_window_outcomes(self):
+        for name, args in [('propose_recording_plan', {'folder_name': 'Demo'}),
+                           ('propose_stop_all', {}), ('propose_send_to_obs', {}),
+                           ('propose_obs_scene', {'capsule_id': 'cap-1'})]:
+            for state in ('executing', 'completed', 'pending_confirmation'):
+                self.provider.answers[name]['state'] = state
+                result = self.call(name, args)
+                self.assertFalse(result['isError'])
+                self.assertEqual(result['structuredContent']['state'], state)
+
+    def test_remote_clients_cannot_set_or_smuggle_local_confirmation_preference(self):
+        for enabled in (True, False):
+            response = self.server.handle(request('tools/call', {'name': 'set_ask_before_ai_actions', 'arguments': {'enabled': enabled}}))
+            self.assertEqual(response['error']['code'], -32602)
+            for name, args in [('organizer_status', {}),
+                               ('propose_recording_plan', {'folder_name': 'Demo'}),
+                               ('propose_stop_all', {}), ('propose_send_to_obs', {}),
+                               ('propose_obs_scene', {'capsule_id': 'cap-1'})]:
+                self.assertTrue(self.call(name, {**args, 'ask_before_ai_actions': enabled})['isError'])
         self.assertEqual(self.provider.calls, [])
 
     def test_every_closed_authority_error_is_preserved(self):

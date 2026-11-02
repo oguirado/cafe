@@ -157,8 +157,9 @@ impl Pacer {
         let current = elapsed.as_nanos().saturating_mul(self.profile.fps_num as u128) / den;
         let Ok(current) = u64::try_from(current) else { return 0 };
         let period_ns = 1_000_000_000u128 * self.profile.fps_den as u128 / self.profile.fps_num as u128;
-        let late_slots = u64::try_from(self.profile.max_lateness_ns as u128 / period_ns.max(1)).unwrap_or(u64::MAX);
-        if current.saturating_sub(self.index) <= late_slots { return 0; }
+        // Same limit as select: a slot it would refuse must be skipped here.
+        let deadline_ns = (self.index as u128).saturating_mul(period_ns);
+        if elapsed.as_nanos().saturating_sub(deadline_ns) <= self.profile.max_lateness_ns as u128 { return 0; }
         // Move the origin, not the index: written slots must stay contiguous.
         let skipped = current - self.index;
         let shift_ns = (skipped as u128).saturating_mul(1_000_000_000).saturating_mul(self.profile.fps_den as u128) / self.profile.fps_num as u128;

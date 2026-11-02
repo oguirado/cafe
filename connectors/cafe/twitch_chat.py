@@ -278,7 +278,7 @@ async def _handle_line(parsed, ws, writer, channel, session_id):
         if exc.args and exc.args[0] == 'invalid_event':
             return (None, 1)
         raise
-    return ('appended', 0)
+    return ('message' if event['kind'] == 'message' else 'appended', 0)
 
 
 async def _backoff_sleep(sleep, delay, stop_event):
@@ -387,8 +387,9 @@ async def run_chat(channel, root, *, url=OFFICIAL_URL, max_connections=None,
                             outcome, bad = await _handle_line(
                                 parsed, ws, writer, channel, session_id)
                             malformed += bad
-                            if outcome == 'appended':
-                                messages += 1
+                            if outcome in {'message', 'appended'}:
+                                if outcome == 'message':
+                                    messages += 1
                                 observed_channel = True
                             elif outcome == 'reconnect':
                                 reconnect_now = True

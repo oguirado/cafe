@@ -86,6 +86,9 @@ const INTENT_KIND = 'operator_intent';
 const DEFAULT_COMMAND = 'cafe-core';
 const DEFAULT_MAX_LINE_BYTES = 4096;
 const DEFAULT_MAX_QUEUE_BYTES = 16384;
+// Matches core operator_protocol::MAX_OPERATOR_BYTES, including the JSONL newline.
+// Independent of the stdout line bound and aggregate stdin backpressure budget.
+const MAX_OPERATOR_FRAME_BYTES = 16384;
 const U64_MAX = 18446744073709551615n;
 const NEWLINE = 10;
 
@@ -433,6 +436,9 @@ function createBackendSupervisor(options) {
     }
     const stdin = child.stdin;
     const newBytes = UTF8_ENCODER.encode(line).length;
+    if (newBytes > MAX_OPERATOR_FRAME_BYTES) {
+      throw new Error('operator frame exceeds byte limit');
+    }
     const buffered = stdin.writableLength;
     if (writeQueueBytes + buffered + newBytes > maxQueueBytes) {
       throw new Error('intent queue capacity exceeded (backpressure)');

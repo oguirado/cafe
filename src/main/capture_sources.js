@@ -24,6 +24,23 @@ function positiveClock(value) {
 /** @param {string} error */
 function refused(error) { return Object.freeze({ ok: false, error }); }
 
+/** Closed authority rows; legacy rows omit only top_trim. @param {unknown} rows */
+function validatedPreviewRows(rows) {
+  if (!Array.isArray(rows) || rows.length > 24) return null;
+  const seen = new Set();
+  for (const row of rows) {
+    if (!record(row) || !['capsule_id,feed_id,source_id', 'capsule_id,feed_id,source_id,top_trim'].includes(Object.keys(row).sort().join(','))
+        || !identifier(row.capsule_id) || !identifier(row.feed_id)
+        || typeof row.source_id !== 'string' || row.source_id.length > 96 || row.source_id !== row.source_id.trim()
+        || !/^window:[0-9]+:0$/.test(row.source_id)
+        || (Object.hasOwn(row, 'top_trim') && (!Number.isInteger(row.top_trim) || row.top_trim < 0 || row.top_trim > 2160))) return null;
+    const key = JSON.stringify([row.capsule_id, row.feed_id]);
+    if (seen.has(key)) return null;
+    seen.add(key);
+  }
+  return rows.map(row => ({ ...row, top_trim: row.top_trim ?? 0 }));
+}
+
 /**
  * @typedef {object} PreviewOptions
  * @property {() => import('electron').WebContents|null} getContents
@@ -36,6 +53,7 @@ function refused(error) { return Object.freeze({ ok: false, error }); }
  * @property {object} frame
  * @property {string} capsule_id
  * @property {string} feed_id
+ * @property {number} top_trim
  * @property {string} source_id
  * @property {string} generation
  * @property {string} epoch
@@ -88,24 +106,16 @@ function createPreviewSources(options, enabled = LIVE_PREVIEW_ENABLED) {
       if (!status || status.availability !== 'available' || !positiveClock(status.authority_epoch) || !record(status.state)) return null;
       const state = status.state;
       if (state.platform !== 'windows' || state.runtime !== 'authority_ready') return null;
-      if (!record(state.capsules) || !Array.isArray(state.preview_sources) || state.preview_sources.length > 24) return null;
-      const seen = new Set();
-      for (const row of state.preview_sources) {
-        if (!record(row) || Object.keys(row).sort().join(',') !== 'capsule_id,feed_id,source_id'
-            || !identifier(row.capsule_id) || !identifier(row.feed_id)
-            || typeof row.source_id !== 'string' || row.source_id.length > 96 || row.source_id !== row.source_id.trim()
-            || !/^window:[0-9]+:0$/.test(row.source_id)) return null;
-        const key = JSON.stringify([row.capsule_id, row.feed_id]);
-        if (seen.has(key)) return null;
-        seen.add(key);
-      }
-      const rows = state.preview_sources.filter(row => row.capsule_id === payload.capsule_id && row.feed_id === payload.feed_id);
+      if (!record(state.capsules)) return null;
+      const validated = validatedPreviewRows(state.preview_sources);
+      if (!validated) return null;
+      const rows = validated.filter(row => row.capsule_id === payload.capsule_id && row.feed_id === payload.feed_id);
       const capsules = Object.values(state.capsules).filter(row => record(row) && row.capsule_id === payload.capsule_id);
       if (rows.length !== 1 || capsules.length !== 1 || !record(capsules[0].feeds)) return null;
       const feeds = Object.values(capsules[0].feeds).filter(row => record(row) && row.feed_id === payload.feed_id);
       if (feeds.length !== 1 || !positiveClock(feeds[0].generation)) return null;
       return { capsule_id: payload.capsule_id, feed_id: payload.feed_id,
-        source_id: rows[0].source_id, generation: feeds[0].generation, epoch: status.authority_epoch };
+        source_id: rows[0].source_id, top_trim: rows[0].top_trim, generation: feeds[0].generation, epoch: status.authority_epoch };
     } catch { return null; }
   }
 
@@ -116,7 +126,7 @@ function createPreviewSources(options, enabled = LIVE_PREVIEW_ENABLED) {
           || !currentFrame(options.getContents(), grant.frame)) return false;
       const latest = binding({ capsule_id: grant.capsule_id, feed_id: grant.feed_id });
       return latest !== null && latest.source_id === grant.source_id
-        && latest.generation === grant.generation && latest.epoch === grant.epoch;
+        && latest.top_trim === grant.top_trim && latest.generation === grant.generation && latest.epoch === grant.epoch;
     } catch { return false; }
   }
 
@@ -223,4 +233,4 @@ function createPreviewSources(options, enabled = LIVE_PREVIEW_ENABLED) {
   return Object.freeze({ request, permissionRequest, permissionCheck, displayRequest, install, dispose });
 }
 
-module.exports = { LIVE_PREVIEW_ENABLED, createPreviewSources };
+module.exports = { LIVE_PREVIEW_ENABLED, createPreviewSources, validatedPreviewRows };

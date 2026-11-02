@@ -173,6 +173,20 @@ impl WindowRegistry {
     /// Project only after a fresh native witness check. A cached descriptor is
     /// insufficient for an Electron source id because HWND values can recycle.
     /// This checks bound windows only and never discovers/anchors new windows.
+    /// DPI of a resolved window, 96 when it cannot be read.
+    pub(crate) fn window_dpi(&self,handle:&WindowHandle,generation:Clock)->u32{
+        #[cfg(windows)]
+        {
+            let entry=self.entries.values().find(|entry|entry.view.handle==*handle&&entry.view.generation==generation);
+            if let Some(WindowKey::Native(raw))=entry.map(|entry|&entry.observation.key){
+                let dpi=unsafe{windows::Win32::UI::HiDpi::GetDpiForWindow(windows::Win32::Foundation::HWND(*raw as *mut core::ffi::c_void))};
+                if dpi!=0{return dpi;}
+            }
+        }
+        #[cfg(not(windows))]
+        {let _=(handle,generation);}
+        96
+    }
     pub(crate) fn live_preview_source_id(&self,handle:&WindowHandle,generation:Clock,layout_revision:Clock,adapter:&mut NativeAdapter)->Option<String>{
         #[cfg(windows)]
         {

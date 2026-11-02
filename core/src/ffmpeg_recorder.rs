@@ -67,11 +67,14 @@ fn validate_plan(root:&Path,plan:&RecordingPlan)->Result<(),RecorderError>{
     Ok(())
 }
 fn binary_digest(binary:&Path)->Result<String,RecorderError>{let bytes=std::fs::read(binary).map_err(|_|RecorderError::Spawn)?;Ok(Sha256::digest(bytes).iter().map(|byte|format!("{byte:02x}")).collect())}
+const FHD_VIDEO_FILTER:&str="scale=1920:1080:force_original_aspect_ratio=decrease:flags=bicubic,pad=1920:1080:(ow-iw)/2:(oh-ih)/2";
 fn complete_argv(profile:VideoProfile,encoder:Encoder,output:&Path)->Vec<std::ffi::OsString>{
     let mut args:Vec<std::ffi::OsString>=["-hide_banner","-loglevel","error","-nostdin","-n","-f","rawvideo","-pixel_format","bgra","-video_size",&format!("{}x{}",profile.width,profile.height),"-framerate",&format!("{}/{}",profile.fps_num,profile.fps_den)].into_iter().map(std::ffi::OsString::from).collect();
     // Bounded hardware input thread absorbs encoder startup; no software fallback.
     if encoder!=Encoder::Ffv1 { args.extend(["-thread_queue_size".into(),"16".into()]); }
-    args.extend(["-i","pipe:0","-an","-c:v",encoder.name(),"-f","matroska"].into_iter().map(std::ffi::OsString::from));args.push(output.as_os_str().to_owned());args
+    args.extend(["-i","pipe:0"].into_iter().map(std::ffi::OsString::from));
+    if encoder!=Encoder::Ffv1 { args.extend(["-vf".into(),FHD_VIDEO_FILTER.into()]); }
+    args.extend(["-an","-c:v",encoder.name(),"-f","matroska"].into_iter().map(std::ffi::OsString::from));args.push(output.as_os_str().to_owned());args
 }
 async fn bounded_read<R:AsyncRead+Unpin>(mut reader:R,limit:usize)->Result<Vec<u8>,RecorderError>{
     let mut output=Vec::new();let mut chunk=[0u8;4096];let mut exceeded=false;
@@ -669,6 +672,23 @@ fn strict_production_build(text: &str) -> bool {
     #[test] fn strict_production_policy_is_preserved() {
         assert!(strict_production_build("ffmpeg version 8.1.3\nconfiguration: --enable-nvenc"));
         for text in ["ffmpeg version n8.1.3", "ffmpeg version 8.1.4", "ffmpeg version 8.1.3 --enable-gpl", "ffmpeg version 8.1.3 --enable-libx264", "ffmpeg version 8.1.3 --enable-nonfree"] { assert!(!strict_production_build(text)); }
+    }
+    #[test] fn fhd_filter_is_present_and_exact_for_odd_wider_and_taller_inputs() {
+        for (width, height) in [(856, 481), (2560, 1080), (1080, 1920), (1920, 1080)] {
+            let profile = VideoProfile { width, height, fps_num: 60, fps_den: 1, queue_capacity: 4, write_timeout: Duration::from_secs(2), stop_timeout: Duration::from_secs(4), max_lateness_ns: 100_000_000, max_hold_ns: 1_000_000_000 };
+            for encoder in [Encoder::Nvenc, Encoder::Amf, Encoder::Qsv] {
+                let args = complete_argv(profile, encoder, Path::new("segment.partial.mkv"));
+                let actual: Vec<_> = args.iter().map(|s| s.to_str().unwrap()).collect();
+                let size_pos = actual.iter().position(|s| *s == "-video_size").unwrap();
+                assert_eq!(actual[size_pos + 1], format!("{width}x{height}"));
+                let input_pos = actual.iter().position(|s| *s == "-i").unwrap();
+                let vf_pos = actual.iter().position(|s| *s == "-vf").unwrap();
+                let cv_pos = actual.iter().position(|s| *s == "-c:v").unwrap();
+                assert!(input_pos < vf_pos && vf_pos < cv_pos);
+                assert_eq!(actual.iter().filter(|s| **s == "-vf").count(), 1);
+                assert_eq!(actual[vf_pos + 1], "scale=1920:1080:force_original_aspect_ratio=decrease:flags=bicubic,pad=1920:1080:(ow-iw)/2:(oh-ih)/2");
+            }
+        }
     }
 }
 

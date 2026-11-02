@@ -47,12 +47,15 @@ impl PairProposal {pub(crate) fn envelope(&self)->&Envelope{&self.envelope}}
 
 pub struct PairingBook {
     bindings: BTreeMap<String, Binding>,
+    /// Feeds paired on their whole window. Only these may follow a resize.
+    full_window: std::collections::BTreeSet<String>,
 }
 
 impl PairingBook {
     pub fn new() -> Self {
         Self {
             bindings: BTreeMap::new(),
+            full_window: std::collections::BTreeSet::new(),
         }
     }
 
@@ -84,7 +87,26 @@ impl PairingBook {
         let feed=capsule.feeds.get(&binding.feed_id).ok_or(PairError::FeedUnavailable)?;
         if capsule.person_label!=binding.person_label || feed.role!=binding.role || feed.generation!=binding.feed_generation{return Err(PairError::FeedUnavailable);}
         let view=windows.resolve(&binding.window,binding.window_generation)?;checked_crop(binding.crop,&view,binding.layout_revision)?;
+        if binding.crop==(Crop{x:0,y:0,width:view.rect.width,height:view.rect.height}){self.full_window.insert(binding.feed_id.clone());}
         self.bindings.insert(binding.feed_id.clone(),binding.clone());Ok(binding)
+    }
+    /// Forget a removed capsule's bindings; its window and recordings are untouched.
+    pub(crate) fn remove_capsule(&mut self,capsule_id:&str) {
+        let feeds:Vec<String>=self.bindings.values().filter(|binding|binding.capsule_id==capsule_id).map(|binding|binding.feed_id.clone()).collect();
+        for feed in feeds {self.bindings.remove(&feed);self.full_window.remove(&feed);}
+    }
+    /// A whole-window binding keeps covering the same window after a resize: no
+    /// new content becomes reachable. Chosen crops still need a new approval.
+    pub(crate) fn follow_window_resize(&mut self,windows:&WindowRegistry,busy:&std::collections::BTreeSet<String>)->bool {
+        let mut changed=false;
+        for feed in &self.full_window {
+            let Some(binding)=self.bindings.get_mut(feed) else{continue;};
+            if busy.contains(&binding.capsule_id){continue;}
+            let Ok(view)=windows.resolve(&binding.window,binding.window_generation) else{continue;};
+            if view.layout_revision==binding.layout_revision{continue;}
+            binding.layout_revision=view.layout_revision;binding.crop=Crop{x:0,y:0,width:view.rect.width,height:view.rect.height};changed=true;
+        }
+        changed
     }
 
     pub fn bindings(&self) -> Vec<Binding> {

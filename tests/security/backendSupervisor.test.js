@@ -112,3 +112,49 @@ test('renderer cannot select an executable or supply its approval hash', async t
  assert.throws(()=>s.supervisor.handle(s.caller(),'submitIntent',{...intent(),body:{op:'set_folder',folder:'untrusted'}}),/host file selection required/);
  assert.equal(s.supervisor.getStatus().revision,'0');
 });
+
+function sizedIntent(bytes, revision='0') {
+ const value=intent('frame-boundary',revision,'x');
+ const overhead=Buffer.byteLength(JSON.stringify(value)+'\n')-1;
+ value.body.person_label='x'.repeat(bytes-overhead);
+ assert.equal(Buffer.byteLength(JSON.stringify(value)+'\n'),bytes);
+ return value;
+}
+
+test('complete operator frame bound includes UTF-8 newline and leaves child usable after rejection',async t=>{
+ const s=setup(t,'normal',{maxLineBytes:32768,maxQueueBytes:131072});
+ s.supervisor.start();await until(()=>s.supervisor.getStatus().availability==='available');
+ const pid=s.children[0].pid;
+ assert.deepEqual(s.supervisor.handle(s.caller(),'submitIntent',sizedIntent(16384)),{queued:true});
+ await until(()=>s.supervisor.getStatus().revision==='1');
+ assert.throws(()=>s.supervisor.handle(s.caller(),'submitIntent',sizedIntent(16385,'1')),/operator frame exceeds byte limit/);
+ const multibyte=intent('multibyte','1','é'.repeat(8200));
+ assert.ok(JSON.stringify(multibyte).length<16384);
+ assert.ok(Buffer.byteLength(JSON.stringify(multibyte)+'\n')>16384);
+ assert.throws(()=>s.supervisor.handle(s.caller(),'submitIntent',multibyte),/operator frame exceeds byte limit/);
+ assert.equal(s.supervisor.getStatus().availability,'available');
+ assert.equal(s.children[0].pid,pid);assert.equal(s.children[0].exitCode,null);
+ assert.deepEqual(s.supervisor.handle(s.caller(),'submitIntent',intent('after-rejected-frame','1')),{queued:true});
+ await until(()=>s.supervisor.getStatus().revision==='2');
+ assert.equal(s.supervisor.getStatus().state.events,2);
+});
+
+test('oversized operator frames never enter the pending write queue',()=>{
+ const {EventEmitter}=require('node:events');
+ const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();child.stdin=new EventEmitter();
+ child.pid=process.pid+1;child.stdin.writableLength=0;
+ const writes=[];let kills=0;
+ child.stdin.write=line=>{writes.push(line);return writes.length!==1;};child.kill=()=>{kills++;return true;};
+ const frame={};const supervisor=createBackendSupervisor({command:'synthetic',spawn:()=>child,authorizedOrigin:'app://cafe',getAuthorizedFrame:()=>frame,maxLineBytes:32768,maxQueueBytes:131072});
+ const caller={origin:'app://cafe',frame,isMainFrame:true};
+ supervisor.start();child.stdout.emit('data',Buffer.from(JSON.stringify({kind:'snapshot',authority_epoch:EPOCH,revision:'0',state:{}})+'\n'));
+ try{
+  supervisor.handle(caller,'submitIntent',intent('first'));
+  assert.throws(()=>supervisor.handle(caller,'submitIntent',sizedIntent(16385)),/operator frame exceeds byte limit/);
+  supervisor.handle(caller,'submitIntent',intent('second'));
+  assert.equal(writes.length,1);child.stdin.emit('drain');
+  assert.deepEqual(writes.map(line=>JSON.parse(line).request_id),['first','second']);
+  assert.ok(writes.every(line=>Buffer.byteLength(line)<=16384));
+  assert.equal(kills,0);assert.equal(supervisor.getStatus().availability,'available');
+ }finally{supervisor.dispose();}
+});

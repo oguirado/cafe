@@ -290,6 +290,12 @@
       "symbol_prefix": ""
     },
     {
+      "path": "docs/JUDGES.md",
+      "id": "judges",
+      "language": "markdown",
+      "symbol_prefix": ""
+    },
+    {
       "id": "readme",
       "language": "markdown",
       "path": "docs/acceptance/README.md",

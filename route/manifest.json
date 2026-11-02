@@ -1,0 +1,29 @@
+{
+ "corpus": "cafe",
+ "removed_count": {
+  "security": 19
+ },
+ "removed_sha256": [
+  "10fe57481b745735ded4c9a13368827ba948a95fd8efdfcaf054c26695b7a6fb",
+  "14f62fd7f31c91997454f60857a6e7b3aabe636233a9ecde799995308bb03b8f",
+  "1c1355dbf5b30b35f45750ae2a5799535e3c7d731e5a72c135e9154d6efe669c",
+  "2063beca05911773fd205f6b99d06b5800fc440dc9d6334a0e78e826abf4de18",
+  "2f4974a4a5b1b8864bb07f02afe5f33d1d4fe720a2a61730fdf797efbc20b3e1",
+  "3d2c2fdce9dfe38755e58b95feccdbc39c9260db8d0892625c1996715eafc5c6",
+  "5000964b64bcea478f779f884bbf182cb4fb79ce75ff83caaae1d52bd1d56927",
+  "54ae7fcc1f78a7c6d5a016c15feb03c260e3fb64ce1ffbba7278e35d0e253226",
+  "6c9a69bfa0a4b86fd7baf196fd7b3ae9a565b20abf070c2145142cd38541987c",
+  "86e041116f60ff71e542457611b709f1991a6902890dce8369562778113d9c75",
+  "8931b00c63ca8c0b5fd6767e5dd26d4a4147094fb3588d999c33013da6758b7c",
+  "989289d1140de456778a31e06a166d3b472d684d1ff10bc5adce0d619a8ba2b8",
+  "abddfc16ba750ef00e5c9ebfb8ab339b17b117a230030749700cdb18c37bff4a",
+  "c77ec21057ef38d09c2b28af6c5c14f40645967181ce75366e5e1a276f233475",
+  "e1018758dadbe0afb474b83f07e453fd25e7024a7fd818a000bec9de5458e1eb",
+  "e59f74932e4089318cfd57445dff7c2f494556352c7c4228a86a1cac784941d3"
+ ],
+ "review": "Findings are model output with no human review; coordinates, not proof.",
+ "schema": "route.manifest.v1",
+ "skip": "(^|/)(catalogue|router|route|submission|vendor|node_modules)(/|$)|^ui/src/design/vendor/|^tools/assets/|^tools/route_cafe\\.py$|\\.min\\.",
+ "study_pin": "47827a9cb53b72deed67bdd660c6a4d116c5733b",
+ "symbols_at": "47827a9cb53b72deed67bdd660c6a4d116c5733b"
+}

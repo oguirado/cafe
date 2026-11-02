@@ -269,3 +269,15 @@ fn preflight_reprofile_preserves_approval_across_dimensions_and_rejects_modified
     std::fs::write(&binary,b"synthetic-binary-v2").unwrap();
     assert_eq!(base.with_profile(resized).unwrap_err(),RecorderError::ExecutableChanged);
 }
+
+#[test]
+fn late_recovery_leaves_no_lateness_that_select_refuses() {
+    let origin=Instant::now();
+    let profile=PacerProfile{fps_num:60,fps_den:1,max_lateness_ns:100_000_000,max_hold_ns:1_000_000_000};
+    for gap_ms in 0..400u64 {
+        let mut pacer=Pacer::new(profile,origin).unwrap();
+        let now=origin+Duration::from_millis(gap_ms);
+        pacer.skip_late(now);
+        assert!(!matches!(pacer.select(now),Err(PacerError::TooLate)),"gap {gap_ms} ms");
+    }
+}

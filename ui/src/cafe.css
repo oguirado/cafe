@@ -351,3 +351,40 @@ body {
 .cafe-organizer-actions p { font-size: var(--text-sm); }
 .cafe-auto-anchor { display: flex; gap: var(--space-2); align-items: center; margin: var(--space-3) 0; }
 @media (max-width: 45rem) { .cafe-organizer-plan { grid-template-columns: minmax(0, 1fr); }.cafe-organizer-actions { max-width: none; } }
+
+/* The measured gallery owns the remaining viewport, beneath organizer confirmation. */
+html, body, #app { height: 100%; min-height: 0; overflow: hidden; }
+.cafe-app { height: 100%; min-height: 0; overflow: hidden; }
+.cafe-desktop-main { gap: var(--space-2); }
+.cafe-gallery-host { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.cafe-organizer-plan { flex: 0 0 auto; max-height: 40%; overflow: auto; }
+.cafe-desktop-capsule { position: relative; isolation: isolate; }
+.cafe-desktop-capsule .cafe-desktop-media { position: absolute; inset: 0; }
+.cafe-desktop-capsule .cafe-capsule-header {
+  position: absolute; inset: 0 0 auto; z-index: 1; height: auto; min-height: 28px;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
+  max-height: none; gap: var(--space-1); padding: var(--space-1);
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  overflow: visible;
+}
+.cafe-desktop-capsule .cafe-capsule-slot { display: none; }
+.cafe-desktop-capsule .cafe-capsule-title { grid-column: 1; grid-row: 1; }
+.cafe-desktop-capsule .cafe-capsule-focus { grid-column: 2; grid-row: 1; }
+.cafe-desktop-capsule .cafe-capsule-remove { grid-column: 3; grid-row: 1; }
+.cafe-desktop-capsule .cafe-capsule-status { grid-column: 1 / 3; grid-row: 2; min-width: 0; }
+.cafe-desktop-capsule .cafe-capsule-state { overflow: hidden; text-overflow: ellipsis; }
+.cafe-desktop-capsule .cafe-capsule-elapsed { grid-column: 3; grid-row: 2; }
+.cafe-desktop-diagnostics { min-height: 0; width: 100%; margin: 0 auto; }
+.cafe-desktop-capsule .cafe-capsule-status { padding: 0; border: 0; background: transparent; }
+.cafe-desktop-capsule .cafe-capsule-focus,
+.cafe-desktop-capsule .cafe-capsule-remove { height: 24px; padding: 0 var(--space-1); font-size: var(--text-xs); background: transparent; color: var(--muted); }
+.cafe-desktop-capsule .cafe-actions {
+  position: absolute; inset: auto 0 0; z-index: 1; padding: var(--space-1);
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+}
+.cafe-desktop-capsule .cafe-actions-row { display: flex; gap: var(--space-1); align-items: center; }
+.cafe-desktop-capsule .cafe-obs-wrap { margin-left: auto; }
+.cafe-desktop-capsule .cafe-obs-button { color: var(--muted); background: transparent; }
+.cafe-desktop-capsule .cafe-reason { white-space: normal; max-height: 4em; overflow: auto; }
+.cafe-desktop-capsule .cafe-rec-primary { border-color: var(--danger); }
+.cafe-desktop-capsule[data-tile-state="recording"] .cafe-rec-primary { background: var(--danger); color: var(--bg); }

@@ -28,9 +28,10 @@ const props = defineProps({
   state: { type: String, required: true },
   elapsed: { type: String, default: '—' },
   busy: { type: Boolean, default: false },
+  focused: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(['remove']);
+const emit = defineEmits(['remove', 'focus']);
 
 /** @returns {string} */
 const slotText = computed(() => {
@@ -81,6 +82,7 @@ function onRemove() {
       <span class="cafe-capsule-state">{{ displayState }}</span>
     </p>
     <span class="cafe-capsule-elapsed" :aria-label="elapsed === '—' ? 'Recording timer inactive' : 'Recording display timer'">{{ elapsed }}</span>
+    <button class="cafe-button cafe-capsule-focus" type="button" :aria-pressed="focused" :title="focused ? 'Return to gallery' : 'Focus capsule'" @click="emit('focus')">{{ focused ? 'Unfocus' : 'Focus' }}</button>
     <button
       class="cafe-button cafe-capsule-remove"
       type="button"

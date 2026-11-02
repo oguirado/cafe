@@ -53,3 +53,12 @@ test('paired ready fixture submits start and only authoritative Running state ad
  const running=initial();running.revision='4';running.state.capsules=value.state.capsules;running.state.recordings=[{capsule_id:'cap-one',state:'Running',feeds:[{feed_id:'game-one',state:'Recording',written_frames:'60',backpressure:'1'}]}];f.publish(running);
  await f.controls.stopRecording('cap-one');assert.deepEqual(f.sent[1].body,{op:'stop_recording',capsule_id:'cap-one'});assert.equal(f.sent[1].expected_revision,'4');assert.equal(f.controls.getState().recordings[0].state,'Running');f.controls.dispose();
 });
+
+test('Twitch channel guard matches collector bounds before submitting',async()=>{
+ const value=initial();value.state.chat_configurable=true;const f=await fixture(value);
+ for(const channel of ['', 'a', 'ab', '#guest', 'Uppercase', 'guest\r\nJOIN #other', 'a'.repeat(26)])await assert.rejects(f.controls.configureTwitch(channel));
+ assert.equal(f.sent.length,0);
+ for(const channel of ['abc','a_b','a'.repeat(25)])await f.controls.configureTwitch(channel);
+ assert.deepEqual(f.sent.map(row=>row.body),['abc','a_b','a'.repeat(25)].map(channel=>({op:'configure_twitch',channel})));
+ f.controls.dispose();
+});

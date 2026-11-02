@@ -233,6 +233,9 @@ async function createDesktopShell(electronApi, options) {
     const win = new BrowserWindow(security.browserOptions(preloadPath));
     currentWin = win;
     security.hardenWindow(win);
+    // Chromium does not count a window under full opacity as covering others, so a
+    // maximized Cafe should not stop Discord from painting a pop-out behind it.
+    if (typeof win.setOpacity === 'function') win.setOpacity(254 / 255);
     win.once('ready-to-show', () => {
       win.show();
     });

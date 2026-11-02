@@ -348,6 +348,24 @@ impl<S: FrameSource> RuntimeEffects<S> {
         }
     }
 
+    /// A retained failure stops blocking resize only after every feed has an
+    /// affirmative native capture AND recorder cleanup witness.
+    /// Let an interrupted capsule record again: the failed row is released only
+    /// after every feed's resources are gone. A running capsule is never touched.
+    pub(crate) async fn clear_interrupted(&mut self,capsule_id:&str)->bool {
+        let Some(capsule)=self.capsules.get_mut(capsule_id) else{return false;};
+        if capsule.state!=CapsuleState::Interrupted{return false;}
+        for pipeline in capsule.feeds.values_mut(){let _=pipeline.abort().await;}
+        if !capsule.feeds.values().all(|pipeline|pipeline.resources_released()){return false;}
+        self.capsules.remove(capsule_id);true
+    }
+
+    pub(crate) fn resize_busy_capsules(&self)->BTreeSet<String> {
+        self.capsules.iter().filter(|(_,capsule)|capsule.state==CapsuleState::Running
+            ||capsule.feeds.values().any(|pipeline|!pipeline.resources_released()))
+            .map(|(id,_)|id.clone()).collect()
+    }
+
     /// Bounded read-only snapshot: capsule ids, manager states, feed ids,
     /// recorder states, and counters. Sorted by id. No handles, paths,
     /// tokens, or pids.

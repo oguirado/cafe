@@ -293,7 +293,7 @@ test('native folder choice is closed and never accepts a renderer path', async (
 
 test('default output folder is created under Videos/Cafe and sent once per launch without overwriting user choice', async (t) => {
   const os = require('node:os');
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cafe-default-folder-'));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'cafe-default-folder-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const videosDir = path.join(root, 'Videos');
   fs.mkdirSync(videosDir);

@@ -72,6 +72,7 @@ pub struct CapturePipeline<S: FrameSource> {
     recorder: Recorder,
     started: bool,
     stopped: bool,
+    cleanup_released: bool,
     live_pump: bool,
 }
 
@@ -82,6 +83,7 @@ impl<S: FrameSource> CapturePipeline<S> {
             recorder,
             started: false,
             stopped: false,
+            cleanup_released: false,
             live_pump: false,
         }
     }
@@ -122,9 +124,7 @@ impl<S: FrameSource> CapturePipeline<S> {
         let state = self.source.state(registry);
         // Source admission: no frame in a waiting state, no unbounded wait after start.
         if admit_source_state(state, self.started, frame.is_some()).is_err() {
-            let _ = self.source.stop();
-            let _ = self.recorder.interrupt().await;
-            self.stopped = true;
+            let _ = self.release_resources().await;
             return Err(PipelineError::Source);
         }
         match state {
@@ -132,14 +132,12 @@ impl<S: FrameSource> CapturePipeline<S> {
                 let acknowledged = if nonblocking {
                     match self.recorder.poll_pump().await {
                         Ok(value) => value,
-                        Err(err) => { let _ = self.source.stop(); let _ = self.recorder.interrupt().await; self.stopped = true; return Err(PipelineError::Recorder(err)); },
+                        Err(err) => { let _ = self.release_resources().await; return Err(PipelineError::Recorder(err)); },
                     }
                 } else { false };
                 if let Some(owned) = frame {
                     if let Err(err) = self.recorder.admit(owned, now) {
-                        let _ = self.source.stop();
-                        let _ = self.recorder.interrupt().await;
-                        self.stopped = true;
+                        let _ = self.release_resources().await;
                         return Err(PipelineError::Recorder(err));
                     }
                     self.started = true;
@@ -147,17 +145,13 @@ impl<S: FrameSource> CapturePipeline<S> {
                     return Ok(Tick::Waiting);
                 }
                 if let Err(err) = self.recorder.pace(now) {
-                    let _ = self.source.stop();
-                    let _ = self.recorder.interrupt().await;
-                    self.stopped = true;
+                    let _ = self.release_resources().await;
                     return Err(PipelineError::Recorder(err));
                 }
                 let pumped = if nonblocking { self.recorder.begin_pump().map(|_| acknowledged) } else { self.recorder.pump_one().await };
                 match pumped {
                     Err(err) => {
-                        let _ = self.source.stop();
-                        let _ = self.recorder.interrupt().await;
-                        self.stopped = true;
+                        let _ = self.release_resources().await;
                         Err(PipelineError::Recorder(err))
                     }
                     Ok(true) => Ok(Tick::Written),
@@ -166,9 +160,7 @@ impl<S: FrameSource> CapturePipeline<S> {
             }
             CaptureState::Waiting => Ok(Tick::Waiting),
             _ => {
-                let _ = self.source.stop();
-                let _ = self.recorder.interrupt().await;
-                self.stopped = true;
+                let _ = self.release_resources().await;
                 Err(PipelineError::Source)
             }
         }
@@ -193,6 +185,7 @@ impl<S: FrameSource> CapturePipeline<S> {
         match self.recorder.stop(journal).await {
             Ok(receipt) => {
                 self.stopped = true;
+                self.cleanup_released = true;
                 Ok(receipt)
             }
             Err(err) => {
@@ -206,11 +199,22 @@ impl<S: FrameSource> CapturePipeline<S> {
     /// It never drains/publishes media or returns a complete receipt.
     pub async fn abort(&mut self)->Result<(),PipelineError> {
         if self.stopped {return Err(PipelineError::Stopped);}
+        self.release_resources().await
+    }
+
+    /// Neither Interrupted nor stopped proves native cleanup. Keep the witness
+    /// false unless capture teardown AND recorder interruption both succeeded.
+    async fn release_resources(&mut self)->Result<(),PipelineError> {
         let source_result=self.source.stop();
         let recorder_result=self.recorder.interrupt().await;
+        self.cleanup_released=source_result.is_ok()&&recorder_result.is_ok();
         self.stopped=true;
         if source_result.is_err() {return Err(PipelineError::Source);}
         recorder_result.map_err(PipelineError::Recorder)
+    }
+
+    pub(crate) fn resources_released(&self)->bool {
+        self.cleanup_released
     }
 
     /// Read-only recorder state observability.

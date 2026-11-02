@@ -1,5 +1,6 @@
 //! Runtime effects manager observations; native capture verification is separate.
 #[path="../src/capsule_registry.rs"] mod capsule_registry;
+#[path="../src/capsule_pairing.rs"] mod capsule_pairing;
 #[path="../src/authority_journal.rs"] mod authority_journal;
 #[path="../src/journal_replay.rs"] mod journal_replay;
 #[path="../src/capture_frame_pool.rs"] mod capture_frame_pool;
@@ -223,4 +224,54 @@ fn invalid_pipeline_state_rejected(){runtime().block_on(async{
  let err=engine.attach_capsule("cap-badstate".into(),vec![("feed-1".into(),CapturePipeline::new(src,recorder))]).await.unwrap_err();
  assert_eq!(err,EngineError::InvalidPipelineState);
  assert!(stopped.load(Ordering::SeqCst));assert!(engine.status().is_empty());assert_eq!(journal.records().len(),1);
+});}
+
+#[test]
+fn resize_follow_requires_affirmative_cleanup_not_interrupted_history(){runtime().block_on(async{
+ for (tag,source_state,fail_stop,may_follow) in [
+  ("running",CaptureState::Healthy,false,false),
+  ("released",CaptureState::Closed,false,true),
+  ("pending-cleanup",CaptureState::Closed,true,false),
+ ] {
+  let tmp=Scratch::new();let mut journal=Journal::open(&tmp.0.join("authority.journal"),"synthetic",Clock(1)).unwrap();let now=Instant::now();
+  let mut engine:RuntimeEffects<Source>=RuntimeEffects::new(2,4).unwrap();
+  let recorder=Recorder::test_with_child("drain",&tmp.0,plan_for(tag),profile(),&mut journal,now).unwrap();
+  let pipeline=CapturePipeline::new(source(source_state,false,fail_stop),recorder);
+  assert!(!pipeline.resources_released());
+  engine.attach_capsule("cap-resize".into(),vec![("feed-resize".into(),pipeline)]).await.unwrap();
+  let mut registry=capsule_registry::Registry::new(Clock(1));
+  let created=registry.apply(capsule_registry::Envelope{schema:capsule_registry::SCHEMA.into(),kind:"intent".into(),request_id:"create-resize".into(),authority_epoch:Clock(1),expected_revision:Clock(0),body:capsule_registry::Command::CreateCapsule{capsule_id:"cap-resize".into(),person_label:"Guest".into(),generation:Clock(1)}});
+  assert!(matches!(created.state,capsule_registry::Outcome::Admitted));
+  let mut windows=WindowRegistry::new(Clock(1));let mut fixture=windows_window_registry::FixtureWindow{slot:"resize".into(),incarnation:1,process_id:7,process_birth:1,executable:"Discord.exe".into(),title:"Synthetic window".into(),class:"Synthetic".into(),rect:windows_window_registry::Rect{x:0,y:0,width:320,height:180},visible:true,minimized:false,layout:"first".into()};
+  let view=windows.refresh_fixtures(&[fixture.clone()]).unwrap().remove(0);let mut book=capsule_pairing::PairingBook::new();
+  let request=capsule_pairing::PairRequest{request_id:"pair-resize".into(),authority_epoch:Clock(1),expected_revision:registry.snapshot().revision,capsule_id:"cap-resize".into(),person_label:"Guest".into(),feed_id:"feed-resize".into(),role:capsule_registry::Role::Game,window:view.handle.clone(),window_generation:view.generation,layout_revision:view.layout_revision,crop:capsule_pairing::Crop{x:0,y:0,width:320,height:180}};
+  let proposal=book.propose(&registry.snapshot(),&windows,request).unwrap();assert!(matches!(registry.apply(proposal.envelope().clone()).state,capsule_registry::Outcome::Admitted));
+  let initial=book.commit_proposed(proposal,&registry.snapshot(),&windows).unwrap();
+  let outcome=engine.tick_all(&windows,now).await;
+  if source_state==CaptureState::Healthy{assert!(outcome.is_ok());}else{assert!(outcome.is_err());assert_eq!(engine.status()[0].state,CapsuleState::Interrupted);}
+  let reason=engine.status()[0].reason;
+  fixture.rect.width=640;fixture.layout="resized".into();let resized=windows.refresh_fixtures(&[fixture]).unwrap().remove(0);
+  assert_eq!(book.follow_window_resize(&windows,&engine.resize_busy_capsules()),may_follow);
+  let binding=book.bindings().remove(0);assert_eq!(binding.feed_generation,initial.feed_generation);assert_eq!(binding.window_generation,initial.window_generation);assert_eq!(binding.window,initial.window);
+  assert_eq!(binding.crop.width,if may_follow{640}else{320});assert_eq!(binding.layout_revision,if may_follow{resized.layout_revision}else{initial.layout_revision});
+  assert_eq!(engine.status()[0].reason,reason);assert_eq!(journal.records().len(),1);
+  engine.abort_all().await.unwrap();
+  // A second abort returning Stopped is not new cleanup evidence.
+  if fail_stop{assert!(engine.resize_busy_capsules().contains("cap-resize"));assert!(!book.follow_window_resize(&windows,&engine.resize_busy_capsules()));}
+  assert_eq!(engine.status()[0].state,CapsuleState::Interrupted);assert_eq!(journal.records().len(),1);
+ }
+});}
+
+#[test]
+fn retry_after_failure_clears_only_a_released_interrupted_capsule(){runtime().block_on(async{
+ let tmp=Scratch::new();let mut journal=Journal::open(&tmp.0.join("authority.journal"),"synthetic",Clock(1)).unwrap();let now=Instant::now();
+ let mut engine:RuntimeEffects<Source>=RuntimeEffects::new(2,4).unwrap();
+ let recorder=Recorder::test_with_child("drain",&tmp.0,plan_for("retry"),profile(),&mut journal,now).unwrap();
+ engine.attach_capsule("cap-retry".into(),vec![("feed-retry".into(),CapturePipeline::new(source(CaptureState::Healthy,false,false),recorder))]).await.unwrap();
+ assert!(!engine.clear_interrupted("cap-retry").await);assert_eq!(engine.status().len(),1);
+ assert!(!engine.clear_interrupted("cap-unknown").await);
+ engine.abort_all().await.unwrap();
+ assert_eq!(engine.status()[0].state,CapsuleState::Interrupted);
+ assert!(engine.clear_interrupted("cap-retry").await);assert!(engine.status().is_empty());
+ assert!(journal.records().iter().all(|record|record.kind!="media_publish"));
 });}

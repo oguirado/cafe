@@ -60,6 +60,16 @@
     "recording_recorder_start_failed",
     "recording_setup_failed",
     "recording_effect_interrupted",
+    "window_unavailable",
+    "window_titles_identical",
+    "folder_not_authorized",
+    "disk_write_failed",
+    "encoder_unavailable",
+    "encoder_session_limit",
+    "capture_start_unavailable",
+    "capture_source_unavailable",
+    "recording_capacity_exceeded",
+    "recording_interrupted",
     "unknown_result"
   ],
   "events": [

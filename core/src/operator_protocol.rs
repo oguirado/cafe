@@ -29,6 +29,7 @@ pub(crate) enum OperatorBody {
     PairWindow{capsule_id:String,person_label:String,feed_id:String,role:Role,window_token:String,window_generation:Clock,layout_revision:Clock,crop:WireCrop},
     SetFolder{folder:String},
     StartRecording{capsule_id:String},
+    RemoveCapsule{capsule_id:String},
     StopRecording{capsule_id:String},
     SendToObs{capsule_id:String},
     ConfigureFfmpeg{path:String,sha256:String},
@@ -37,6 +38,7 @@ pub(crate) enum OperatorBody {
     OrganizerPlanConfirm{plan_id:String},
     OrganizerPlanReject{plan_id:String},
     SetAutoAnchor{enabled:bool},
+    SetAskBeforeAiActions{enabled:bool},
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -53,12 +55,12 @@ impl OperatorBody {
         Self::CreateCapsule{capsule_id,person_label}=>identifier(capsule_id)&&bounded(person_label,128),
         Self::PairWindow{capsule_id,person_label,feed_id,window_token,window_generation,layout_revision,crop,..}=>identifier(capsule_id)&&identifier(feed_id)&&bounded(person_label,128)&&bounded(window_token,128)&&window_generation.0>0&&layout_revision.0>0&&crop.width>0&&crop.height>0&&crop.x.checked_add(crop.width).is_some()&&crop.y.checked_add(crop.height).is_some(),
         Self::SetFolder{folder}=>bounded(folder,4096),
-        Self::StartRecording{capsule_id}|Self::StopRecording{capsule_id}|Self::SendToObs{capsule_id}=>identifier(capsule_id),
+        Self::StartRecording{capsule_id}|Self::StopRecording{capsule_id}|Self::SendToObs{capsule_id}|Self::RemoveCapsule{capsule_id}=>identifier(capsule_id),
         Self::ConfigureFfmpeg{path,sha256}=>bounded(path,4096)&&sha256.len()==64&&sha256.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b)),
         Self::ConfigureObs{port,..}=>*port>0,
-        Self::ConfigureTwitch{channel}=>!channel.is_empty()&&channel.len()<=25&&channel.bytes().all(|b|b.is_ascii_lowercase()||b.is_ascii_digit()||b==b'_'),
+        Self::ConfigureTwitch{channel}=>(3..=25).contains(&channel.len())&&channel.bytes().all(|b|b.is_ascii_lowercase()||b.is_ascii_digit()||b==b'_'),
         Self::OrganizerPlanConfirm{plan_id}|Self::OrganizerPlanReject{plan_id}=>identifier(plan_id),
-        Self::SetAutoAnchor{..}=>true,
+        Self::SetAutoAnchor{..}|Self::SetAskBeforeAiActions{..}=>true,
     }}
 }
 /// Only closed syntax/length is checked here. Main MUST check epoch/revision,
@@ -89,6 +91,16 @@ mod tests {
   let bad=wire("{\"op\":\"configure_obs\",\"port\":4455,\"password\":{\"mode\":\"provided\",\"value\":\"canary-not-a-password\",\"extra\":true}}");
   assert_eq!(decode_operator(bad.as_bytes()).err(),Some("operator_frame_rejected"));
   assert!(decode_operator(wire("{\"op\":\"configure_obs\",\"port\":4455,\"host\":\"remote.invalid\",\"password\":{\"mode\":\"absent\"}}").as_bytes()).is_err());
+ }
+ #[test]fn twitch_channel_matches_collector_bounds(){
+  for channel in ["abc", "a_b", &"a".repeat(25)] {
+   let raw=wire(&serde_json::json!({"op":"configure_twitch","channel":channel}).to_string());
+   assert!(decode_operator(raw.as_bytes()).is_ok());
+  }
+  for channel in ["", "a", "ab", "#guest", "Uppercase", "guest\r\nJOIN #other", &"a".repeat(26)] {
+   let raw=wire(&serde_json::json!({"op":"configure_twitch","channel":channel}).to_string());
+   assert_eq!(decode_operator(raw.as_bytes()).err(),Some("operator_frame_rejected"));
+  }
  }
  #[test]fn malformed_geometry_and_oversized_frames_reject(){
   assert!(decode_operator(&vec![b' ';MAX_OPERATOR_BYTES+1]).is_err());

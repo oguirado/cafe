@@ -199,6 +199,25 @@ function publicSnapshot(value) {
     if (Buffer.byteLength(wire, 'utf8') > 65536) throw new Error('SNAPSHOT_REJECTED');
     state = JSON.parse(wire);
     if (typeof state !== 'object' || state === null || Array.isArray(state)) throw new Error('SNAPSHOT_REJECTED');
+    const rows = require('./capture_sources').validatedPreviewRows(state.preview_sources ?? []);
+    if (!rows) throw new Error('SNAPSHOT_REJECTED');
+    if (state.preview_eligibility !== undefined) {
+      const signals = state.preview_eligibility;
+      const seen = new Set();
+      if (!Array.isArray(signals) || signals.length > 24) throw new Error('SNAPSHOT_REJECTED');
+      for (const row of signals) {
+        if (!row || typeof row !== 'object' || Array.isArray(row) || Object.keys(row).sort().join(',') !== 'capsule_id,feed_id,layout_revision'
+            || ![row.capsule_id, row.feed_id].every(id => typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$/.test(id))
+            || !decimalClock(row.layout_revision) || row.layout_revision === '0') throw new Error('SNAPSHOT_REJECTED');
+        const key = JSON.stringify([row.capsule_id, row.feed_id]);
+        if (seen.has(key)) throw new Error('SNAPSHOT_REJECTED');
+        seen.add(key);
+      }
+      // The supervisor may already have removed private sources. When present,
+      // require an exact correspondence; these signals never grant capture.
+      if (Object.hasOwn(state, 'preview_sources') && (signals.length !== rows.length || rows.some(row => !seen.has(JSON.stringify([row.capsule_id, row.feed_id]))))) throw new Error('SNAPSHOT_REJECTED');
+    }
+    state.preview_trims = rows.map(({ capsule_id, feed_id, top_trim }) => ({ capsule_id, feed_id, top_trim }));
     delete state.preview_sources;
   }
   return Object.freeze({ availability: value.availability, pid: null,

@@ -6,7 +6,7 @@ Validation errors contain fixed codes only, never rejected values.
 """
 import re
 
-_CHANNEL = re.compile(r"[a-z0-9_]{1,25}\Z")
+_CHANNEL = re.compile(r"[a-z0-9_]{3,25}\Z")
 _CAPSULE = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 _STATES = {"absent", "configured", "closed", "failed"}
 _CHAT = {"idle", "running", "succeeded", "failed", "cancelled"}

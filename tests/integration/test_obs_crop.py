@@ -48,11 +48,19 @@ class RealCropProtocol(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(obs.inputs), 2)
         self.assertEqual(obs.errors, [])
         camera = next(item for item, row in obs.items.items() if row["sourceName"].endswith(".camera"))
-        self.assertEqual(obs.transforms[camera], {"cropLeft": 10, "cropTop": 20, "cropRight": 950, "cropBottom": 460})
+        self.assertEqual(obs.transforms[camera], {
+            "cropLeft": 10, "cropTop": 20, "cropRight": 950, "cropBottom": 460,
+            "positionX": 0, "positionY": 0,
+            "boundsType": "OBS_BOUNDS_SCALE_INNER", "boundsAlignment": 0,
+            "boundsWidth": 1920, "boundsHeight": 1080,
+        })
         self.assertTrue(all(row["sceneItemEnabled"] for row in obs.items.values()))
         for request in obs.requests:
             if request["requestType"] == "SetSceneItemTransform":
-                self.assertEqual(set(request["requestData"]["sceneItemTransform"]), {"cropLeft", "cropTop", "cropRight", "cropBottom"})
+                self.assertEqual(set(request["requestData"]["sceneItemTransform"]), {
+                    "cropLeft", "cropTop", "cropRight", "cropBottom",
+                    "positionX", "positionY", "boundsType", "boundsAlignment", "boundsWidth", "boundsHeight",
+                })
 
     async def test_failed_observed_or_applied_crop_leaves_camera_disabled(self):
         for mismatch in (False, True):

@@ -136,6 +136,9 @@ pub enum Command {
         feed_id: String,
         generation: Clock,
     },
+    RemoveCapsule {
+        capsule_id: String,
+    },
     Propose {
         proposal_id: String,
         capsule_id: String,
@@ -261,6 +264,11 @@ fn validate_envelope(request: &Envelope) -> Result<(), ValidationFailure> {
             ..
         } => {
             if !is_valid_id(capsule_id) || !is_valid_id(feed_id) {
+                return Err(ValidationFailure::InvalidIdentity);
+            }
+        }
+        Command::RemoveCapsule { capsule_id } => {
+            if !is_valid_id(capsule_id) {
                 return Err(ValidationFailure::InvalidIdentity);
             }
         }
@@ -486,6 +494,10 @@ impl Registry {
                     capsule.feeds.remove(&feed_id);
                 }
             }
+            Command::RemoveCapsule { capsule_id } => {
+                self.capsules.remove(&capsule_id);
+                self.proposals.retain(|_, proposal| proposal.capsule_id != capsule_id);
+            }
             Command::Propose {
                 proposal_id,
                 capsule_id,
@@ -573,6 +585,11 @@ impl Registry {
                 };
                 if feed.generation != *generation {
                     return Err("generation_mismatch");
+                }
+            }
+            Command::RemoveCapsule { capsule_id } => {
+                if !self.capsules.contains_key(capsule_id) {
+                    return Err("capsule_not_found");
                 }
             }
             Command::Propose {

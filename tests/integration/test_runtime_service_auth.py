@@ -44,7 +44,10 @@ class ServiceContract(unittest.TestCase):
             self.reject({"op": "configure_obs", "port": port, "password": {"mode": "absent"}})
 
     def test_channel_not_arbitrary_irc_or_url(self):
-        for value in ["", "#guest", "Uppercase", "guest\r\nJOIN #other", "a" * 26, "wss://synthetic.invalid", 7]:
+        for value in ["abc", "a_b", "a" * 25]:
+            body = {"op": "start_chat", "channel": value}
+            self.assertEqual(validate_service_request(body), body)
+        for value in ["", "a", "ab", "#guest", "Uppercase", "guest\r\nJOIN #other", "a" * 26, "wss://synthetic.invalid", 7]:
             self.reject({"op": "start_chat", "channel": value})
 
     def test_capsule_feeds_cannot_inject_unknown_requests_or_ambiguous_descriptors(self):

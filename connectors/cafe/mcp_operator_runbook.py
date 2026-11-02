@@ -1,7 +1,7 @@
 """Static operator runbook contract for MCP inspection; no direct runtime effects.
 
 This module provides a pure read-only seven-step operator checklist describing
-the human-confirmed Café workflow, what is verified on Windows, and what checks
+the operator-controlled Café workflow, what is verified on Windows, and what checks
 remain operator-verified. The MCP server owns initialization, notifications,
 JSON-RPC framing, and response limits.
 """
@@ -32,18 +32,18 @@ _STEPS = (
         "generation, and the corresponding game or camera feed labels.",
     ),
     (
-        "Start recording via per-tile controls or an MCP recording plan after "
-        "clicking Confirm inside Café, then stop recording and verify the file "
+        "Start recording via per-tile controls or an MCP recording plan (immediate "
+        "by default; Confirm when Ask me before AI actions is on), then verify the file "
         "in the chosen folder.",
-        "An operator-confirmed recording captures the window through Windows "
+        "An authority-validated recording captures the window through Windows "
         "Graphics Capture and FFmpeg/NVENC into a valid MKV file and stops "
         "cleanly; this static guide supplies no direct recorder effect.",
-        "The operator clicks Confirm, sees the active timer, stops recording, "
+        "The operator sees the active timer, stops recording, "
         "sees the file entry, and opens the MKV file to verify playback.",
     ),
     (
         "Optionally, when a live OBS connection is verified before recording, "
-        "send the same capsule window to OBS twice after clicking Confirm "
+        "send the same capsule window to OBS twice (Confirm if enabled) "
         "inside Café and inspect the source list.",
         "A single Window Capture target is reused with no duplicate source; "
         "live OBS connection verification remains optional and not yet verified.",
@@ -61,12 +61,12 @@ _STEPS = (
     (
         "Initialize the MCP session, send notifications/initialized, list "
         "tools with tools/list, and perform bounded typed chat reads or "
-        "human-confirmed organizer proposals.",
+        "operator-controlled organizer proposals.",
         "The assistant receives tools/list and bounded typed results, and "
         "second MCP clients survive restarts of the MCP process.",
         "The operator sees the tools/list output, bounded typed results, and "
-        "confirms that AI proposals execute only after clicking Confirm inside "
-        "Café without exposing secrets.",
+        "checks direct execution and the optional Ask me before AI actions "
+        "Confirm flow inside Café without exposing secrets.",
     ),
 )
 
@@ -85,7 +85,7 @@ def _reply(step_ids, error):
             }
             for step_id in step_ids
         ],
-        "control_mode": "human_confirmed",
+        "control_mode": "direct_with_optional_confirmation",
         "error": error,
     }
 
@@ -94,7 +94,7 @@ def tool_definitions() -> list[dict]:
     """Describe only the read-only demo_guide tool."""
     return [{
         "name": "demo_guide",
-        "description": "Static seven-step operator runbook checklist for human-confirmed Café workflows.",
+        "description": "Static seven-step operator runbook checklist for direct Café workflows with optional local confirmation.",
         "inputSchema": {
             "type": "object",
             "properties": {"step": {"type": "integer", "minimum": 1, "maximum": 7}},

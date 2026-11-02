@@ -1,5 +1,6 @@
 // @ts-check
 /** Display-only preview session bounded by native source grants. */
+const FRAME_WAIT_MS = 3000;
 const RETRY_DELAYS = Object.freeze([500, 1500, 3000]);
 let acquisitionQueue = Promise.resolve();
 
@@ -9,6 +10,60 @@ function serial(acquire) {
   const next = acquisitionQueue.then(acquire, acquire);
   acquisitionQueue = next.then(() => undefined, () => undefined);
   return next;
+}
+
+/** Closed operator text only; adapter details, paths and titles never enter it.
+ * @param {string} reason @param {string} state */
+export function previewReasonText(reason, state) {
+  /** @type {Record<string,string>} */
+  const messages = {
+    preview_disabled: 'Turn previews on to see this feed.',
+    no_preview: 'Restore the pop-out. If it was replaced, anchor it again.',
+    preview_denied: 'Preview permission unavailable. Check that the window is still open.',
+    preview_busy: 'Another preview is being acquired. Wait for it to finish.',
+    preview_no_frames: 'No video frames are arriving. Keep the window visible and uncovered.',
+    preview_unavailable: 'Preview could not start. Restore the pop-out; if it was replaced, anchor it again.',
+  };
+  return state === 'connecting' ? 'Waiting for an approved window and its first video frame.'
+    : messages[reason] || 'Recording can still run while preview is unavailable.';
+}
+
+/** Observe actual presented-frame events, with a decoded-frame counter fallback.
+ * A stream/element switch invalidates every callback before it can publish.
+ * @param {any} video @param {any} stream @param {(count:number)=>void} onFrame
+ * @param {{schedule?:(callback:()=>void,delay:number)=>any,cancel?:(timer:any)=>void}} [timers] */
+export function observePreviewFrames(video, stream, onFrame, timers = {}) {
+  let stopped = false, callback = null, timer = null;
+  const schedule = timers.schedule || ((run, delay) => setTimeout(run, delay));
+  const cancel = timers.cancel || (handle => clearTimeout(handle));
+  const current = () => !stopped && video?.srcObject === stream;
+  if (typeof video?.requestVideoFrameCallback === 'function') {
+    /** @param {number} _now @param {any} metadata */
+    const presented = (_now, metadata) => {
+      callback = null;
+      if (!current()) return;
+      if (Number.isSafeInteger(metadata?.presentedFrames) && metadata.presentedFrames > 0) onFrame(metadata.presentedFrames);
+      if (current()) callback = video.requestVideoFrameCallback(presented);
+    };
+    callback = video.requestVideoFrameCallback(presented);
+  } else if (typeof video?.getVideoPlaybackQuality === 'function') {
+    const count = () => { try { return video.getVideoPlaybackQuality().totalVideoFrames; } catch { return null; } };
+    let previous = count();
+    const poll = () => {
+      timer = null;
+      if (!current()) return;
+      const next = count();
+      if (Number.isSafeInteger(next) && Number.isSafeInteger(previous) && next > previous) onFrame(next);
+      previous = next;
+      timer = schedule(poll, 250);
+    };
+    timer = schedule(poll, 250);
+  }
+  return () => {
+    stopped = true;
+    if (callback !== null) video?.cancelVideoFrameCallback?.(callback);
+    if (timer !== null) cancel(timer);
+  };
 }
 
 /** @param {any} stream */
@@ -24,6 +79,15 @@ export function previewLimits(width, height) {
     height: Math.max(1, Math.min(1080, Math.floor(Number.isFinite(height) ? height : 1))), frameRate: 15 };
 }
 
+/** Fit the cropped video with one scale factor, using decoded pixel dimensions.
+ * @param {number} width @param {number} height @param {number} videoWidth @param {number} videoHeight @param {number} trim */
+export function previewGeometry(width, height, videoWidth, videoHeight, trim) {
+  if (![width, height, videoWidth, videoHeight].every(n => Number.isFinite(n) && n > 0)) return null;
+  const top = Number.isInteger(trim) && trim >= 0 && trim <= 2160 && trim < videoHeight ? trim : 0;
+  const scale = Math.min(width / videoWidth, height / (videoHeight - top));
+  return { width: videoWidth * scale, height: (videoHeight - top) * scale, videoHeight: videoHeight * scale, top: -top * scale };
+}
+
 /** @param {any} track @param {{width:number,height:number,frameRate:number}} limits */
 async function constrain(track, limits) {
   await track.applyConstraints({ width: { max: limits.width }, height: { max: limits.height }, frameRate: { max: limits.frameRate } });
@@ -35,22 +99,28 @@ async function constrain(track, limits) {
 
 /** Lifecycle owns only display tracks, never recording.
  * @param {{bridge:any,getDisplayMedia:(constraints:any)=>Promise<any>,onState:(state:string,reason:string)=>void,onStream:(stream:any)=>void,
- * size:()=>{width:number,height:number},schedule?:(callback:()=>void,delay:number)=>any,cancel?:(timer:any)=>void}} options
+ * size:()=>{width:number,height:number},observeFrames?:(stream:any,onFrame:(presentedFrames:number)=>void)=>(()=>void),frameSchedule?:(callback:()=>void,delay:number)=>any,frameCancel?:(timer:any)=>void,schedule?:(callback:()=>void,delay:number)=>any,cancel?:(timer:any)=>void}} options
  */
 export function createPreviewSession(options) {
   const schedule = options.schedule || ((callback, delay) => setTimeout(callback, delay));
   const cancel = options.cancel || (timer => clearTimeout(timer));
   let binding = null;
-  let bindingKey = '';
+  let bindingKey = '', identityKey = '';
   let enabled = false, visible = false, disposed = false;
   let generation = 0, retry = 0, timer = null;
+  let acquisitionPending = false;
   let stream = null;
+  let frameTimer = null, cancelFrames = null;
+  const frameSchedule = options.frameSchedule || ((callback, delay) => setTimeout(callback, delay));
+  const frameCancel = options.frameCancel || (handle => clearTimeout(handle));
   let endListeners = [];
   const acquisitionTimers = new Set();
   let resizeQueue = Promise.resolve();
-  const active = () => !disposed && enabled && visible && binding !== null;
+  const active = () => !disposed && enabled && visible && binding !== null && binding.preview_available !== false;
   const state = (value, reason = '') => { if (!disposed) options.onState(value, reason); };
   function clearStream() {
+    if (frameTimer !== null) { frameCancel(frameTimer); frameTimer = null; }
+    if (cancelFrames) { try { cancelFrames(); } catch {} cancelFrames = null; }
     for (const [track, listener] of endListeners) track.removeEventListener?.('ended', listener);
     endListeners = [];
     stopPreviewTracks(stream); stream = null; options.onStream(null);
@@ -68,12 +138,32 @@ export function createPreviewSession(options) {
     const delay = RETRY_DELAYS[retry++];
     timer = schedule(() => { timer = null; void acquire(); }, delay);
   }
+  function watchFrames(selected, attempt) {
+    let presented = 0;
+    const current = () => active() && attempt === generation && stream === selected;
+    const arm = () => {
+      if (frameTimer !== null) frameCancel(frameTimer);
+      frameTimer = frameSchedule(() => {
+        frameTimer = null;
+        if (!current()) return;
+        clearStream(); later('preview_no_frames');
+      }, FRAME_WAIT_MS);
+    };
+    arm();
+    const off = options.observeFrames?.(selected, count => {
+      if (!current() || !Number.isSafeInteger(count) || count <= presented) return;
+      if (presented === 0) state('live');
+      presented = count; arm();
+    });
+    if (typeof off === 'function') cancelFrames = off;
+  }
   async function acquire() {
-    if (!active()) return;
+    if (!active() || acquisitionPending) return;
+    acquisitionPending = true;
     const attempt = generation;
     const target = { ...binding };
     state('connecting');
-    await serial(async () => {
+    try { await serial(async () => {
       if (!active() || attempt !== generation) return;
       let captured = null;
       let timedOut = false;
@@ -114,9 +204,10 @@ export function createPreviewSession(options) {
         for (const track of captured.getTracks()) {
           track.addEventListener?.('ended', ended, { once: true }); endListeners.push([track, ended]);
         }
-        options.onStream(stream); state('live');
+        options.onStream(stream); watchFrames(stream, attempt);
       } catch (error) {
-        stopPreviewTracks(captured);
+        if (captured && captured === stream) clearStream();
+        else stopPreviewTracks(captured);
         if (active() && attempt === generation) {
           const denied = error?.name === 'NotAllowedError' || error?.message === 'preview_denied';
           later(denied ? 'preview_denied' : 'preview_unavailable');
@@ -124,14 +215,30 @@ export function createPreviewSession(options) {
       } finally {
         clearTimeout(timeout); acquisitionTimers.delete(timeout);
       }
-    });
+    }); } finally {
+      acquisitionPending = false;
+      // Keep only the latest wakeup for this session while another native call
+      // owns the global queue. That call still retains its slot until settled.
+      if (active() && attempt !== generation && timer === null) {
+        timer = schedule(() => { timer = null; void acquire(); }, RETRY_DELAYS[0]);
+      }
+    }
   }
-  /** @param {{capsule_id:string,feed_id:string,generation:string}|null} value */
+  /** @param {{capsule_id:string,feed_id:string,generation:string,preview_available?:boolean|null,preview_revision?:string|null}|null} value */
   function setBinding(value) {
-    const key = value === null ? '' : JSON.stringify([value.capsule_id, value.feed_id, value.generation]);
-    if (key === bindingKey) return;
-    stop(); bindingKey = key; binding = value === null ? null : { ...value }; retry = 0;
-    state('no_preview'); if (active()) void acquire();
+    const identity = value === null ? '' : JSON.stringify([value.capsule_id, value.feed_id, value.generation]);
+    const key = value === null ? '' : JSON.stringify([identity, value.preview_available ?? null, value.preview_revision ?? null]);
+    if (key === bindingKey) return false;
+    const identityChanged = identity !== identityKey;
+    stop(); bindingKey = key; identityKey = identity; binding = value === null ? null : { ...value }; retry = 0;
+    state('no_preview', value?.preview_available === false ? 'no_preview' : '');
+    // A changed current projection is a wakeup, not an approval. Coalesce rapid
+    // layout changes and always ask main for a fresh single-use grant.
+    if (active()) {
+      if (identityChanged) void acquire();
+      else timer = schedule(() => { timer = null; void acquire(); }, RETRY_DELAYS[0]);
+    }
+    return true;
   }
   /** @param {boolean} show @param {boolean} allow */
   function setVisibility(show, allow) {

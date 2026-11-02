@@ -48,7 +48,7 @@ class DemoGuide(unittest.TestCase):
         self.assertIs(type(value), dict)
         self.assertEqual(set(value), RESPONSE_KEYS)
         self.assertEqual(value['schema'], 'cafe.demo_guide.v1')
-        self.assertEqual(value['control_mode'], 'human_confirmed')
+        self.assertEqual(value['control_mode'], 'direct_with_optional_confirmation')
         self.assertEqual(value['error'], error)
         self.assertIs(type(value['steps']), list)
         self.assertEqual([step['id'] for step in value['steps']], ids)

@@ -66,19 +66,38 @@ impl FrameSource for RecordingSource {
 }
 
 fn recording_profile(width:u32,height:u32)->VideoProfile{
- VideoProfile{width,height,fps_num:60,fps_den:1,queue_capacity:RECORDING_QUEUE_CAPACITY,write_timeout:Duration::from_secs(2),stop_timeout:Duration::from_secs(8),max_lateness_ns:100_000_000,max_hold_ns:RECORDING_MAX_HOLD_NS}
+ VideoProfile{width,height,fps_num:30,fps_den:1,queue_capacity:RECORDING_QUEUE_CAPACITY,write_timeout:Duration::from_secs(2),stop_timeout:Duration::from_secs(8),max_lateness_ns:100_000_000,max_hold_ns:RECORDING_MAX_HOLD_NS}
+}
+
+// Measured on a real pop-out at 96 DPI: 22 px of title bar and a 1 px separator.
+const DISCORD_POPOUT_TITLEBAR_TOP_PX:u32=23;
+/// Pixels of Discord's own title bar to hide on a full-window pop-out binding.
+pub(crate) fn window_top_trim(view:&crate::windows_window_registry::WindowView,windows:&WindowRegistry,binding:&Binding)->u32{
+ if view.executable.eq_ignore_ascii_case("Discord.exe")&&crate::discord_windows::classify_discord_window(view)==crate::discord_windows::DiscordWindowClass::Popout{popout_top_trim(windows.window_dpi(&binding.window,binding.window_generation))}else{0}
+}
+/// The crop OBS receives: a whole pop-out loses its title bar, a chosen crop stays as chosen.
+pub(crate) fn obs_crop(requested:Crop,window:(u32,u32),top_trim:u32)->Crop{
+ if requested==(Crop{x:0,y:0,width:window.0,height:window.1})&&top_trim>0&&top_trim<window.1{Crop{x:0,y:top_trim,width:window.0,height:window.1-top_trim}}else{requested}
+}
+fn popout_top_trim(dpi:u32)->u32{
+ ((DISCORD_POPOUT_TITLEBAR_TOP_PX as u64).saturating_mul(dpi as u64)/96) as u32
 }
 
 /// Trim invisible right/bottom window margins (e.g. Chromium 870x488 item vs
-/// 856x481 content) only when the binding represents a full-window capture.
-/// Any user-chosen crop that already fits within `content` is preserved verbatim.
-fn resolve_recording_crop(requested:Crop,window:(u32,u32),content:Option<(u32,u32)>)->Crop{
- let Some((cw,ch))=content else{return requested;};
- if cw==0||ch==0||cw>window.0||ch>window.1{return requested;}
- if requested.x==0&&requested.y==0&&requested.width==window.0&&requested.height==window.1&&(cw,ch)!=window{
-  Crop{x:0,y:0,width:cw,height:ch}
+/// 856x481 content) and optional top chrome only when the binding represents a
+/// full-window capture. Any user-chosen crop is preserved verbatim.
+fn resolve_recording_crop(requested:Crop,window:(u32,u32),content:Option<(u32,u32)>,top_trim:u32)->Crop{
+ if requested.x!=0||requested.y!=0||requested.width!=window.0||requested.height!=window.1{
+  return requested;
+ }
+ let (w,h)=match content{
+  Some((cw,ch)) if cw>0&&ch>0&&cw<=window.0&&ch<=window.1=>(cw,ch),
+  _=>window,
+ };
+ if top_trim>0&&top_trim<h{
+  Crop{x:0,y:top_trim,width:w,height:h-top_trim}
  }else{
-  requested
+  Crop{x:0,y:0,width:w,height:h}
  }
 }
 
@@ -120,7 +139,37 @@ fn first_frame_failure(state: CaptureState) -> Option<&'static str> {
  }
 }
 
-pub(crate) async fn build_feed(approved:ffmpeg_recorder::Preflight,binding:&Binding,effect_id:&str,windows:&WindowRegistry,adapter:&mut NativeAdapter,folder:&Path,journal:&mut Journal)->Result<CapturePipeline<RecordingSource>,&'static str>{
+// GetLocalTime is supplied by Windows itself; no timestamp dependency or UTC fallback.
+#[cfg(windows)]
+fn recording_local_time()->Result<String,&'static str>{
+ // SAFETY: GetLocalTime has no preconditions and returns a value.
+ let value=unsafe{windows::Win32::System::SystemInformation::GetLocalTime()};
+ if value.wYear<1601||!(1..=12).contains(&value.wMonth)||!(1..=31).contains(&value.wDay)||value.wHour>23||value.wMinute>59||value.wSecond>59{return Err("recorder_start_failed");}
+ Ok(format!("{:04}-{:02}-{:02}_{:02}-{:02}-{:02}",value.wYear,value.wMonth,value.wDay,value.wHour,value.wMinute,value.wSecond))
+}
+#[cfg(not(windows))]
+fn recording_local_time()->Result<String,&'static str>{Err("native_capture_unsupported")}
+
+fn recording_published_name(label:&str,timestamp:&str,effect_id:&str,folder:&Path,journal:&Journal)->Result<String,&'static str>{
+ // ASCII only, bounded below safe_name's byte ceiling; dots become underscores
+ // so a label cannot create dot segments. Spaces use the existing accepted '_'.
+ let label=label.trim().chars().filter_map(|c|if c.is_ascii_alphanumeric()||c=='-'||c=='_'{Some(c)}else if c.is_whitespace()||c=='.'{Some('_')}else{None}).take(80).collect::<String>();
+ if label.is_empty(){return Ok(format!("{effect_id}.mkv"));}
+ let stem=format!("{label}_{timestamp}");
+ for suffix in 0..10000 {
+  let name=if suffix==0{format!("{stem}.mkv")}else{format!("{stem}_{suffix}.mkv")};
+  // Reserve against durable intents too: active recordings have no final file yet.
+  if journal.records().iter().any(|record|record.kind=="media_intent"&&record.payload["name"].as_str().is_some_and(|reserved|reserved.eq_ignore_ascii_case(&name))){continue;}
+  match std::fs::symlink_metadata(folder.join(&name)){
+   Err(error) if error.kind()==std::io::ErrorKind::NotFound=>return Ok(name),
+   Ok(_)=>continue,
+   Err(_)=>return Err("disk_write_failed"),
+  }
+ }
+ Err("disk_write_failed")
+}
+
+pub(crate) async fn build_feed(approved:ffmpeg_recorder::Preflight,binding:&Binding,effect_id:&str,label:&str,windows:&WindowRegistry,adapter:&mut NativeAdapter,folder:&Path,journal:&mut Journal)->Result<CapturePipeline<RecordingSource>,&'static str>{
  if !cfg!(windows){return Err("native_capture_unsupported");}
  if effect_id.is_empty() || effect_id.len()>96 || !effect_id.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'-'||b==b'_'){return Err("recording_effect_invalid");}
  let view=windows.resolve(&binding.window,binding.window_generation).map_err(|error|match error{crate::windows_window_registry::WindowError::AmbiguousDescriptor=>"window_titles_identical",_=>"window_unavailable"})?;
@@ -136,7 +185,8 @@ pub(crate) async fn build_feed(approved:ffmpeg_recorder::Preflight,binding:&Bind
   trace_stage("first_frame_wait");
   let first=loop{if let Some(frame)=capture.take_latest(){break frame;}if Instant::now()>=deadline{return Err("capture_first_frame_timeout");}if let Some(code)=first_frame_failure(capture.poll_state(windows)){return Err(code);}tokio::time::sleep(Duration::from_millis(5)).await;};
   trace_stage("first_frame_ready");
-  let crop=resolve_recording_crop(binding.crop,(view.rect.width,view.rect.height),capture.content_size());
+  let top_trim=window_top_trim(&view,windows,binding);
+  let crop=resolve_recording_crop(binding.crop,(view.rect.width,view.rect.height),capture.content_size(),top_trim);
   let approved=if (crop.width,crop.height)!=(approved.profile().width,approved.profile().height){
    approved.with_profile(recording_profile(crop.width,crop.height)).map_err(recorder_start_failure)?
   }else{
@@ -145,7 +195,8 @@ pub(crate) async fn build_feed(approved:ffmpeg_recorder::Preflight,binding:&Bind
   let pool=FramePool::new(observed_pool_limits(crop.width,crop.height,CROP_POOL_SLOTS)?).map_err(|_|"crop_resource_bound")?;
   // Verify the crop against observed pixels, not only window rectangle metadata.
   drop(crop_frame(&pool,&first,crop)?);
-  let plan=RecordingPlan{media_id:format!("media-{effect_id}"),intent_event:format!("intent-{effect_id}"),publish_event:format!("publish-{effect_id}"),staged_name:format!("{effect_id}.partial.mkv"),published_name:format!("{effect_id}.mkv")};
+  let published_name=recording_published_name(label,&recording_local_time()?,effect_id,folder,journal)?;
+  let plan=RecordingPlan{media_id:format!("media-{effect_id}"),intent_event:format!("intent-{effect_id}"),publish_event:format!("publish-{effect_id}"),staged_name:format!("{effect_id}.partial.mkv"),published_name};
   trace_stage("recorder_begin");
   let (mut recorder,_ready)=Recorder::start_ready(approved,folder,plan,journal).await.map_err(recorder_start_failure)?;
   recorder.enable_late_recovery();
@@ -224,13 +275,51 @@ fn recorder_start_failure(error:ffmpeg_recorder::RecorderError)->&'static str{
  }
  #[test]fn full_window_crop_trims_to_content_size_while_preserving_user_crop(){
   let full=Crop{x:0,y:0,width:870,height:488};
-  assert_eq!(resolve_recording_crop(full,(870,488),Some((856,481))),Crop{x:0,y:0,width:856,height:481});
-  assert_eq!(resolve_recording_crop(full,(870,488),None),full);
-  assert_eq!(resolve_recording_crop(full,(870,488),Some((870,488))),full);
+  assert_eq!(resolve_recording_crop(full,(870,488),Some((856,481)),0),Crop{x:0,y:0,width:856,height:481});
+  assert_eq!(resolve_recording_crop(full,(870,488),None,0),full);
+  assert_eq!(resolve_recording_crop(full,(870,488),Some((870,488)),0),full);
+  assert_eq!(resolve_recording_crop(full,(870,488),Some((856,481)),32),Crop{x:0,y:32,width:856,height:449});
+  assert_eq!(resolve_recording_crop(full,(870,488),None,32),Crop{x:0,y:32,width:870,height:456});
+  assert_eq!(resolve_recording_crop(full,(870,488),Some((856,481)),481),Crop{x:0,y:0,width:856,height:481});
   let user_inside=Crop{x:10,y:12,width:640,height:360};
-  assert_eq!(resolve_recording_crop(user_inside,(870,488),Some((856,481))),user_inside);
+  assert_eq!(resolve_recording_crop(user_inside,(870,488),Some((856,481)),0),user_inside);
+  assert_eq!(resolve_recording_crop(user_inside,(870,488),Some((856,481)),32),user_inside);
   let user_top_left=Crop{x:0,y:0,width:856,height:481};
-  assert_eq!(resolve_recording_crop(user_top_left,(870,488),Some((856,481))),user_top_left);
+  assert_eq!(resolve_recording_crop(user_top_left,(870,488),Some((856,481)),0),user_top_left);
+  assert_eq!(resolve_recording_crop(user_top_left,(870,488),Some((856,481)),32),user_top_left);
+ }
+ #[test]fn obs_crop_hides_the_bar_only_on_a_whole_window(){
+  let full=Crop{x:0,y:0,width:870,height:488};
+  assert_eq!(obs_crop(full,(870,488),23),Crop{x:0,y:23,width:870,height:465});
+  assert_eq!(obs_crop(full,(870,488),0),full);
+  let chosen=Crop{x:10,y:0,width:100,height:100};
+  assert_eq!(obs_crop(chosen,(870,488),23),chosen);
+ }
+ #[test]fn readable_names_reserve_disk_and_journal_names_and_survive_reopen(){
+  let root=std::env::temp_dir().join(format!("cafe-readable-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));std::fs::create_dir(&root).unwrap();
+  struct Cleanup(PathBuf);impl Drop for Cleanup{fn drop(&mut self){let _=std::fs::remove_dir_all(&self.0);}}let _cleanup=Cleanup(root.clone());
+  let path=root.join("journal");let mut journal=Journal::open(&path,"readable",Clock(77)).unwrap();
+  let timestamp="2026-11-02_14-05-06";
+  let name=recording_published_name(" Guest One ",timestamp,"rec-fixed-0",&root,&journal).unwrap();assert_eq!(name,"Guest_One_2026-11-02_14-05-06.mkv");
+  std::fs::write(root.join(&name),b"existing").unwrap();
+  let reserved=recording_published_name("Guest One",timestamp,"rec-fixed-0",&root,&journal).unwrap();assert_eq!(reserved,"Guest_One_2026-11-02_14-05-06_1.mkv");
+  journal.append_media_intent("intent-rec-fixed-0","media-rec-fixed-0",&reserved).unwrap();drop(journal);
+  let mut journal=Journal::open(&path,"readable",Clock(77)).unwrap();
+  assert_eq!(recording_published_name("Guest One",timestamp,"rec-fixed-1",&root,&journal).unwrap(),"Guest_One_2026-11-02_14-05-06_2.mkv");
+  assert_eq!(recording_published_name("",timestamp,"rec-fixed-0",&root,&journal).unwrap(),"rec-fixed-0.mkv");
+  let sanitized=recording_published_name("../A: B/é",timestamp,"rec-fixed-1",&root,&journal).unwrap();assert!(!sanitized.contains(".."));assert!(sanitized.bytes().all(|b|b.is_ascii_alphanumeric()||matches!(b,b'_'|b'-'|b'.')));
+  let long=recording_published_name(&"X".repeat(128),timestamp,"rec-fixed-1",&root,&journal).unwrap();assert!(long.len()<=128);
+  std::fs::write(root.join("rec-fixed-0.partial.mkv"),b"synthetic media").unwrap();
+  journal.publish_media("publish-rec-fixed-0",&root,"media-rec-fixed-0","rec-fixed-0.partial.mkv").unwrap();
+  assert_eq!(std::fs::read(root.join(&name)).unwrap(),b"existing");assert_eq!(std::fs::read(root.join(&reserved)).unwrap(),b"synthetic media");drop(journal);
+  let journal=Journal::open(&path,"readable",Clock(77)).unwrap();assert_eq!(journal.records().last().unwrap().payload["name"],reserved);
+ }
+ #[cfg(windows)] #[test]fn local_recording_timestamp_has_safe_wall_clock_shape(){let stamp=recording_local_time().unwrap();assert_eq!(stamp.len(),19);assert_eq!(&stamp[10..11],"_");assert!(stamp.bytes().all(|b|b.is_ascii_digit()||b==b'-'||b==b'_'));}
+ #[test]fn popout_top_trim_scales_from_base_constant_by_dpi(){
+  assert_eq!(popout_top_trim(96),23);assert_eq!(popout_top_trim(144),34);
+  for dpi in [0,96,120,144,192]{
+   assert_eq!(popout_top_trim(dpi),(DISCORD_POPOUT_TITLEBAR_TOP_PX*dpi)/96);
+  }
  }
  #[test]fn cached_preflight_skips_repeat_trial_across_sizes_and_invalidates_on_tamper(){
   struct Cleanup(PathBuf);impl Drop for Cleanup{fn drop(&mut self){let _=std::fs::remove_dir_all(&self.0);}}

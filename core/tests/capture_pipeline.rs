@@ -87,14 +87,14 @@ fn explicit_abort_never_publishes_even_after_a_written_frame(){runtime().block_o
  let tmp=Scratch::new();let mut journal=Journal::open(&tmp.0.join("authority.journal"),"synthetic",Clock(1)).unwrap();let now=Instant::now();
  let recorder=Recorder::test_with_child("drain",&tmp.0,plan(),profile(),&mut journal,now).unwrap();let src=source(CaptureState::Healthy,true,false);let stopped=src.stopped.clone();let mut pipeline=CapturePipeline::new(src,recorder);
  assert!(matches!(pipeline.tick(&WindowRegistry::new(Clock(1)),now).await,Ok(Tick::Written)));
- pipeline.abort().await.unwrap();assert!(stopped.load(Ordering::SeqCst));assert_eq!(pipeline.recorder_state(),RecordingState::Interrupted);
+ pipeline.abort().await.unwrap();assert!(pipeline.resources_released());assert!(stopped.load(Ordering::SeqCst));assert_eq!(pipeline.recorder_state(),RecordingState::Interrupted);
  assert!(pipeline.stop(&mut journal).await.is_err());assert_eq!(journal.records().len(),1);assert!(!tmp.0.join("segment.mkv").exists());
 });}
 #[test]
 fn failed_source_abort_still_interrupts_its_own_recorder(){runtime().block_on(async{
  let tmp=Scratch::new();let mut journal=Journal::open(&tmp.0.join("authority.journal"),"synthetic",Clock(1)).unwrap();let now=Instant::now();
  let recorder=Recorder::test_with_child("drain",&tmp.0,plan(),profile(),&mut journal,now).unwrap();let mut pipeline=CapturePipeline::new(source(CaptureState::Healthy,false,true),recorder);
- assert!(matches!(pipeline.abort().await,Err(capture_pipeline::PipelineError::Source)));assert_eq!(pipeline.recorder_state(),RecordingState::Interrupted);
+ assert!(matches!(pipeline.abort().await,Err(capture_pipeline::PipelineError::Source)));assert!(!pipeline.resources_released());assert_eq!(pipeline.recorder_state(),RecordingState::Interrupted);
  assert!(pipeline.stop(&mut journal).await.is_err());assert_eq!(journal.records().len(),1);assert!(!tmp.0.join("segment.mkv").exists());
 });}
 

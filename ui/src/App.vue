@@ -18,7 +18,6 @@
  * @module ui/App
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import TopBar from './kit/shell/TopBar.vue';
 import StatusBar from './kit/shell/StatusBar.vue';
 import CapsuleTopbar from './capsule/topbar.vue';
 import CapsuleControl from './capsule/control.vue';
@@ -48,6 +47,7 @@ const REASON_SELECT_WINDOW = 'Select a listed window';
 const REASON_OBS_PENDING = 'OBS setup pending';
 const REASON_OBS_NOT_READY = 'OBS not ready';
 const REASON_CHAT_PENDING = 'Chat setup pending';
+const REASON_CHAT_RUNNING = 'Chat is running';
 const REASON_NOT_RECORDING = 'Not recording';
 const REASON_NO_PREV = 'No previous page';
 const REASON_NO_NEXT = 'No next page';
@@ -117,6 +117,8 @@ const pendingCount = ref(0);
 const personLabel = ref('');
 /** @type {import('vue').Ref<string>} */
 const channel = ref('');
+/** Fixed channel-validation note; never displays submitted text. */
+const channelNote = ref('');
 /** @type {import('vue').Ref<string>} Cleared after every submit, never shown. */
 const password = ref('');
 /** @type {import('vue').Ref<number | string>} */
@@ -664,6 +666,14 @@ function showPage(page) {
 }
 
 const organizerPlan = computed(() => view.value.organizerPlan || null);
+const askBeforeAiActions = computed(() => typeof view.value.askBeforeAiActions === 'boolean' ? view.value.askBeforeAiActions : null);
+const aiActivity = computed(() => {
+  const activity = view.value.aiActivity;
+  if (!activity) return '';
+  const labels = { ai_recording_submitted: 'AI submitted recording for', ai_stop_submitted: 'AI submitted stop for', ai_obs_submitted: 'AI submitted send to OBS for', ai_scene_submitted: 'AI submitted an OBS scene change for' };
+  const unit = activity.code === 'ai_recording_submitted' ? 'windows' : 'capsules';
+  return `${labels[activity.code]} ${activity.count} ${unit}. Check status for results.`;
+});
 const autoAnchor = computed(() => typeof view.value.autoAnchor === 'boolean' ? view.value.autoAnchor : null);
 const runningCount = computed(() => recordings.value.filter(row => row.state === 'Running').length);
 function previewStateFor(id, feedId, state) {
@@ -682,10 +692,41 @@ function resolveRecordingBlock(id) {
   if (reason === REASON_PAIRING) openWindowBrowser(id);
   else showPage(reason === REASON_UNAVAILABLE || reason === REASON_STARTING ? 'diagnostics' : 'settings');
 }
+const RECORDING_REASON_TEXT = Object.freeze({
+  window_unavailable: 'This window closed or changed. Add it again.',
+  window_titles_identical: 'Two windows have the same title. Close one or give them different titles, then retry.',
+  folder_not_authorized: 'Café cannot use the output folder. Choose it again in Settings.',
+  disk_write_failed: 'Could not write the file. Check free disk space and the output folder.',
+  encoder_unavailable: 'FFmpeg is not ready. Check it in Settings.',
+  encoder_session_limit: 'The graphics card reached its limit of recordings at once. Stop one and retry.',
+  capture_start_unavailable: 'Windows could not capture this window. Restore it if it is minimized, then retry.',
+  capture_source_unavailable: 'Windows could not capture this window. Restore it if it is minimized, then retry.',
+  recording_ffmpeg_not_approved: 'Choose an approved FFmpeg executable in Settings, then retry.',
+  recording_hardware_preflight_blocked: 'The recording hardware check failed. Open Diagnostics before retrying.',
+  recording_capture_unavailable: 'Windows capture is unavailable. Restore the source window and retry.',
+  recording_capture_unhealthy: 'The capture health check failed. Restore the source window and retry.',
+  recording_capture_minimized: 'This window is minimized. Restore it, then retry.',
+  recording_capture_closed: 'This window was closed. Add it again.',
+  recording_capture_frozen: 'No new frames arrived from this window. Restore it and retry.',
+  recording_capture_device_lost: 'The Windows capture device was lost. Retry, and open Diagnostics if it continues.',
+  recording_capture_resize_required: 'This window changed size while recording. Start recording again.',
+  recording_capture_generation_mismatch: 'This window identity changed. Add the window again.',
+  recording_capture_backpressure: 'Recording could not keep up with incoming frames. Stop another recording and retry.',
+  recording_capture_border_unavailable: 'Windows could not show the required capture border. Open Diagnostics before retrying.',
+  recording_capture_source_failed: 'The Windows capture source failed. Restore the source window and retry.',
+  recording_capture_clock_regression: 'Capture frame timestamps arrived out of order. Retry the recording.',
+  recording_crop_invalid: 'The selected capture area is invalid. Choose the window again.',
+  recording_recorder_start_failed: 'The recorder could not start. Check FFmpeg and the output folder in Settings.',
+  recording_setup_failed: 'Recording setup failed. Check Settings and open Diagnostics before retrying.',
+  recording_effect_interrupted: 'The recording request was interrupted. Check the capsule status before retrying.',
+  recording_first_frame_timeout: 'No new frames arrived from this window. Restore the source window and retry; open Diagnostics if it continues.',
+  recording_capacity_exceeded: 'Too many recordings at once. Stop one and retry.',
+  recording_interrupted: 'Recording stopped unexpectedly. Retry, and open Diagnostics if it happens again.',
+});
 function failureReasonFor(capsule) {
   const reason = recFor(capsule)?.reason;
-  return typeof reason === 'string' && reason !== '' ? reason + ' · review setup and retry.'
-    : 'Recording reason unavailable. Open diagnostics before retrying.';
+  if (typeof reason !== 'string' || reason === '') return 'Recording reason unavailable. Open diagnostics before retrying.';
+  return RECORDING_REASON_TEXT[reason] ?? 'Recording reason unavailable. Open diagnostics before retrying.';
 }
 
 /** Serial commands retain independent per-capsule pending/results. Queued is never success. */
@@ -721,27 +762,48 @@ async function onBatch(op) {
   if (batchPending.value || appDisposed) return;
   batchPending.value = true; batchNote.value = '';
   const ids = capsules.value.filter(capsule => op === 'stop' ? recFor(capsule)?.state === 'Running' : recFor(capsule)?.state !== 'Running').map(cid);
+  let hadFailure = false;
   try {
     for (const id of ids) {
       const result = await queueCapsuleAction(id, op);
       if (appDisposed) return;
-      if (result.status === 'unconfirmed' || result.status === 'cancelled' || result.status === 'failed' || ['rejected', 'blocked', 'interrupted'].includes(result?.state)) {
-        batchNote.value = 'Batch paused. Review the result on each capsule before retrying.'; return;
+      if (!['committed', 'observed', 'configured'].includes(result?.state)) {
+        hadFailure = true;
+        if (op !== 'stop') {
+          batchNote.value = 'Batch paused. Review the result on each capsule before retrying.'; return;
+        }
+        batchNote.value = 'Some stop requests failed or are unconfirmed. Continuing with the remaining capsules; review each recording status.';
       }
     }
-    batchNote.value = '';
+    if (!hadFailure) batchNote.value = '';
   } finally { if (!appDisposed) batchPending.value = false; }
 }
 async function onOrganizer(planId, confirm) {
   if (!controls || organizerPending.value || organizerPlan.value?.plan_id !== planId) return;
-  organizerPending.value = true; organizerResult.value = '';
+  organizerPending.value = true; organizerResult.value = 'Waiting for the authority to confirm the AI plan request…';
   try {
     const reply = await (confirm ? controls.confirmOrganizerPlan(planId) : controls.rejectOrganizerPlan(planId));
-    organizerResult.value = actionResultLabel({ status: 'queued' });
+    if (reply?.queued !== true || typeof reply.request_id !== 'string') {
+      organizerResult.value = actionResultLabel({ status: 'unconfirmed' }); return;
+    }
     const result = await waitForAuthorityResult(controls, reply.request_id, { signal: actionAbort.signal });
-    if (!appDisposed) organizerResult.value = actionResultLabel(result);
+    if (!appDisposed) {
+      if (!confirm && result?.state === 'rejected' && result?.code === 'organizer_plan_rejected') {
+        organizerResult.value = 'AI plan rejected.';
+      } else if (confirm && ['committed', 'observed', 'configured'].includes(result?.state)) {
+        organizerResult.value = 'AI plan request confirmed by the authority. Check capsule status for execution results.';
+      } else {
+        organizerResult.value = actionResultLabel(result) || 'AI plan request result could not be confirmed. Open diagnostics.';
+      }
+    }
   } catch { organizerResult.value = REQUEST_FAILED; }
   finally { organizerPending.value = false; }
+}
+function onAskBeforeAiActions(event) {
+  const enabled = event?.target?.checked;
+  if (!controls || askBeforeAiActions.value === null || typeof enabled !== 'boolean' || isPending.value) return;
+  event.target.checked = askBeforeAiActions.value;
+  request(controls.setAskBeforeAiActions(enabled));
 }
 function onAutoAnchor(event) {
   const enabled = event?.target?.checked;
@@ -809,7 +871,9 @@ const chatReason = computed(() =>
     ? availReason.value
     : chatConfigurable.value
       ? ''
-      : REASON_CHAT_PENDING),
+      : chatReady.value
+        ? REASON_CHAT_RUNNING
+        : REASON_CHAT_PENDING),
 );
 
 /**
@@ -972,7 +1036,14 @@ function onConfigureObs() {
 
 function onConfigureTwitch() {
   if (controls === null || browserPending.value || isPending.value) return;
-  request(controls.configureTwitch(channel.value));
+  const normalized = channel.value.trim().replace(/^#/, '').toLowerCase();
+  if (!/^[a-z0-9_]{3,25}$/.test(normalized)) {
+    channelNote.value = 'Enter a channel name with 3–25 letters, numbers or underscores.';
+    return;
+  }
+  channelNote.value = '';
+  channel.value = normalized;
+  request(controls.configureTwitch(normalized));
 }
 
 /**
@@ -1292,13 +1363,8 @@ onBeforeUnmount(() => {
 </script>
 <template>
   <div class="cafe-app">
-    <TopBar product="Café">
-      <template #nav><span aria-hidden="true"></span></template>
-      <template #search><span aria-hidden="true"></span></template>
-      <template #actions><span aria-hidden="true"></span></template>
-      <template #primary><span aria-hidden="true"></span></template>
-    </TopBar>
     <nav class="cafe-desktop-toolbar" aria-label="Workspace">
+      <strong class="cafe-toolbar-brand">Café</strong>
       <button class="cafe-button" type="button" :disabled="availReason !== '' || capsules.length >= 12" @click="openWindowBrowser()">Add window</button>
       <button class="cafe-button cafe-button-secondary" type="button" :disabled="availReason !== '' || capsules.length === 0 || batchPending" @click="onBatch('start')">Record all</button>
       <button class="cafe-button cafe-button-secondary" type="button" :disabled="availReason !== '' || runningCount === 0 || batchPending" @click="onBatch('stop')">Stop all</button>
@@ -1317,16 +1383,18 @@ onBeforeUnmount(() => {
     </nav>
     <main class="cafe-main cafe-desktop-main">
       <OrganizerPlan v-if="organizerPlan" :plan="organizerPlan" :busy="organizerPending" :result="organizerResult" @confirm="onOrganizer($event, true)" @reject="onOrganizer($event, false)" />
+      <p v-if="organizerResult && !organizerPlan" class="cafe-batch-result" role="status" :aria-busy="organizerPending ? 'true' : 'false'">{{ organizerResult }}</p>
       <section v-if="activePage === 'capsules'" class="cafe-desktop-workspace" aria-label="Capsule wall">
         <p v-if="!isStarting && availReason !== ''" class="cafe-warning" role="status">{{ availReason }} · Check that Café is connected before recording.</p>
         <p v-if="notice !== ''" class="cafe-error" role="alert">{{ notice }}</p>
-        <p v-if="!isStarting && capsules.length > 0" class="cafe-wall-guidance">Keep each pop-out open and not fully covered: Discord stops painting covered windows.</p>
+        <p v-if="!isStarting && capsules.length > 0" class="cafe-wall-guidance">If a preview stops updating, restore the source window and retry. Open Diagnostics if it continues. Keys 1–9 focus a tile; Esc returns to the wall.</p>
+        <p v-if="aiActivity" class="cafe-batch-result" role="status">{{ aiActivity }}</p>
         <p v-if="batchNote" class="cafe-batch-result" role="status">{{ batchNote }}</p>
-        <div :inert="browserOpen ? true : undefined">
-        <CapsuleGrid :capsuleIDs="rawCapsuleIds" :available="gridAvailable" :starting="isStarting" :tabLabels="capsuleTabLabels" @add-capsule="openWindowBrowser()">
-          <template #capsule="{ id, visible }">
+        <div class="cafe-gallery-host" :inert="browserOpen ? true : undefined">
+        <CapsuleGrid :capsuleIDs="rawCapsuleIds" :available="gridAvailable" :starting="isStarting" :keyboard-enabled="!browserOpen && !helpMenuOpen && !organizerPlan" :tabLabels="capsuleTabLabels" @add-capsule="openWindowBrowser()">
+          <template #capsule="{ id, visible, focused, toggleFocus }">
             <article v-if="capsuleById(id) !== undefined" class="cafe-capsule cafe-desktop-capsule" :data-tile-state="headerStateFor(capsuleById(id))">
-              <CapsuleTopbar :slotLabel="slotLabelFor(id)" :capsuleLabel="cname(capsuleById(id))" :state="headerStateFor(capsuleById(id))" :elapsed="elapsedFor(id)" :busy="tilePending[id] === true" @remove="onRemoveCapsule(id)" />
+              <CapsuleTopbar :slotLabel="slotLabelFor(id)" :capsuleLabel="cname(capsuleById(id))" :state="headerStateFor(capsuleById(id))" :elapsed="elapsedFor(id)" :busy="tilePending[id] === true" :focused="focused" @focus="toggleFocus" @remove="onRemoveCapsule(id)" />
               <div class="cafe-desktop-media" :data-feed-count="capsuleFeeds(capsuleById(id)).length">
                 <CapsulePreview v-for="feed in capsuleFeeds(capsuleById(id))" :key="feed.feed_id" :capsule-id="id" :feed="feed" :enabled="previewsEnabled" :visible="visible" @state="previewStateFor(id, feed.feed_id, $event)" />
                 <div v-if="capsuleFeeds(capsuleById(id)).length === 0" class="cafe-preview-placeholder"><strong>No preview</strong><span>Choose a window for this capsule.</span></div>
@@ -1353,6 +1421,7 @@ onBeforeUnmount(() => {
         <button class="cafe-button" type="button" @click="showPage('capsules')">Back to wall</button>
       <section class="cafe-panel" aria-labelledby="cafe-setup-title">
         <h1 id="cafe-setup-title" class="cafe-title">Settings</h1>
+        <label v-if="askBeforeAiActions !== null" class="cafe-auto-anchor"><input type="checkbox" :checked="askBeforeAiActions === true" :disabled="availReason !== '' || isPending" @change="onAskBeforeAiActions" /> Ask me before AI actions</label>
         <label v-if="autoAnchor !== null" class="cafe-auto-anchor"><input type="checkbox" :checked="autoAnchor === true" :disabled="availReason !== '' || isPending" @change="onAutoAnchor" /> Auto-anchor Discord pop-outs</label>
         <h2 class="cafe-heading">Folder</h2>
         <p class="cafe-text">Output folder: {{ folderConfigured ? 'Configured' : 'Not chosen' }}</p>
@@ -1360,7 +1429,7 @@ onBeforeUnmount(() => {
           <button
             class="cafe-button"
             type="button"
-            :disabled="availReason !== ''"
+            :disabled="availReason !== '' || isPending"
             @click="onChooseFolder"
           >
             Choose folder
@@ -1373,7 +1442,7 @@ onBeforeUnmount(() => {
           <button
             class="cafe-button"
             type="button"
-            :disabled="availReason !== ''"
+            :disabled="availReason !== '' || isPending"
             @click="onChooseFfmpeg"
           >
             Choose FFmpeg
@@ -1452,6 +1521,7 @@ onBeforeUnmount(() => {
           >
             Configure chat
           </button>
+          <p v-if="channelNote" class="cafe-reason" role="alert">{{ channelNote }}</p>
           <p v-if="chatReason !== ''" class="cafe-reason">{{ chatReason }}</p>
         </div>
       </section>

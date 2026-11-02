@@ -102,7 +102,7 @@ def guide(step=None, error=None):
               'expected': 'Synthetic expected result', 'evidence_required': 'Synthetic evidence',
               'depends_on': [] if i == 1 else [i - 1], 'live_status': 'pending'} for i in ids]
     return {'schema': 'cafe.demo_guide.v1', 'steps': [] if error else steps,
-            'control_mode': 'human_confirmed', 'error': error}
+            'control_mode': 'direct_with_optional_confirmation', 'error': error}
 
 
 def definitions(names):

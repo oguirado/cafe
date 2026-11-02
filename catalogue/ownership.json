@@ -2,11 +2,102 @@
   "schema": "cafe.ownership.v1",
   "roots": [
     {
-      "path": "core/",
+      "path": ".gitattributes",
+      "owner": "Repository tooling and public policy",
+      "language": "Markdown + JSON + CI configuration",
+      "role": "Reviewed day-zero policy and developer automation",
+      "extractor": "not indexed"
+    },
+    {
+      "path": ".github/",
+      "owner": "Repository tooling and public policy",
+      "language": "Markdown + JSON + CI configuration",
+      "role": "Reviewed day-zero policy and developer automation",
+      "extractor": "not indexed"
+    },
+    {
+      "path": ".gitignore",
+      "owner": "Repository tooling",
+      "language": "Gitignore",
+      "role": "Git ignore policy",
+      "extractor": "not indexed"
+    },
+    {
+      "path": ".gitleaks.toml",
+      "owner": "Repository tooling and public policy",
+      "language": "Markdown + JSON + CI configuration",
+      "role": "Reviewed day-zero policy and developer automation",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "AGENTS.md",
+      "owner": "Architecture and repository rules",
+      "language": "Markdown",
+      "role": "Agent operating instructions",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "CODE_OF_CONDUCT.md",
+      "owner": "Repository tooling and public policy",
+      "language": "Markdown + JSON + CI configuration",
+      "role": "Reviewed day-zero policy and developer automation",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "owner": "Repository tooling and public policy",
+      "language": "Markdown + JSON + CI configuration",
+      "role": "Reviewed day-zero policy and developer automation",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "Cargo.lock",
       "owner": "Rust authority",
-      "language": "Rust",
-      "role": "Authoritative core implementation",
-      "extractor": "R5"
+      "language": "TOML",
+      "role": "Pinned operator-approved Rust serialization dependency closure",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "Cargo.toml",
+      "owner": "Rust authority",
+      "language": "TOML",
+      "role": "Future Rust manifest under future runtime manifest policy",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "LICENSE",
+      "owner": "Repository tooling and public policy",
+      "language": "Markdown + JSON + CI configuration",
+      "role": "Reviewed day-zero policy and developer automation",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "NOTICE",
+      "owner": "Repository tooling and public policy",
+      "language": "Text",
+      "role": "Upstream attribution notices",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "README.md",
+      "owner": "Architecture and repository rules",
+      "language": "Markdown",
+      "role": "Repository overview and guide",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "SECURITY.md",
+      "owner": "Repository tooling and public policy",
+      "language": "Markdown + JSON + CI configuration",
+      "role": "Reviewed day-zero policy and developer automation",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "catalogue/",
+      "owner": "Entry and navigation",
+      "language": "JSON + TSV",
+      "role": "Entry index and navigation aids",
+      "extractor": "not indexed"
     },
     {
       "path": "connectors/",
@@ -14,6 +105,83 @@
       "language": "Python",
       "role": "External service connectors and MCP adapters",
       "extractor": "R7"
+    },
+    {
+      "path": "core/",
+      "owner": "Rust authority",
+      "language": "Rust",
+      "role": "Authoritative core implementation",
+      "extractor": "R5"
+    },
+    {
+      "path": "ctl/",
+      "owner": "Repository tooling",
+      "language": "Python + Bash",
+      "role": "Admission and serial integration controls",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "docs/",
+      "owner": "Architecture and repository rules",
+      "language": "Markdown",
+      "role": "Architecture guides and repository policy",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "llms.txt",
+      "owner": "Entry and navigation",
+      "language": "Text",
+      "role": "LLM entry summary",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "package-lock.json",
+      "owner": "Shell contracts",
+      "language": "JSON",
+      "role": "Approved JavaScript checker dependency lock",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "package.json",
+      "owner": "Shell contracts",
+      "language": "JSON",
+      "role": "Future Node manifest under future runtime manifest policy",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "pyproject.toml",
+      "owner": "Python connectors + MCP",
+      "language": "TOML",
+      "role": "Future Python manifest under future runtime manifest policy",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "requirements-ci.txt",
+      "owner": "Repository tooling and public policy",
+      "language": "Markdown + JSON + CI configuration",
+      "role": "Reviewed day-zero policy and developer automation",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "route/",
+      "owner": "Architecture and repository rules",
+      "language": "Markdown",
+      "role": "Generated map of the repository for agents",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "router/",
+      "owner": "Vendored router kit",
+      "language": "Python + JSON",
+      "role": "Vendored router kit with LOCAL_CHANGES.md and preserved upstream provenance",
+      "extractor": "not indexed"
+    },
+    {
+      "path": "src/contracts/",
+      "owner": "Shell contracts",
+      "language": "JavaScript + JSDoc",
+      "role": "Shared cross-process contracts",
+      "extractor": "R6"
     },
     {
       "path": "src/main/",
@@ -37,27 +205,6 @@
       "extractor": "R6"
     },
     {
-      "path": "src/contracts/",
-      "owner": "Shell contracts",
-      "language": "JavaScript + JSDoc",
-      "role": "Shared cross-process contracts",
-      "extractor": "R6"
-    },
-    {
-      "path": "router/",
-      "owner": "Vendored router kit",
-      "language": "Python + JSON",
-      "role": "Vendored router kit with LOCAL_CHANGES.md and preserved upstream provenance",
-      "extractor": "not indexed"
-    },
-    {
-      "path": "catalogue/",
-      "owner": "Entry and navigation",
-      "language": "JSON + TSV",
-      "role": "Entry index and navigation aids",
-      "extractor": "not indexed"
-    },
-    {
       "path": "subjects/",
       "owner": "Subject books",
       "language": "JSON + Markdown",
@@ -65,10 +212,10 @@
       "extractor": "not indexed"
     },
     {
-      "path": "docs/",
+      "path": "submission/",
       "owner": "Architecture and repository rules",
       "language": "Markdown",
-      "role": "Architecture guides and repository policy",
+      "role": "Hackathon submission and demo script",
       "extractor": "not indexed"
     },
     {
@@ -86,150 +233,10 @@
       "extractor": "not indexed"
     },
     {
-      "path": ".gitignore",
-      "owner": "Repository tooling",
-      "language": "Gitignore",
-      "role": "Git ignore policy",
-      "extractor": "not indexed"
-    },
-    {
-      "path": "AGENTS.md",
-      "owner": "Architecture and repository rules",
-      "language": "Markdown",
-      "role": "Agent operating instructions",
-      "extractor": "not indexed"
-    },
-    {
-      "path": "README.md",
-      "owner": "Architecture and repository rules",
-      "language": "Markdown",
-      "role": "Repository overview and guide",
-      "extractor": "not indexed"
-    },
-    {
-      "path": "llms.txt",
-      "owner": "Entry and navigation",
-      "language": "Text",
-      "role": "LLM entry summary",
-      "extractor": "not indexed"
-    },
-    {
-      "path": "Cargo.toml",
-      "owner": "Rust authority",
-      "language": "TOML",
-      "role": "Future Rust manifest under future runtime manifest policy",
-      "extractor": "not indexed"
-    },
-    {
-      "path": "package.json",
-      "owner": "Shell contracts",
-      "language": "JSON",
-      "role": "Future Node manifest under future runtime manifest policy",
-      "extractor": "not indexed"
-    },
-    {
-      "path": "pyproject.toml",
-      "owner": "Python connectors + MCP",
-      "language": "TOML",
-      "role": "Future Python manifest under future runtime manifest policy",
-      "extractor": "not indexed"
-    },
-    {
-      "path": "Cargo.lock",
-      "owner": "Rust authority",
-      "language": "TOML",
-      "role": "Pinned operator-approved Rust serialization dependency closure",
-      "extractor": "not indexed"
-    },
-    {
-      "path": "package-lock.json",
-      "owner": "Shell contracts",
-      "language": "JSON",
-      "role": "Approved JavaScript checker dependency lock",
-      "extractor": "not indexed"
-    },
-    {
-      "path": ".github/",
-      "owner": "Repository tooling and public policy",
-      "language": "Markdown + JSON + CI configuration",
-      "role": "Reviewed day-zero policy and developer automation",
-      "extractor": "not indexed"
-    },
-    {
-      "path": ".gitattributes",
-      "owner": "Repository tooling and public policy",
-      "language": "Markdown + JSON + CI configuration",
-      "role": "Reviewed day-zero policy and developer automation",
-      "extractor": "not indexed"
-    },
-    {
-      "path": ".gitleaks.toml",
-      "owner": "Repository tooling and public policy",
-      "language": "Markdown + JSON + CI configuration",
-      "role": "Reviewed day-zero policy and developer automation",
-      "extractor": "not indexed"
-    },
-    {
-      "path": "LICENSE",
-      "owner": "Repository tooling and public policy",
-      "language": "Markdown + JSON + CI configuration",
-      "role": "Reviewed day-zero policy and developer automation",
-      "extractor": "not indexed"
-    },
-    {
-      "path": "SECURITY.md",
-      "owner": "Repository tooling and public policy",
-      "language": "Markdown + JSON + CI configuration",
-      "role": "Reviewed day-zero policy and developer automation",
-      "extractor": "not indexed"
-    },
-    {
-      "path": "CONTRIBUTING.md",
-      "owner": "Repository tooling and public policy",
-      "language": "Markdown + JSON + CI configuration",
-      "role": "Reviewed day-zero policy and developer automation",
-      "extractor": "not indexed"
-    },
-    {
-      "path": "CODE_OF_CONDUCT.md",
-      "owner": "Repository tooling and public policy",
-      "language": "Markdown + JSON + CI configuration",
-      "role": "Reviewed day-zero policy and developer automation",
-      "extractor": "not indexed"
-    },
-    {
-      "path": "requirements-ci.txt",
-      "owner": "Repository tooling and public policy",
-      "language": "Markdown + JSON + CI configuration",
-      "role": "Reviewed day-zero policy and developer automation",
-      "extractor": "not indexed"
-    },
-    {
-      "path": "ctl/",
-      "owner": "Repository tooling",
-      "language": "Python + Bash",
-      "role": "Admission and serial integration controls",
-      "extractor": "not indexed"
-    },
-    {
       "path": "ui/",
       "owner": "Cafe presentation shell",
       "language": "JavaScript + Vue SFC + CSS",
       "role": "Copied shell layers, authored wrapper and vendored design tokens; SFC bodies not indexed",
-      "extractor": "not indexed"
-    },
-    {
-      "path": "NOTICE",
-      "owner": "Repository tooling and public policy",
-      "language": "Text",
-      "role": "Upstream attribution notices",
-      "extractor": "not indexed"
-    },
-    {
-      "path": "submission/",
-      "owner": "Architecture and repository rules",
-      "language": "Markdown",
-      "role": "Hackathon submission and demo script",
       "extractor": "not indexed"
     }
   ]

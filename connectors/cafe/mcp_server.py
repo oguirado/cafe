@@ -590,13 +590,13 @@ def _checked_read_result(name, value, scan, arguments):
 
 def _guide_error(error):
     return {'schema': 'cafe.demo_guide.v1', 'steps': [],
-            'control_mode': 'human_confirmed', 'error': error}
+            'control_mode': 'direct_with_optional_confirmation', 'error': error}
 
 
 def _checked_guide(value, step=None):
     value = _loads(json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8'))
     if (not _keys(value, 'schema steps control_mode error') or
-            value['schema'] != 'cafe.demo_guide.v1' or value['control_mode'] != 'human_confirmed' or
+            value['schema'] != 'cafe.demo_guide.v1' or value['control_mode'] != 'direct_with_optional_confirmation' or
             value['error'] not in (None, 'invalid_arguments', 'unknown_resource') or type(value['steps']) is not list):
         raise ValueError('invalid_snapshot')
     if value['error'] is not None:

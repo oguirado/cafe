@@ -148,12 +148,12 @@ pub(crate) struct ControlReceipt { schema: &'static str, op: ControlOperation, e
 pub(crate) struct ControlReply { pub request_id: String, pub state: ControlState, pub revision: Clock, pub error: Option<&'static str>, pub receipt: Option<ControlReceipt> }
 
 // Private Rust-only origin. No Deserialize/Serialize or external constructor.
-enum AdmissionPeer<'a> { Broker(&'a AuthenticatedBrokerPeer), Operator(Clock), Organizer(Clock) }
+enum AdmissionPeer<'a> { Broker(&'a AuthenticatedBrokerPeer), Operator(Clock,&'a dyn Fn()->bool), Organizer(Clock,&'a dyn Fn()->bool) }
 impl AdmissionPeer<'_> {
-    fn identity(&self)->&str {match self {Self::Broker(peer)=>peer.identity(),Self::Operator(_)=>"operator",Self::Organizer(_)=>"organizer"}}
-    fn epoch(&self)->u64 {match self {Self::Broker(peer)=>peer.epoch(),Self::Operator(epoch)|Self::Organizer(epoch)=>epoch.0}}
-    fn is_live(&self)->bool {match self {Self::Broker(peer)=>peer.is_live(),Self::Operator(_)|Self::Organizer(_)=>true}}
-    fn authorized(&self)->bool {match self {Self::Broker(peer)=>peer.identity()=="broker",Self::Operator(_)|Self::Organizer(_)=>true}}
+    fn identity(&self)->&str {match self {Self::Broker(peer)=>peer.identity(),Self::Operator(..)=>"operator",Self::Organizer(..)=>"organizer"}}
+    fn epoch(&self)->u64 {match self {Self::Broker(peer)=>peer.epoch(),Self::Operator(epoch,_)|Self::Organizer(epoch,_)=>epoch.0}}
+    fn is_live(&self)->bool {match self {Self::Broker(peer)=>peer.is_live(),Self::Operator(_,live)|Self::Organizer(_,live)=>live()}}
+    fn authorized(&self)->bool {match self {Self::Broker(peer)=>peer.identity()=="broker",Self::Operator(..)|Self::Organizer(..)=>true}}
 }
 struct Confirmation { fingerprint: String, identity: String, expires: Instant }
 struct Historic { intent: ControlIntentRecord, outcome: Option<(ControlResultRecord, Clock)>, in_flight: bool }
@@ -260,6 +260,12 @@ impl<E: ControlEffects> ControlRuntime<E> {
     pub(crate) fn organizer_root(&self)->Option<ApprovedFolder>{self.selected_root.clone()}
     pub(crate) fn known_control_request(&self,id:&str)->bool{self.history.contains_key(id)||self.journal.has_service_configuration(id)}
     pub(crate) fn accepts_configuration(&self)->bool{!self.poisoned}
+    /// An admitted Start remains unsettled until its durable actor outcome.
+    /// Include unresolved replay history: absence of a live queue is not proof
+    /// that a prior recording start safely completed or was interrupted.
+    pub(crate) fn has_unsettled_recording_start(&self)->bool {
+        self.history.values().any(|prior| prior.intent.operation==ControlOperation::StartRecording && prior.outcome.is_none())
+    }
     pub(crate) fn revision(&self) -> Clock { self.journal.records().last().map_or(Clock(0),|r|r.sequence) }
     fn reply(&self, id:&str,state:ControlState,error:Option<&'static str>) -> ControlReply { ControlReply{request_id:id.into(),state,revision:self.revision(),error,receipt:None} }
     fn normalized(&self, action:&ControlAction) -> Result<ControlAction,&'static str> {
@@ -322,6 +328,10 @@ impl<E: ControlEffects> ControlRuntime<E> {
     /// Called only by the private stdin owner after closed local-UI decoding.
     /// It never returns a confirmation, grants a remote issuer or fabricates a peer.
     pub(crate) fn handle_operator(&mut self,id:&str,epoch:Clock,expected_revision:Clock,action:ControlAction)->ControlReply {
+        self.handle_operator_live(id,epoch,expected_revision,action,&||true)
+    }
+    pub(crate) fn handle_operator_live(&mut self,id:&str,epoch:Clock,expected_revision:Clock,action:ControlAction,live:&dyn Fn()->bool)->ControlReply {
+        if !live(){return self.reply(id,ControlState::Rejected,Some("control_peer_revoked"));}
         if !identifier(id) {return self.reply("invalid",ControlState::Rejected,Some("invalid_control_intent"));}
         if self.poisoned {return self.reply(id,ControlState::Blocked,Some("authority_requires_recovery"));}
         if epoch!=self.epoch {return self.reply(id,ControlState::Rejected,Some("control_identity_or_epoch_denied"));}
@@ -332,12 +342,16 @@ impl<E: ControlEffects> ControlRuntime<E> {
         if expected_revision!=self.revision() {return self.reply(id,ControlState::Rejected,Some("stale_revision"));}
         let now=Instant::now();
         let wire=match self.issue_confirmation("operator",id,normalized,MAX_CONFIRMATION_TTL,now) {Ok(value)=>value.into_private_wire(),Err(code)=>return self.reply(id,ControlState::Rejected,Some(code))};
-        self.handle_admitted(AdmissionPeer::Operator(epoch),&wire,now)
+        self.handle_admitted(AdmissionPeer::Operator(epoch,live),&wire,now)
     }
     pub(crate) fn handle(&mut self, peer:&AuthenticatedBrokerPeer, value:&Value) -> ControlReply { self.handle_at(peer,value,Instant::now()) }
     /// Trusted native-plan path only. Remote schemas cannot choose this origin,
     /// issue approvals, change configuration or broaden the confirmed scope.
     pub(crate) fn handle_organizer(&mut self,id:&str,epoch:Clock,action:ControlAction)->ControlReply {
+        self.handle_organizer_live(id,epoch,action,&||true)
+    }
+    pub(crate) fn handle_organizer_live(&mut self,id:&str,epoch:Clock,action:ControlAction,live:&dyn Fn()->bool)->ControlReply {
+        if !live(){return self.reply(id,ControlState::Rejected,Some("control_peer_revoked"));}
         if epoch!=self.epoch || !matches!(&action,ControlAction::StartRecording(_)|ControlAction::StopRecording(_)) {
             return self.reply(id,ControlState::Rejected,Some("confirmation_denied"));
         }
@@ -345,13 +359,16 @@ impl<E: ControlEffects> ControlRuntime<E> {
             Ok(approval)=>approval.into_private_wire(),
             Err(code)=>return self.reply(id,ControlState::Rejected,Some(code)),
         };
-        self.handle_admitted(AdmissionPeer::Organizer(epoch),&wire,Instant::now())
+        self.handle_admitted(AdmissionPeer::Organizer(epoch,live),&wire,Instant::now())
     }
 
     /// After one native click, journal the folder intent before creating the
     /// single child directory. The picker root is frozen across proposal/click.
     /// Existing canonical-root/reparse checks run before and after creation.
     pub(crate) fn select_organizer_subfolder(&mut self,id:&str,root:&ApprovedFolder,name:&str)->Result<(),&'static str> {
+        self.select_organizer_subfolder_live(id,root,name,&||true)
+    }
+    pub(crate) fn select_organizer_subfolder_live(&mut self,id:&str,root:&ApprovedFolder,name:&str,live:&dyn Fn()->bool)->Result<(),&'static str> {
         let bytes=name.as_bytes();
         if bytes.is_empty() || bytes.len()>64 || !bytes[0].is_ascii_alphanumeric()
             || !bytes.iter().all(|byte|byte.is_ascii_alphanumeric()||b" _-".contains(byte)) {return Err("folder_name_invalid");}
@@ -362,14 +379,16 @@ impl<E: ControlEffects> ControlRuntime<E> {
         let effect_id=format!("ctl.{}",sha256_hex(id.as_bytes()));
         let args=canonical_bytes(&json!({"root_sha256":sha256_hex(parent.to_string_lossy().as_bytes()),"folder_name":name})).map_err(|_|"unavailable")?;
         let record=ControlIntentRecord{request_id:id.into(),identity_sha256:sha256_hex(b"organizer"),operation:ControlOperation::SetFolder,args_sha256:sha256_hex(&args),capsule_id:None,expected_revision:self.revision(),effect_id:effect_id.clone()};
+        if !live(){return Err("unavailable");}
         if self.journal.append_confirmed_intent(record.clone()).is_err(){self.poisoned=true;return Err("disk_write_failed");}
         self.history.insert(id.into(),Historic{intent:record,outcome:None,in_flight:true});
         let admitted=(||{
             let _guards=guard_folder_chain(&parent)?;
             root.revalidate()?;
+            if !live(){return Err("unavailable");}
             match std::fs::symlink_metadata(&child) {
                 Ok(_)=>{},
-                Err(error) if error.kind()==std::io::ErrorKind::NotFound=>std::fs::create_dir(&child).map_err(|_|"disk_write_failed")?,
+                Err(error) if error.kind()==std::io::ErrorKind::NotFound=>{if !live(){return Err("unavailable");}std::fs::create_dir(&child).map_err(|_|"disk_write_failed")?;},
                 Err(_)=>return Err("folder_not_authorized"),
             }
             let canonical=canonical_folder(&child)?;

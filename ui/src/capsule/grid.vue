@@ -1,15 +1,23 @@
-<script setup>
+<script>
 // @ts-check
-/**
- * @file Cafe desktop wall: dockable, labelled presentation for host-issued
- * capsule ids. The component never creates ids, capsules, counts, previews or
- * authority calls; unknown availability is never rendered as zero.
+import { computed, defineComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+/** Largest equal 16:9 tiles fitting the measured area, including gaps.
+ * @param {number} count @param {number} width @param {number} height @param {number} [gap]
  */
-
-import { computed, defineComponent, h, markRaw, onBeforeUnmount, onMounted, ref, useSlots, watch } from 'vue';
-import { DockviewVue } from 'dockview-vue';
-import 'dockview-vue/dist/styles/dockview.css';
-import '../workspace.css';
+export function galleryLayout(count, width, height, gap = 8) {
+  const empty = { columns: 0, rows: 0, width: 0, height: 0 };
+  if (!Number.isInteger(count) || count <= 0 || !Number.isFinite(width) || width <= 0
+    || !Number.isFinite(height) || height <= 0 || !Number.isFinite(gap) || gap < 0) return empty;
+  let best = empty;
+  for (let columns = 1; columns <= count; columns += 1) {
+    const rows = Math.ceil(count / columns);
+    const tileWidth = Math.min((width - gap * (columns - 1)) / columns,
+      (height - gap * (rows - 1)) / rows * 16 / 9);
+    if (tileWidth > best.width) best = { columns, rows, width: tileWidth, height: tileWidth * 9 / 16 };
+  }
+  return best;
+}
+/** Display-only gallery. Host ids and slot contents remain authoritative. */
 
 /**
  * @typedef {object} CapsuleGridValidation
@@ -17,339 +25,194 @@ import '../workspace.css';
  * @property {string[]} ids
  */
 
-const props = defineProps({
-  /** Exact host-issued capsule ids, unique and already admitted by the parent. */
-  capsuleIDs: {
-    type: Array,
-    required: true,
-    validator: (value) => Array.isArray(value)
-      && value.every((id) => typeof id === 'string'
-        && id.length > 0
-        && id === id.trim()
-        && !/\s/.test(id)
-        && !/^\d+$/.test(id))
-      && new Set(value).size === value.length,
+export default defineComponent({
+  props: {
+    /** Exact host-issued capsule ids, unique and already admitted by the parent. */
+    capsuleIDs: {
+      type: Array,
+      required: true,
+      validator: (value) => Array.isArray(value)
+        && value.every((id) => typeof id === 'string'
+          && id.length > 0
+          && id === id.trim()
+          && !/\s/.test(id)
+          && !/^\d+$/.test(id))
+        && new Set(value).size === value.length,
+    },
+    /** False means the authoritative capsule view is unavailable, not empty. */
+    available: { type: Boolean, required: true },
+    /** True while waiting for the first authoritative snapshot or while runtime is starting. */
+    starting: { type: Boolean, default: false },
+    /** Parent disables shortcuts while a dialog or approval needs attention. */
+    keyboardEnabled: { type: Boolean, default: true },
+    /** Display-only accessible tile labels keyed by capsule id. */
+    tabLabels: { type: Object, default: () => ({}) },
   },
-  /** False means the authoritative capsule view is unavailable, not empty. */
-  available: { type: Boolean, required: true },
-  /** True while waiting for the first authoritative snapshot or while runtime is starting. */
-  starting: { type: Boolean, default: false },
-  /** Display-only tab labels keyed by capsuleId ("slot-N · person label"). */
-  tabLabels: { type: Object, default: () => ({}) },
-});
+  emits: ['add-capsule'],
+  setup(props, { emit }) {
 
-/**
- * @param {string} id
- * @returns {string}
- */
-function tabTitleFor(id) {
-  const labels = props.tabLabels;
-  if (labels && typeof labels === 'object' && typeof labels[id] === 'string' && labels[id].trim().length > 0) {
-    return labels[id];
-  }
-  return id;
-}
-
-/**
- * @param {unknown} value
- * @returns {boolean}
- */
-function isExactCapsuleId(value) {
-  return typeof value === 'string' && value.length > 0 && value === value.trim()
-    && !/\s/.test(value) && !/^\d+$/.test(value);
-}
-
-/** @type {import('vue').ComputedRef<CapsuleGridValidation>} */
-const validation = computed(() => {
-  const ids = props.capsuleIDs;
-  if (!Array.isArray(ids)) return { ok: false, ids: [] };
-  const seen = new Set();
-  for (const id of ids) {
-    if (!isExactCapsuleId(id) || seen.has(id)) return { ok: false, ids: [] };
-    seen.add(id);
-  }
-  return { ok: true, ids: [...ids] };
-});
-
-/** @type {import('vue').ComputedRef<'starting' | 'ready' | 'empty' | 'unavailable' | 'invalid'>} */
-const gridState = computed(() => {
-  if (props.starting === true && props.available !== true) return 'starting';
-  if (props.available !== true) return 'unavailable';
-  if (validation.value.ok !== true) return 'invalid';
-  return validation.value.ids.length === 0 ? 'empty' : 'ready';
-});
-
-/** @type {import('vue').ComputedRef<string[]>} */
-const capsules = computed(() => (gridState.value === 'ready' ? validation.value.ids : []));
-
-const isStarting = computed(() => gridState.value === 'starting');
-const isUnavailable = computed(() => gridState.value === 'unavailable');
-const isInvalid = computed(() => gridState.value === 'invalid');
-const isEmpty = computed(() => gridState.value === 'empty');
-const isReady = computed(() => gridState.value === 'ready');
-
-const emit = defineEmits(['add-capsule']);
-const slots = useSlots();
-const region = ref(null);
-const availableWidth = ref(960);
-// 2 tiles side by side (2x1), 4 in 2x2, up to 12 in 4x3.
-const columns = computed(() => Math.max(1, Math.min(4, Math.ceil(Math.sqrt(capsules.value.length || 1)))));
-const wallRows = computed(() => Math.max(1, Math.ceil(capsules.value.length / columns.value)));
-let resizeObserver = null;
-/** @type {import('dockview-core').DockviewApi | null} */
-let desktopApi = null;
-/** @type {{ dispose: () => void } | null} */
-let removalSubscription = null;
-/** @type {{ dispose: () => void } | null} */
-let groupSubscription = null;
-let disposed = false;
-let reconciling = false;
-const panelId = (id) => `capsule:${id}`;
-
-/** @param {any} group */
-function hideGroupHeader(group) {
-  if (!group) return;
-  if (group.header) group.header.hidden = true;
-  if (group.model?.header) group.model.header.hidden = true;
-  group.relayout?.();
-}
-
-function hideAllGroupHeaders() {
-  if (!desktopApi) return;
-  for (const group of desktopApi.groups || []) {
-    hideGroupHeader(group);
-  }
-  for (const panel of desktopApi.panels || []) {
-    hideGroupHeader(panel?.group);
-  }
-}
-
-// Dockview's Vue renderer supplies { params: { params, api, containerApi } }.
-// Content remains the parent's genuine capsule view; this wall owns no verbs.
-const CapsulePanel = markRaw(defineComponent({
-  props: { params: { type: Object, required: true } },
-  setup(router) {
-    const visible = ref(router.params.api?.isVisible !== false);
-    const subscription = router.params.api?.onDidVisibilityChange?.(event => { visible.value = event.isVisible === true; });
-    onBeforeUnmount(() => subscription?.dispose());
-    return () => {
-      const id = router.params.params?.capsuleId;
-      if (!isReady.value || !capsules.value.includes(id)) return null;
-      return h('div', { class: 'cafe-desktop-panel', 'data-capsule-id': id },
-        slots.capsule ? slots.capsule({ id, visible: visible.value }) : [
-          h('p', { class: 'cafe-capsule-grid-fallback' }, `No capsule view supplied. ${id}`),
-        ]);
-    };
-  },
-}));
-const CapsuleTab = markRaw(defineComponent({
-  props: { params: { type: Object, required: true } },
-  setup(tab) {
-    return () => {
-      const id = tab.params.params?.capsuleId || '';
-      const label = tabTitleFor(id);
-      return h('span', {
-        class: 'cafe-desktop-tab', title: label,
-      }, label);
-    };
-  },
-}));
-const panelComponents = markRaw({ CapsulePanel });
-const tabComponents = markRaw({ CapsuleTab });
-
-function reconcile() {
-  if (!desktopApi || disposed || reconciling) return;
-  reconciling = true;
-  try {
-    const wanted = new Set(capsules.value.map(panelId));
-    for (const panel of [...desktopApi.panels]) {
-      if (!wanted.has(panel.id)) desktopApi.removePanel(panel);
+    /**
+     * @param {unknown} value
+     * @returns {value is string}
+     */
+    function isExactCapsuleId(value) {
+      return typeof value === 'string' && value.length > 0 && value === value.trim()
+        && !/\s/.test(value) && !/^\d+$/.test(value);
     }
-    for (const [index, id] of capsules.value.entries()) {
-      const exactPanelId = panelId(id);
-      const label = tabTitleFor(id);
-      const existing = desktopApi.getPanel(exactPanelId);
-      if (!existing) {
-        const panel = desktopApi.addPanel({
-          id: exactPanelId, component: 'CapsulePanel', tabComponent: 'CapsuleTab',
-          title: label, params: { capsuleId: id }, renderer: 'always',
-          minimumWidth: 160, minimumHeight: 120,
-          ...(index >= columns.value
-            ? { position: { referencePanel: panelId(capsules.value[index - columns.value]), direction: 'below' } }
-            : index > 0 ? { position: { referencePanel: panelId(capsules.value[index - 1]), direction: 'right' } } : {}),
-        });
-        hideGroupHeader(panel?.group);
-      } else {
-        existing.api?.setTitle?.(label);
-        hideGroupHeader(existing?.group);
+
+    /** @type {import('vue').ComputedRef<CapsuleGridValidation>} */
+    const validation = computed(() => {
+      const ids = props.capsuleIDs;
+      if (!Array.isArray(ids)) return { ok: false, ids: [] };
+      /** @type {string[]} */
+      const admitted = [];
+      const seen = new Set();
+      for (const id of ids) {
+        if (!isExactCapsuleId(id) || seen.has(id)) return { ok: false, ids: [] };
+        seen.add(id);
+        admitted.push(id);
       }
-    }
-    hideAllGroupHeaders();
-  } finally { reconciling = false; }
-}
+      return { ok: true, ids: admitted };
+    });
 
-/** Arrange existing panels into a grid and hide group tab headers. */
-function arrange() {
-  if (!desktopApi || disposed || reconciling) return;
-  const panels = capsules.value.map(id => desktopApi.getPanel(panelId(id))).filter(Boolean);
-  hideAllGroupHeaders();
-  if (!panels.length || typeof panels[0].api?.moveTo !== 'function') return;
-  reconciling = true;
-  try {
-    for (const panel of panels.slice(1)) panel.api.moveTo({ group: panels[0].group, position: 'center', skipSetActive: true });
-    for (let index = 1; index < panels.length; index += 1) {
-      const panel = panels[index];
-      if (index < columns.value) panel.api.moveTo({ group: panels[index - 1].group, position: 'right', skipSetActive: true });
-      else panel.api.moveTo({ group: panels[index - columns.value].group, position: 'bottom', skipSetActive: true });
-    }
-    hideAllGroupHeaders();
-    const width = Math.max(160, Math.floor((desktopApi.width || availableWidth.value) / columns.value));
-    const height = Math.max(120, Math.floor((desktopApi.height || 540) / wallRows.value));
-    for (const panel of panels) panel.api.setSize?.({ width, height });
-  } finally { reconciling = false; }
-}
+    /** @type {import('vue').ComputedRef<'starting' | 'ready' | 'empty' | 'unavailable' | 'invalid'>} */
+    const gridState = computed(() => {
+      if (props.starting === true && props.available !== true) return 'starting';
+      if (props.available !== true) return 'unavailable';
+      if (validation.value.ok !== true) return 'invalid';
+      return validation.value.ids.length === 0 ? 'empty' : 'ready';
+    });
 
-function onReady(event) {
-  desktopApi = event.api;
-  groupSubscription = desktopApi.onDidAddGroup?.(group => {
-    hideGroupHeader(group);
-  }) || null;
-  removalSubscription = desktopApi.onDidRemovePanel(() => {
-    // A local close never removes a capsule. Restore from the authoritative ids.
-    if (!reconciling) queueMicrotask(() => { reconcile(); arrange(); });
-  });
-  reconcile();
-  arrange();
-}
-watch(() => capsules.value.join('\0'), () => { reconcile(); arrange(); });
-watch(() => props.tabLabels, () => { reconcile(); }, { deep: true });
-watch(columns, arrange);
-onMounted(() => {
-  if (typeof ResizeObserver === 'undefined' || !region.value) return;
-  resizeObserver = new ResizeObserver(entries => {
-    const width = entries[0]?.contentRect.width;
-    if (typeof width === 'number' && width > 0) availableWidth.value = width;
-  });
-  resizeObserver.observe(region.value);
-});
-onBeforeUnmount(() => {
-  disposed = true;
-  resizeObserver?.disconnect();
-  removalSubscription?.dispose();
-  groupSubscription?.dispose();
-  desktopApi = null;
+    /** @type {import('vue').ComputedRef<string[]>} */
+    const capsules = computed(() => (gridState.value === 'ready' ? validation.value.ids : []));
+
+    const isStarting = computed(() => gridState.value === 'starting');
+    const isUnavailable = computed(() => gridState.value === 'unavailable');
+    const isInvalid = computed(() => gridState.value === 'invalid');
+    const isEmpty = computed(() => gridState.value === 'empty');
+    const isReady = computed(() => gridState.value === 'ready');
+
+    /** @type {import('vue').Ref<HTMLElement | null>} */
+    const region = ref(null);
+    const area = ref({ width: 0, height: 0 });
+    const focusedId = ref('');
+    const gap = 8;
+    const layout = computed(() => galleryLayout(capsules.value.length, area.value.width, area.value.height, gap));
+    /** @type {ResizeObserver | null} */
+    let resizeObserver = null;
+
+    // Focus changes coordinates only: keyed capsule views never leave the wall.
+    const positions = computed(() => {
+      const { width, height } = area.value;
+      const ids = capsules.value;
+      const focused = ids.includes(focusedId.value) ? focusedId.value : '';
+      let bounds = { x: 0, y: 0, width, height };
+      /** @type {Record<string, {x: number, y: number, width: number, height: number}>} */
+      const boxes = Object.create(null);
+      let remaining = ids;
+      if (focused && ids.length > 1) {
+        const stripHeight = Math.max(0, (height - gap) * 0.24);
+        const mainHeight = Math.max(0, height - gap - stripHeight);
+        const main = galleryLayout(1, width, mainHeight, gap);
+        boxes[focused] = { x: (width - main.width) / 2, y: (mainHeight - main.height) / 2, ...main };
+        bounds = { x: 0, y: mainHeight + gap, width, height: stripHeight };
+        remaining = ids.filter(id => id !== focused);
+      }
+      // Keep the other tiles in one horizontal strip; scroll only this viewport.
+      const stripWidth = bounds.height * 16 / 9;
+      const grid = focused && ids.length > 1
+        ? { columns: remaining.length, rows: 1, width: stripWidth, height: bounds.height }
+        : galleryLayout(remaining.length, bounds.width, bounds.height, gap);
+      bounds.width = Math.max(bounds.width, grid.columns * grid.width + Math.max(0, grid.columns - 1) * gap);
+      remaining.forEach((id, index) => {
+        const row = Math.floor(index / (grid.columns || 1));
+        const col = index % (grid.columns || 1);
+        const rowCount = Math.min(grid.columns, remaining.length - row * grid.columns);
+        boxes[id] = {
+          x: bounds.x + (bounds.width - rowCount * grid.width - Math.max(0, rowCount - 1) * gap) / 2 + col * (grid.width + gap),
+          y: bounds.y + (bounds.height - grid.rows * grid.height - Math.max(0, grid.rows - 1) * gap) / 2 + row * (grid.height + gap),
+          width: grid.width, height: grid.height,
+        };
+      });
+      return boxes;
+    });
+    const trackWidth = computed(() => Math.max(area.value.width,
+      ...Object.values(positions.value).map(box => box.x + box.width)));
+    /** @param {string} id */
+    function tileStyle(id) {
+      const box = positions.value[id];
+      return { position: focusedId.value === id ? 'sticky' : 'absolute', left: `${box.x}px`, top: `${box.y}px`, width: `${box.width}px`, height: `${box.height}px` };
+    }
+    /** @param {string} id */
+    function toggleFocus(id) {
+      focusedId.value = focusedId.value === id ? '' : id;
+    }
+    /** Display-only shortcuts never dispatch authority commands. @param {KeyboardEvent} event */
+    function onKeydown(event) {
+      if (!props.keyboardEnabled || !isReady.value || event.defaultPrevented || event.repeat
+        || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      const target = /** @type {Element|null} */ (event.target);
+      if (typeof target?.closest === 'function'
+        && target.closest('input, textarea, select, [contenteditable], [role="textbox"], [role="dialog"], [aria-modal="true"], [inert]')) return;
+      if (event.key === 'Escape' && focusedId.value !== '') {
+        focusedId.value = ''; event.preventDefault(); return;
+      }
+      if (!/^[1-9]$/.test(event.key)) return;
+      const id = capsules.value[Number(event.key) - 1];
+      if (id === undefined) return;
+      focusedId.value = id; event.preventDefault();
+    }
+    watch(capsules, ids => { if (!ids.includes(focusedId.value)) focusedId.value = ''; });
+    onMounted(() => {
+      if (typeof document !== 'undefined') document.addEventListener('keydown', onKeydown);
+      if (typeof ResizeObserver === 'undefined' || !region.value) return;
+      resizeObserver = new ResizeObserver(entries => {
+        const rect = entries[0]?.contentRect;
+        if (rect && Number.isFinite(rect.width) && Number.isFinite(rect.height)) {
+          area.value = { width: Math.max(0, rect.width), height: Math.max(0, rect.height) };
+        }
+      });
+      resizeObserver.observe(region.value);
+    });
+    onBeforeUnmount(() => {
+      resizeObserver?.disconnect();
+      if (typeof document !== 'undefined') document.removeEventListener('keydown', onKeydown);
+    });
+    return { region, layout, gridState, focusedId, isStarting, isUnavailable, isInvalid, isEmpty,
+      capsules, isReady, trackWidth, tileStyle, toggleFocus, emit };
+  },
 });
 </script>
 
 <template>
-  <section ref='region' class='cafe-capsule-grid-region cafe-desktop' aria-label='Capsules' :data-state='gridState' :data-wall-columns='columns' :data-wall-rows='wallRows'>
-    <div v-if='isReady' class='cafe-wall-layout-tools'><span>{{ capsules.length }} / 12 capsules</span><button class='cafe-button' type='button' @click='arrange'>Arrange wall</button></div>
-    <p v-if='isStarting' class='cafe-starting-line' role='status'>Starting Café...</p>
-    <p v-else-if='isUnavailable' class='cafe-capsule-grid-note' role='status'>
-      Capsules unavailable.
-    </p>
-    <p v-else-if='isInvalid' class='cafe-capsule-grid-note' role='status'>
-      Capsule list unavailable: expected exact, unique host-issued identifiers.
-    </p>
-    <div v-else-if='isEmpty' class='cafe-desktop-empty'>
-      <button class='cafe-button cafe-empty-add-button' type='button' @click="emit('add-capsule')">Add window</button>
-      <p class='cafe-empty-instructions' role='status'>No capsules yet — pop out a Discord stream or camera window and click Add window.</p>
+  <section class="cafe-gallery" aria-label="Capsules" :data-state="gridState" :data-wall-columns="layout.columns" :data-wall-rows="layout.rows" :data-focused-id="focusedId">
+    <p v-if="isStarting" class="cafe-starting-line" role="status">Starting Café...</p>
+    <p v-else-if="isUnavailable" class="cafe-capsule-grid-note" role="status">Capsules unavailable.</p>
+    <p v-else-if="isInvalid" class="cafe-capsule-grid-note" role="status">Capsule list unavailable: expected exact, unique host-issued identifiers.</p>
+    <div v-else-if="isEmpty" class="cafe-desktop-empty">
+      <button class="cafe-button cafe-empty-add-button" type="button" @click="emit('add-capsule')">Add window</button>
+      <p class="cafe-empty-instructions" role="status">No capsules yet — pop out a Discord stream or camera window and click Add window.</p>
     </div>
-    <DockviewVue
-      v-show='isReady'
-      class='cafe-desktop-wall'
-      :components='panelComponents'
-      :tab-components='tabComponents'
-      :disable-floating-groups='true'
-      @ready='onReady'
-    />
+    <div ref="region" class="cafe-gallery-viewport" :class="{ 'cafe-gallery-focus-view': focusedId !== '' }">
+      <div class="cafe-gallery-track" :style="{ width: `${trackWidth}px` }">
+        <div v-for="id in capsules" :key="id" class="cafe-gallery-tile" :class="{ 'cafe-gallery-focused': focusedId === id }" :style="tileStyle(id)" :data-capsule-id="id" :aria-label="tabLabels[id] || id">
+          <slot name="capsule" :id="id" :visible="isReady" :focused="focusedId === id" :toggle-focus="() => toggleFocus(id)">
+            <p>No capsule view supplied. {{ id }}</p>
+          </slot>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
 <style scoped>
-.cafe-capsule-grid-region {
-  min-width: 0;
-  color: var(--fg);
-  font-family: var(--font-body);
-}
-
-.cafe-starting-line {
-  margin: auto;
-  padding: 0;
-  color: var(--muted);
-  font-size: var(--text-sm, 0.875rem);
-  line-height: var(--leading-body, 1.5);
-  text-align: center;
-}
-
-.cafe-capsule-grid-note {
-  margin: 0;
-  padding: var(--space-3, 12px) var(--space-4, 16px);
-  border: var(--cafe-structure-semantic-border-width, 1px) dashed var(--border-soft, var(--border, currentColor));
-  border-radius: var(--radius-sm, 4px);
-  background: var(--surface);
-  color: var(--muted);
-  font-size: var(--text-sm, 0.875rem);
-  line-height: var(--leading-body, 1.5);
-}
-
-.cafe-empty-instructions {
-  margin: 0;
-  padding: 0;
-  color: var(--muted);
-  font-size: var(--text-sm, 0.875rem);
-  line-height: var(--leading-body, 1.5);
-  text-align: center;
-}
-
-.cafe-capsule-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
-  gap: var(--space-3, 12px);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.cafe-capsule-grid-cell {
-  display: grid;
-  min-width: 0;
-  align-content: start;
-}
-
-.cafe-capsule-grid-fallback {
-  display: grid;
-  gap: var(--space-2, 8px);
-  align-content: start;
-  min-width: 0;
-  padding: var(--space-4, 16px);
-  border: var(--cafe-structure-semantic-border-width, 1px) solid var(--border-soft, var(--border, currentColor));
-  border-radius: var(--radius-sm, 4px);
-  background: var(--surface);
-}
-
-.cafe-capsule-grid-fallback-title {
-  color: var(--muted);
-  font-size: var(--text-xs, 0.75rem);
-}
-
-.cafe-capsule-grid-fallback-id {
-  min-width: 0;
-  color: var(--fg);
-  font-family: var(--font-mono);
-  font-size: var(--text-sm, 0.875rem);
-  overflow-wrap: anywhere;
-}
-
-.cafe-capsule-grid-fallback-note {
-  color: var(--meta);
-  font-size: var(--text-xs, 0.75rem);
-  line-height: var(--leading-body, 1.5);
-}
-
-@media (max-width: 30rem) {
-  .cafe-capsule-grid {
-    gap: var(--space-2, 8px);
-  }
-}
+.cafe-gallery { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; color: var(--fg); }
+.cafe-gallery-viewport { position: absolute; inset: 0; overflow: hidden; }
+.cafe-gallery-focus-view { overflow-x: auto; }
+.cafe-gallery-track { position: relative; height: 100%; }
+.cafe-gallery-tile { position: absolute; min-width: 0; min-height: 0; overflow: hidden; border-radius: var(--radius-sm); outline: 1px solid var(--border); }
+.cafe-gallery-focused { outline-color: var(--accent); }
+.cafe-starting-line, .cafe-capsule-grid-note { text-align: center; color: var(--muted); }
+.cafe-desktop-empty { position: relative; z-index: 1; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-3); }
+.cafe-empty-instructions { margin: 0; color: var(--muted); text-align: center; font-size: var(--text-sm); }
 </style>

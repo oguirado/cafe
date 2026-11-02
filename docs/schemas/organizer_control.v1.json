@@ -53,6 +53,22 @@
         "op",
         "enabled"
       ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "set_ask_before_ai_actions"
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "op",
+        "enabled"
+      ]
     }
   ]
 }

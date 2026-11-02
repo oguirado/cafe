@@ -152,7 +152,7 @@ class HostTests(unittest.IsolatedAsyncioTestCase):
                             "op": "send_capsule", "capsule_id": "guest", "feeds": FEEDS, "crops": {"game": {"x": 0, "y": 0, "width": 1280, "height": 720}, "camera": {"x": 10, "y": 20, "width": 320, "height": 240}}}))
                         self.assertTrue(answer["body"]["accepted"])
                     self.assertEqual(len(obs.inputs), 2)
-                    self.assertEqual(obs.scenes, {"Café"})
+                    self.assertEqual(obs.scenes, {"Café · guest"})
                     answer = await self.exchange(process, frame("service_request", {"op": "close"}))
                     self.assertTrue(answer["body"]["accepted"])
                     self.assertEqual(answer["body"]["obs"], "closed")

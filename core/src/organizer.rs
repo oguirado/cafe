@@ -146,9 +146,14 @@ impl Organizer {
 
     pub(crate) fn propose_stop_all(&mut self, capsule_ids: Vec<String>, now: Instant, unix_ms: u64) -> Result<String, &'static str> {
         self.ready(now)?;
-        if capsule_ids.is_empty() || capsule_ids.len() > MAX_CAPSULES || capsule_ids.iter().any(|id| !identifier(id))
+        if capsule_ids.len() > MAX_CAPSULES || capsule_ids.iter().any(|id| !identifier(id))
             || capsule_ids.iter().collect::<BTreeSet<_>>().len() != capsule_ids.len() { return Err("unavailable"); }
         self.insert(PlanKind::StopAll { capsule_ids }, now, unix_ms)
+    }
+
+    pub(crate) fn pending_empty_stop(&self, plan_id: &str, now: Instant) -> bool {
+        self.pending.as_ref().is_some_and(|plan| plan.plan_id == plan_id && now < plan.deadline
+            && matches!(&plan.kind, PlanKind::StopAll { capsule_ids } if capsule_ids.is_empty()))
     }
 
     pub(crate) fn propose_send_to_obs(&mut self, capsules: Vec<(String, String)>, obs_ready: bool, now: Instant, unix_ms: u64) -> Result<String, &'static str> {
@@ -160,13 +165,18 @@ impl Organizer {
         self.insert(PlanKind::SendToObs { capsules }, now, unix_ms)
     }
 
-    /// Call only from the private local operator channel after its explicit
-    /// click. This consumes a pending plan; it does not grant control approval.
+    /// Called by the authority after local Confirm or direct-mode admission.
+    /// This consumes a pending plan; it does not grant control approval.
     pub(crate) fn take_confirmed(&mut self, plan_id: &str, now: Instant) -> Result<PendingPlan, &'static str> {
         self.expire(now);
         if !self.pending.as_ref().is_some_and(|plan| plan.plan_id == plan_id) { return Err("plan_unknown"); }
         let plan = self.pending.take().ok_or("plan_unknown")?;
-        self.results.get_mut(plan_id).ok_or("plan_unknown")?.state = PlanState::Executing;
+        // A confirmed empty stop has no actor outcomes to wait for. Other plans
+        // remain executing until their actual per-window outcomes arrive.
+        self.results.get_mut(plan_id).ok_or("plan_unknown")?.state =
+            if matches!(&plan.kind, PlanKind::StopAll { capsule_ids } if capsule_ids.is_empty()) {
+                PlanState::Completed
+            } else { PlanState::Executing };
         Ok(plan)
     }
 
@@ -400,10 +410,39 @@ fn auto_anchor_is_off_at_start_and_poll_rate_is_bounded_across_toggles() {
 }
 
 #[test]
+fn empty_stop_completes_only_after_confirmation_and_keeps_existing_gates() {
+    let now = Instant::now();
+    let mut organizer = Organizer::new(Clock(77));
+    let id = organizer.propose_stop_all(vec![], now, 0).expect("empty stop must be a valid no-op plan");
+    assert!(organizer.pending_empty_stop(&id, now));
+    assert!(!organizer.pending_empty_stop("wrong-plan", now));
+    assert!(!organizer.pending_empty_stop(&id, now + PLAN_TTL));
+    assert_eq!(organizer.plan_result(&id).unwrap()["state"], "pending_confirmation");
+    assert_eq!(organizer.propose_stop_all(vec![], now, 0), Err("plan_pending"));
+    assert!(organizer.take_confirmed("wrong-plan", now).is_err());
+    organizer.take_confirmed(&id, now).unwrap();
+    assert_eq!(organizer.plan_result(&id).unwrap(), serde_json::json!({"plan_id":id,"state":"completed","windows":[]}));
+    assert!(organizer.projection().is_null());
+    assert!(organizer.take_confirmed(&id, now).is_err());
+    let next = organizer.propose_stop_all(vec![], now, 0).unwrap();
+    assert_ne!(id, next);
+    assert!(organizer.expire(now + PLAN_TTL));
+    assert!(organizer.take_confirmed(&next, now + PLAN_TTL).is_err());
+    assert_eq!(organizer.plan_result(&next).unwrap()["state"], "expired");
+    assert_eq!(organizer.propose_stop_all(vec![], now, u64::MAX), Err("unavailable"));
+    assert!(organizer.projection().is_null());
+    let nonempty = organizer.propose_stop_all(vec!["slot-1".into()], now, 0).unwrap();
+    organizer.take_confirmed(&nonempty, now).unwrap();
+    assert_eq!(organizer.plan_result(&nonempty), Err("unavailable"));
+    organizer.set_window_result(&nonempty, 0, Some("slot-1".into()), "stopped").unwrap();
+    assert_eq!(organizer.plan_result(&nonempty).unwrap()["state"], "completed");
+}
+
+#[test]
 fn stop_plan_limits_and_result_states_are_closed() {
     let now = Instant::now();
     let mut organizer = Organizer::new(Clock(77));
-    for ids in [vec![], vec!["slot-1".into(), "slot-1".into()], vec!["bad/id".into()], (0..MAX_CAPSULES + 1).map(|index| format!("slot-{index}")).collect()] {
+    for ids in [vec!["slot-1".into(), "slot-1".into()], vec!["bad/id".into()], (0..MAX_CAPSULES + 1).map(|index| format!("slot-{index}")).collect()] {
         assert_eq!(organizer.propose_stop_all(ids, now, 0), Err("unavailable"));
     }
     let id = organizer.propose_stop_all(vec!["slot-1".into()], now, 0).unwrap();

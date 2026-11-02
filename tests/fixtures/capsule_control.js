@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { parse, compileScript } = require('@vue/compiler-sfc');
+const { parse, compileScript, compileTemplate } = require('@vue/compiler-sfc');
 
 // Public Vue v-model checks these DOM types even with a custom renderer.
 // This fixture root is neither a Document nor a ShadowRoot and has no focus.
@@ -48,8 +48,19 @@ function load() {
       compiledFiles.set(file, target);
       const { descriptor, errors } = parse(fs.readFileSync(file, 'utf8'), { filename: file });
       assert.equal(errors.length, 0, file);
-      let code = compileScript(descriptor, { id: target, inlineTemplate: true,
-        templateOptions: { compilerOptions: { hoistStatic: false } } }).content;
+      const compiled = compileScript(descriptor, { id: target, inlineTemplate: true,
+        templateOptions: { compilerOptions: { hoistStatic: false } } });
+      let code = compiled.content;
+      // Standard-script components export pure helpers as well as their view.
+      // Compile their genuine template, just as the production Vue plugin does.
+      if (!descriptor.scriptSetup && descriptor.template) {
+        const template = compileTemplate({ source: descriptor.template.content, filename: file, id: target,
+          compilerOptions: { bindingMetadata: compiled.bindings, hoistStatic: false } });
+        assert.deepEqual(template.errors, []);
+        code = code.replace('export default', 'const __fixtureComponent =') + '\n'
+          + template.code.replace('export function render', 'function render')
+          + '\n__fixtureComponent.render = render; export default __fixtureComponent;\n';
+      }
       code = code.replace(/import\s*['"][^'"]+\.css['"];?/g, '');
       const imports = [...code.matchAll(/(?:from\s*|import\s*)['"]([^'"]+)['"]/g)].map(match => match[1]);
       for (const specifier of new Set(imports)) {
@@ -70,6 +81,7 @@ function load() {
     }
     const appModule = compileVue(APP);
     const browserModule = compileVue(path.join(ROOT, 'ui/src/windows.vue'));
+    const gridModule = compileVue(path.join(ROOT, 'ui/src/capsule/grid.vue'));
     // Only the third-party presentation shell is substituted. Authored grid,
     // reconciliation, panel component and parent slot execute unchanged.
     fs.writeFileSync(path.join(root, 'Dockview.stub.mjs'), `
@@ -109,8 +121,9 @@ export const DockviewVue = defineComponent({
     const url = (/** @type {string} */ rel) => pathToFileURL(path.join(root, rel)).href;
     const [app, control, runtime] = await Promise.all([import(url(appModule)), import(url('control.mjs')), import(url('runtime.mjs'))]);
     const browser = await import(url(browserModule));
+    const grid = await import(url(gridModule));
     const dockview = await import(url('Dockview.stub.mjs'));
-    return { App: app.default, WindowBrowser: browser.default, presentations: dockview.presentations, probe: control.probe, ...runtime };
+    return { App: app.default, GalleryGrid: grid.default, galleryLayout: grid.galleryLayout, WindowBrowser: browser.default, presentations: dockview.presentations, probe: control.probe, ...runtime };
   })();
   return loaded;
 }

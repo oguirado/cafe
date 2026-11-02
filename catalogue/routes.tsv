@@ -20,6 +20,7 @@ js-shell-preload	src/preload/index.js
 js-shell-security	src/main/shellSecurity.js
 js-shell-security-p2	src/main/shellSecurity.js
 js-shell-security-p3	src/main/shellSecurity.js
+judges	docs/JUDGES.md
 provenance	docs/ui/PROVENANCE.md
 py-authority-channel	connectors/cafe/authority_channel.py
 py-cafe-mcp	connectors/cafe_mcp.py

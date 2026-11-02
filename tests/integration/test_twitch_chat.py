@@ -283,6 +283,33 @@ class IrcPeer(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(kwargs['proxy'])
         self.assertIsInstance(storage._ExactConnect.process_redirect(None, None), storage.ChatError)
 
+    async def test_only_persisted_privmsg_counts_as_message_for_readiness(self):
+        # Exercise the actual receive loop/parser/writer without a network or
+        # replacing the transport-version gate. Protocol metadata is not chat.
+        peer = mock.AsyncMock()
+        peer.recv.side_effect = [
+            ':guest!guest@synthetic JOIN #test_channel\r\n'
+            ':tmi.twitch.tv ROOMSTATE #test_channel\r\n'
+            ':tmi.twitch.tv NOTICE #test_channel :metadata\r\n'
+            ':tmi.twitch.tv CLEARCHAT #test_channel\r\n'
+            ':other!other@synthetic PRIVMSG #other_channel :not ours\r\n',
+            ':guest!guest@synthetic PRIVMSG #test_channel :real chat\r\n',
+            OSError('synthetic closed'),
+        ]
+        observations = []
+        with mock.patch.object(self.chat, 'open_connection', new=mock.AsyncMock(return_value=peer)):
+            result = await self.chat.run_chat('test_channel', self.root, max_connections=1,
+                                             progress=lambda value: observations.append(dict(value)))
+        self.assertEqual(observations[1]['messages'], 0, 'protocol metadata cannot establish chat readiness')
+        self.assertEqual(observations[2]['messages'], 1)
+        self.assertEqual(result['messages'], 1)
+        events = [event for path in self.root.glob('twitch/test_channel/*.jsonl')
+                  for event in storage.read_jsonl_file(path)]
+        self.assertEqual([event['kind'] for event in events],
+                         ['join_state', 'join_state', 'notice', 'clear', 'message'])
+        self.assertEqual([event['text'] for event in events if event['kind'] == 'message'], ['real chat'])
+        peer.close.assert_awaited_once()
+
     async def test_real_peer_login_ping_tags_and_jsonl(self):
         from websockets.asyncio.server import serve
         received = []

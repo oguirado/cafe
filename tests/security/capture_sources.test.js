@@ -398,7 +398,10 @@ test('recording reason and elapsed time are authoritative and unknown provider t
   const f = await controlsFixture(value);
   assert.equal(f.controls.getState().recordings[0].reason, 'recording_capture_minimized');
   assert.equal(f.controls.getState().recordings[0].elapsed_ms, '9007199254740993');
-  const next = copy(value); next.revision = '4';
+  const named = copy(value); named.revision = '4'; named.state.recordings[0].reason = 'window_unavailable';
+  f.publish(named);
+  assert.equal(f.controls.getState().recordings[0].reason, 'window_unavailable');
+  const next = copy(value); next.revision = '5';
   next.state.recordings[0].reason = 'SYNTHETIC_PROVIDER_PRIVATE_CANARY';
   next.state.recordings[0].elapsed_ms = 9007199254740992;
   f.publish(next);
@@ -513,7 +516,7 @@ async function sessionFixture(options = {}) {
   const { createPreviewSession } = await import(moduleUrl('capture.js'));
   const states = [], streams = [], calls = [], requests = [], tasks = [], scheduledDelays = [];
   let size = { width: 320, height: 180 };
-  let counter = 0;
+  let counter = 0, frameListener = null;
   const value = mediaStream();
   const session = createPreviewSession({
     bridge: { previewSource: async pair => {
@@ -521,6 +524,7 @@ async function sessionFixture(options = {}) {
       return options.grant ? options.grant(pair) : { ok: true, ...pair };
     } },
     getDisplayMedia: async constraints => { calls.push(constraints); return options.capture ? options.capture() : value; },
+    observeFrames: (_stream, onFrame) => { frameListener = onFrame; return () => { if (frameListener === onFrame) frameListener = null; }; },
     onState: (state, reason) => states.push({ state, reason }),
     onStream: stream => streams.push(stream), size: () => size,
     schedule: (callback, delay) => {
@@ -531,6 +535,7 @@ async function sessionFixture(options = {}) {
   const binding = { capsule_id: 'cap-1', feed_id: 'feed-1', generation: '1' };
   return {
     session, states, streams, calls, requests, tasks, scheduledDelays, value, binding,
+    frame: count => frameListener?.(count),
     resizeTo: next => { size = next; },
     start: async () => { session.setBinding(binding); session.setVisibility(true, true); await flush(); },
   };
@@ -544,6 +549,8 @@ test('preview uses video-only GDM, validates tile bounds and 15fps before attach
   assert.equal(f.calls[0].audio, false);
   assert.equal(f.calls[0].video.frameRate.ideal, 15);
   assert.deepEqual(f.value.track.constraints[0], { width: { max: 320 }, height: { max: 180 }, frameRate: { max: 15 } });
+  assert.equal(f.states.at(-1).state, 'connecting', 'track admission alone is not a displayed frame');
+  f.frame(1);
   assert.equal(f.states.at(-1).state, 'live');
   assert.equal(f.streams.at(-1), f.value);
   f.resizeTo({ width: 160, height: 90 });
@@ -613,7 +620,7 @@ test('source ending stops tracks and recovery retries have a finite schedule', a
   f.session.dispose();
 });
 
-test('disabled/denied/unlisted previews perform no capture and schedule no retry', async () => {
+test('disabled/denied/unlisted previews without a changed current projection schedule no retry', async () => {
   for (const error of ['preview_disabled', 'preview_denied', 'no_preview']) {
     const f = await sessionFixture({ grant: () => ({ ok: false, error }) });
     await f.start();
@@ -678,8 +685,9 @@ test('actual Vue wall renders twelve authoritative tiles with independent REC co
   try {
     const tiles = uiFixture.findAll(m.tree, node => node.tag === 'article');
     assert.equal(tiles.length, 12);
-    assert.equal(m.ui.presentations[0].panels.length, 12);
-    assert.equal(new Set(m.ui.presentations[0].panels.map(row => row.params.capsuleId)).size, 12);
+    const gallery = uiFixture.findAll(m.tree, node => node.props['data-capsule-id'] !== undefined);
+    assert.equal(gallery.length, 12);
+    assert.deepEqual(new Set(gallery.map(row => row.props['data-capsule-id'])), new Set(Object.keys(authority(12).state.capsules)));
     for (const tile of tiles) assert.ok(uiFixture.button(tile, 'REC'));
     assert.equal(uiFixture.button(m.tree, 'Add window').props.disabled, true);
     assert.equal(m.calls.intents, 0);
@@ -690,8 +698,9 @@ test('actual Vue wall renders twelve authoritative tiles with independent REC co
   } finally { m.done(); }
 });
 
-test('actual organizer panel renders untrusted titles as text and requires an explicit confirmation', async () => {
+test('actual organizer panel under Ask me before AI actions renders untrusted titles as text and requires confirmation', async () => {
   const value = authority();
+  value.state.ask_before_ai_actions = true;
   value.state.organizer_plan = {
     plan_id: 'plan-ui', windows: [{ title: '<em data-title="synthetic">Synthetic call</em>' }],
     folder_name: '<b>Synthetic folder</b>', expires_unix_ms: String(Date.now() + 60000),
@@ -728,12 +737,43 @@ test('actual recording failure shows the closed authority reason with Retry', as
     const tile = uiFixture.findAll(m.tree, node => node.tag === 'article')[0];
     assert.equal(tile.props['data-tile-state'], 'recording_failed');
     assert.ok(uiFixture.button(tile, 'Retry'));
-    assert.ok(uiFixture.textOf(tile).includes('recording_capture_source_failed'));
+    assert.ok(uiFixture.textOf(tile).includes('The Windows capture source failed.'));
     assert.equal(m.calls.intents, 0);
     const next = copy(value); next.revision = '4';
     next.state.recordings[0].reason = 'SYNTHETIC_PROVIDER_PRIVATE_CANARY';
     await m.push(next);
     assert.equal(uiFixture.textOf(m.tree).includes('SYNTHETIC_PROVIDER_PRIVATE_CANARY'), false);
+  } finally { m.done(); }
+});
+
+test('AI confirmation preference is local, authority-driven and absent capability stays closed', async () => {
+  const f = await controlsFixture();
+  await assert.rejects(f.controls.setAskBeforeAiActions(true));
+  assert.equal(f.sent.length, 0); f.controls.dispose();
+  const value = authority(); value.state.ask_before_ai_actions = false;
+  value.state.ai_activity = { code: 'ai_recording_submitted', count: 2, title: '<em>untrusted</em>' };
+  const m = await uiFixture.mount(async () => value, { submit: async () => ({ queued: true }) });
+  try {
+    assert.ok(uiFixture.button(m.tree, 'Stop all'));
+    assert.ok(uiFixture.button(m.tree, 'REC'));
+    assert.match(uiFixture.textOf(m.tree), /AI submitted recording for 2 windows/);
+    assert.equal(uiFixture.textOf(m.tree).includes('untrusted'), false);
+    assert.equal(uiFixture.button(m.tree, 'Confirm'), undefined);
+    assert.equal(m.calls.intents, 0);
+    await m.click('Settings');
+    const labels = () => uiFixture.findAll(m.tree, node => node.tag === 'label' && uiFixture.textOf(node).includes('Ask me before AI actions'));
+    const toggle = uiFixture.findAll(labels()[0], node => node.tag === 'input')[0];
+    assert.equal(toggle.props.checked, false);
+    const event = { target: { checked: true } }; toggle.props.onChange(event);
+    await uiFixture.settle(m.ui.nextTick);
+    assert.deepEqual(m.calls.requests[0].body, { op: 'set_ask_before_ai_actions', enabled: true });
+    assert.equal(event.target.checked, false);
+    const next = copy(value); next.revision = '4'; next.state.ask_before_ai_actions = true;
+    next.state.ai_activity = { code: '<em>untrusted</em>', count: 2 };
+    await m.push(next);
+    assert.equal(uiFixture.findAll(labels()[0], node => node.tag === 'input')[0].props.checked, true);
+    await m.click('Back to wall');
+    assert.equal(uiFixture.textOf(m.tree).includes('untrusted'), false);
   } finally { m.done(); }
 });
 
@@ -882,8 +922,70 @@ test('a timed-out native capture leaves connecting, quarantines its grant, and s
     assert.equal(late.track.stops, 1);
     assert.equal(first.streams.includes(late), false);
     assert.equal(second.requests.length, 1);
+    assert.equal(second.states.at(-1).state, 'connecting');
+    second.frame(1);
     assert.equal(second.states.at(-1).state, 'live');
   } finally {
     first.session.dispose(); second.session.dispose(); t.mock.timers.reset();
   }
+});
+
+
+test('trim accepts only bounded integer metadata and keeps rows closed', async () => {
+  for (const trim of [undefined, 0, 23, 2160, -1, 2161, 1.5, '23', null]) {
+    const f = previewFixture();
+    if (trim !== undefined) f.status().state.preview_sources[0].top_trim = trim;
+    const valid = trim === undefined || [0, 23, 2160].includes(trim);
+    assert.equal((await f.grant()).ok, valid, String(trim));
+    if (valid) { assert.ok(await f.display()); assert.equal(await f.display(), null); }
+    else assert.throws(() => security.publicSnapshot(f.status()), /SNAPSHOT_REJECTED/);
+    f.broker.dispose();
+  }
+  const f = previewFixture();
+  Object.assign(f.status().state.preview_sources[0], { top_trim: 23, unexpected: true });
+  assert.equal((await f.grant()).ok, false);f.broker.dispose();
+});
+
+test('safe preview trim reaches controller without source identity and malformed metadata is refused', async () => {
+  const raw = authority();raw.state.preview_sources[0].top_trim = 23;
+  const projected = security.publicSnapshot(raw);
+  assert.equal(JSON.stringify(projected).includes('window:101:0'), false);
+  const f = await controlsFixture(projected);
+  assert.equal(f.controls.getState().capsules[0].feeds[0].top_trim, 23);
+  for (const trim of [-1, 2161, 0.5, null, '23']) {
+    const next = copy(projected);next.state.preview_trims[0].top_trim = trim;
+    f.publish(next);assert.equal(f.controls.getState().availability, 'unavailable');
+  }
+  const extra = copy(projected);extra.state.preview_trims[0].source_id = 'window:101:0';
+  f.publish(extra);assert.equal(f.controls.getState().availability, 'unavailable');
+  const legacy = authority();delete legacy.state.preview_sources;
+  f.publish(legacy);assert.equal(f.controls.getState().capsules[0].feeds[0].top_trim, 0);
+  f.controls.dispose();
+});
+
+test('cropped preview fits decoded dimensions at any tile aspect ratio without distortion', async () => {
+  const { previewGeometry } = await import(moduleUrl('capture.js'));
+  for (const [width, height] of [[100, 100], [1920, 180], [80, 1080], [1, 1]]) {
+    const g = previewGeometry(width, height, 856, 481, 23);
+    assert.ok(g.width <= width + 1e-9 && g.height <= height + 1e-9);
+    assert.ok(Math.abs(g.width / 856 - g.videoHeight / 481) < 1e-9);
+    assert.ok(Math.abs(g.height - (g.videoHeight + g.top)) < 1e-9);
+    assert.ok(Math.abs(g.top / g.videoHeight + 23 / 481) < 1e-9);
+  }
+  assert.equal(previewGeometry(100, 100, 0, 0, 23), null);
+  assert.equal(previewGeometry(100, 100, 856, 481, 481).top, -0);
+  assert.equal(previewGeometry(100, 100, 856, 481, 0).top, -0);
+});
+
+test('running chat is reported as running, not as setup pending', async () => {
+  const value = authority();
+  value.state.chat_configurable = false;
+  value.state.chat_available = true;
+  const m = await uiFixture.mount(async () => value);
+  try {
+    await m.click('Settings');
+    const text = uiFixture.textOf(m.tree);
+    assert.ok(text.includes('Chat is running'));
+    assert.equal(text.includes('Chat setup pending'), false);
+  } finally { m.done(); }
 });
