@@ -64,6 +64,20 @@
       "command": "Cafe CI / Gate node / tests/security/pro_capsule_workspace.test.js",
       "status": "not_run",
       "reason": "Gate python failed before Gate node"
+    },
+    {
+      "command": "Cafe CI / verify (ubuntu-latest) / Gate python after transport formatting correction",
+      "status": "fail",
+      "run_id": 41372927465,
+      "job_id": 125047040875,
+      "tests": 342,
+      "failures": 11,
+      "errors": 8
+    },
+    {
+      "command": "Cafe CI / Gate node after transport formatting correction",
+      "status": "not_run",
+      "reason": "Gate python failed before Gate node"
     }
   ],
   "scope": "unverified_proposal",
@@ -82,11 +96,11 @@
       "pre_existing": true
     },
     "source_commit": "bdd5db50fb8ab81588f0b7adf2f88b00e0940a9a",
-    "run_id": 41372420859,
-    "url": "https://github.com/oguirado/cafe/actions/runs/41372420859",
+    "run_id": 41372927465,
+    "url": "https://github.com/oguirado/cafe/actions/runs/41372927465",
     "observed_job": {
       "name": "verify (ubuntu-latest)",
-      "id": 125045512833,
+      "id": 125047040875,
       "stage": "Gate python",
       "conclusion": "failure"
     },
@@ -94,7 +108,7 @@
       "issue": "unproven_path_tool_or_flag",
       "change": "Store the exact complete diff as raw patch text, without a Markdown code fence. No patch bytes or tests changed.",
       "verification": "git apply --check passes on the transport itself",
-      "ci_verification": "pending"
+      "ci_verification": "Attempt executed; unproven_path_tool_or_flag remains. Raw patch transport is directly applicable but the claims gate still interprets patch content as command claims."
     },
     "change_induced_blockers": [
       {
@@ -115,9 +129,16 @@
         "rule": "document primary id missing from generic lookup",
         "path": "docs/bridge/changes/unit-03.md",
         "reason": "The new transport document lacks a generic document lookup entry. Router index edits are forbidden."
+      },
+      {
+        "rule": "unproven_path_tool_or_flag",
+        "path": "docs/bridge/changes/unit-03.md",
+        "reason": "The mandatory complete unified diff triggers claim discovery with or without a diff code fence. No patch content was omitted or encoded, and the claims validator was not modified."
       }
     ],
     "native_execution": "unverified",
-    "component_execution": "pending; approved Vue/compiler unavailable locally and CI Node gate skipped"
+    "component_execution": "pending; approved Vue/compiler unavailable locally and CI Node gate skipped",
+    "observed_commit": "3ae2493a5e52e09b266e0ce90b9d973f75b5d77a",
+    "followup_transport": "This metadata-only commit records the observed failed run above; all four product/test blobs and patch_sha256 are unchanged."
   }
 }
