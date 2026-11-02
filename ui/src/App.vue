@@ -20,6 +20,14 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import TopBar from './kit/shell/TopBar.vue';
 import StatusBar from './kit/shell/StatusBar.vue';
+import CapsuleTopbar from './capsule/topbar.vue';
+import CapsuleControl from './capsule/control.vue';
+import CapsuleGrid from './capsule/grid.vue';
+import { createRegistry } from './capsule/registry.js';
+import WindowBrowser from './windows.vue';
+import { createWindowCatalogue } from './window_catalogue.js';
+import { observeWindowPage } from './window_queries.js';
+import './workspace.css';
 import { createControls, readDiagnostics } from '../../src/renderer/control.js';
 
 /** Fixed note for any failed controller request; raw errors never surface. */
@@ -122,6 +130,22 @@ const diagnosticsPending = ref(false);
 const diagnosticsRows = ref([]);
 /** @type {import('vue').Ref<string>} Fixed diagnostics note, '' when none. */
 const diagnosticsNote = ref('');
+/** @type {import('vue').Ref<'capsules' | 'diagnostics'>} View-only page; switching never stops authority/recorder. */
+const activePage = ref('capsules');
+const helpMenuOpen = ref(false);
+const browserOpen = ref(false);
+const browserPending = ref(false);
+const browserSelected = ref('');
+const browserCapsule = ref('');
+const browserRole = ref('game');
+const browserStatus = ref('idle');
+const browserRows = ref([]);
+const browserTotal = ref(null);
+const catalogue = createWindowCatalogue();
+let browserSequence = 0;
+
+/** Component-lifetime registry for display-only slot-N aliases; authority epoch not exposed, explicit ceiling. */
+const capsuleRegistry = createRegistry({ maxSlots: 1000 });
 /** Read sequence; results of closed or unmounted reads are dropped. */
 let diagnosticsSeq = 0;
 
@@ -158,6 +182,11 @@ function cafeFacade() {
 function applyView(snapshot) {
   if (snapshot !== null && typeof snapshot === 'object') {
     view.value = snapshot;
+    if (browserOpen.value && view.value.availability !== 'available') {
+      browserSequence += 1; catalogue.reset(); browserRows.value = [];
+      browserTotal.value = null; browserSelected.value = ''; browserPending.value = false;
+      browserStatus.value = 'unavailable';
+    }
     return;
   }
   view.value = INITIAL_VIEW;
@@ -488,6 +517,90 @@ const chatReady = computed(() => view.value.chatReady === true);
 const chatConfigurable = computed(() => view.value.chatConfigurable === true);
 const pageTotal = computed(() => currentPage().total);
 const isPending = computed(() => pendingCount.value > 0);
+/** Exact host-issued id check, no numeric coercion. */
+function isExactCapsuleId(value) {
+  return typeof value === 'string' && value.length > 0 && value === value.trim() && !/\s/.test(value) && !/^\d+$/.test(value);
+}
+/** Raw ids in snapshot order; invalid kept so grid reports invalid, never empty success. */
+const rawCapsuleIds = computed(() => capsules.value.map((entry) => cid(entry)));
+/** Grid availability only when authority is available. */
+const gridAvailable = computed(() => availability.value === 'available');
+/** Validated ids for registry display only; guards invalid/duplicate/overflow before assign. */
+const workspaceIds = computed(() => {
+  const ids = rawCapsuleIds.value;
+  const seen = new Set();
+  for (const id of ids) {
+    if (!isExactCapsuleId(id) || seen.has(id)) return [];
+    seen.add(id);
+  }
+  try {
+    capsuleRegistry.assign(ids);
+  } catch {
+    return [];
+  }
+  return ids.slice();
+});
+/** Display-only slot alias, unknown on any failure. */
+function slotLabelFor(id) {
+  void workspaceIds.value;
+  try {
+    const label = capsuleRegistry.displayFor(id);
+    return typeof label === 'string' ? label : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+/** Current capsule by actual id from latest snapshot; undefined rejects stale/unknown. */
+function capsuleById(id) {
+  if (!isExactCapsuleId(id)) return undefined;
+  const found = capsules.value.filter((entry) => cid(entry) === id);
+  return found.length === 1 ? found[0] : undefined;
+}
+/** Index only for DOM input labels; never an authority identity. */
+function capsuleIndexFor(id) { return capsules.value.findIndex((entry) => cid(entry) === id); }
+/** Recording truth mapped to topbar allowlist, else unknown. */
+function headerStateFor(capsule) {
+  const rec = recFor(capsule);
+  if (rec === undefined) return 'standby';
+  const state = rec !== null && typeof rec === 'object' ? rec.state : undefined;
+  return state === 'Running' ? 'active' : 'unknown';
+}
+/** Disabled reasons reuse existing guards plus pending. */
+function recordReasonFor(capsule) {
+  const base = startBlock(capsule);
+  if (base !== '') return base;
+  return isPending.value || browserPending.value ? 'Request pending…' : '';
+}
+function stopReasonFor(capsule) {
+  const base = stopBlock(capsule);
+  if (base !== '') return base;
+  return isPending.value || browserPending.value ? 'Request pending…' : '';
+}
+function obsReasonFor(capsule) {
+  const base = sendBlock(capsule);
+  if (base !== '') return base;
+  return isPending.value || browserPending.value ? 'Request pending…' : '';
+}
+function onCardRecord(id) {
+  const current = capsuleById(id);
+  if (current === undefined || recordReasonFor(current) !== '') return;
+  onStart(current);
+}
+function onCardStop(id) {
+  const current = capsuleById(id);
+  if (current === undefined || stopReasonFor(current) !== '') return;
+  onStop(current);
+}
+function onCardObs(id) {
+  const current = capsuleById(id);
+  if (current === undefined || obsReasonFor(current) !== '') return;
+  onSendToObs(current);
+}
+/** View-only page switch; never stops authority/recorder. */
+function showPage(page) {
+  if (page !== 'capsules' && page !== 'diagnostics') return;
+  activePage.value = page;
+}
 
 const statusLabel = computed(() =>
   availability.value === 'available'
@@ -603,25 +716,26 @@ function pairBlock(capsule, index, role) {
 }
 
 function onCreateCapsule() {
-  if (controls === null) return;
+  if (personLabel.value.trim() === '') personLabel.value = 'Invitado ' + String(capsules.value.length + 1);
+  if (controls === null || browserPending.value || isPending.value) return;
   request(controls.createCapsule(personLabel.value));
 }
 
 function onRefreshWindows() {
-  if (controls === null) return;
+  if (controls === null || browserPending.value || isPending.value) return;
   prevOffsets.value = [];
   request(controls.refreshWindows(0));
 }
 
 function onPrevWindows() {
-  if (controls === null) return;
+  if (controls === null || browserPending.value || isPending.value) return;
   const offset = prevOffsets.value.pop();
   if (typeof offset !== 'number') return;
   request(controls.refreshWindows(offset));
 }
 
 function onNextWindows() {
-  if (controls === null) return;
+  if (controls === null || browserPending.value || isPending.value) return;
   const page = currentPage();
   if (typeof page.nextOffset !== 'number') return;
   prevOffsets.value.push(page.offset);
@@ -629,12 +743,12 @@ function onNextWindows() {
 }
 
 function onChooseFolder() {
-  if (controls === null) return;
+  if (controls === null || browserPending.value || isPending.value) return;
   request(controls.chooseFolder());
 }
 
 function onChooseFfmpeg() {
-  if (controls === null) return;
+  if (controls === null || browserPending.value || isPending.value) return;
   request(controls.chooseFfmpeg());
 }
 
@@ -644,7 +758,7 @@ function onChooseFfmpeg() {
  * @param {string} role
  */
 function onPair(capsule, index, role) {
-  if (controls === null) return;
+  if (controls === null || browserPending.value || isPending.value) return;
   const id = cid(capsule);
   if (id === '') return;
   const form = pairForm(ckey(capsule, index), role);
@@ -669,7 +783,7 @@ function onPair(capsule, index, role) {
  * @param {unknown} capsule
  */
 function onStart(capsule) {
-  if (controls === null) return;
+  if (controls === null || browserPending.value || isPending.value) return;
   const id = cid(capsule);
   if (id === '') return;
   request(controls.startRecording(id));
@@ -679,7 +793,7 @@ function onStart(capsule) {
  * @param {unknown} capsule
  */
 function onStop(capsule) {
-  if (controls === null) return;
+  if (controls === null || browserPending.value || isPending.value) return;
   const id = cid(capsule);
   if (id === '') return;
   request(controls.stopRecording(id));
@@ -689,20 +803,20 @@ function onStop(capsule) {
  * @param {unknown} capsule
  */
 function onSendToObs(capsule) {
-  if (controls === null) return;
+  if (controls === null || browserPending.value || isPending.value) return;
   const id = cid(capsule);
   if (id === '') return;
   request(controls.sendToObs(id));
 }
 
 function onConfigureObs() {
-  if (controls === null) return;
+  if (controls === null || browserPending.value || isPending.value) return;
   request(controls.configureObs(toCount(obsPort.value), password.value));
   password.value = '';
 }
 
 function onConfigureTwitch() {
-  if (controls === null) return;
+  if (controls === null || browserPending.value || isPending.value) return;
   request(controls.configureTwitch(channel.value));
 }
 
@@ -802,6 +916,81 @@ function onCloseDiagnostics() {
   diagnosticsNote.value = '';
 }
 
+
+function closeWindowBrowser() {
+  browserSequence += 1; browserOpen.value = false; browserPending.value = false;
+  browserSelected.value = ''; browserCapsule.value = '';
+}
+function publishCatalogue() {
+  const state = catalogue.getState(); browserRows.value = state.entries;
+  browserTotal.value = state.total; browserStatus.value = state.status;
+  return state;
+}
+/** @param {number} offset @param {number} sequence @returns {Promise<any>} */
+async function queryWindowPage(offset, sequence) {
+  if (!controls || !browserOpen.value || sequence !== browserSequence) throw new Error('cancelled');
+  return observeWindowPage(controls, offset, () => browserOpen.value && sequence === browserSequence);
+}
+async function refreshBrowser() {
+  if (!controls || browserPending.value || view.value.availability !== 'available') return;
+  const sequence = ++browserSequence; catalogue.reset(); publishCatalogue();
+  browserSelected.value = ''; browserPending.value = true; browserStatus.value = 'loading';
+  try {
+    let offset = 0;
+    for (let page = 0; page < 256; page += 1) {
+      const value = await queryWindowPage(offset, sequence);
+      if (sequence !== browserSequence) return;
+      catalogue.accept(value); const state = publishCatalogue();
+      if (state.complete || state.status !== 'loading' || state.nextOffset === null) break;
+      offset = state.nextOffset;
+    }
+  } catch { if (sequence === browserSequence) { catalogue.reset(); browserRows.value = []; browserTotal.value = null; browserSelected.value = ''; browserStatus.value = 'failed'; } }
+  finally { if (sequence === browserSequence) browserPending.value = false; }
+}
+function openWindowBrowser(id = '', role = 'game') {
+  if (!controls || availReason.value !== '') return;
+  const chosen = id || cid(capsules.value[0]);
+  if (!chosen || capsuleById(chosen) === undefined) { notice.value = 'Crea una cápsula antes de elegir una ventana.'; return; }
+  browserCapsule.value = chosen; browserRole.value = role; browserOpen.value = true;
+  refreshBrowser();
+}
+function selectBrowserWindow(token) {
+  const matches = browserRows.value.filter(row => row.token === token);
+  if (matches.length !== 1 || browserPending.value) return;
+  const capsule = capsuleById(browserCapsule.value); if (!capsule) return;
+  browserSelected.value = token;
+  const form = pairForm(ckey(capsule, capsuleIndexFor(browserCapsule.value)), browserRole.value);
+  form.token = token; form.x = 0; form.y = 0;
+  form.w = toCount(matches[0].rect.width); form.h = toCount(matches[0].rect.height);
+}
+async function pairBrowserWindow() {
+  if (!controls || browserPending.value || !browserSelected.value) return;
+  const matches = browserRows.value.filter(row => row.token === browserSelected.value);
+  const capsule = capsuleById(browserCapsule.value);
+  if (matches.length !== 1 || !capsule) { browserStatus.value = 'selection_stale'; return; }
+  const cached = matches[0]; const sequence = browserSequence; browserPending.value = true;
+  try {
+    await queryWindowPage(cached.pageOffset, sequence);
+    if (sequence !== browserSequence) return;
+    const current = listedWindow(cached.token); const live = capsuleById(browserCapsule.value);
+    if (!live || !current || current.generation !== cached.generation || current.layout_revision !== cached.layout_revision) {
+      browserStatus.value = 'selection_stale'; browserSelected.value = ''; return;
+    }
+    // The original helper and controller re-read current capsule/window state;
+    // cached rows never supply authority. Queued is not a committed pairing.
+    browserPending.value = false;
+    onPair(live, capsuleIndexFor(browserCapsule.value), browserRole.value);
+    closeWindowBrowser();
+  } catch { if (sequence === browserSequence) browserStatus.value = 'selection_stale'; }
+  finally { if (sequence === browserSequence) browserPending.value = false; }
+}
+function resetBrowserCrop() {
+  const row = browserRows.value.find(entry => entry.token === browserSelected.value);
+  const capsule = capsuleById(browserCapsule.value); if (!row || !capsule) return;
+  const form = pairForm(ckey(capsule, capsuleIndexFor(browserCapsule.value)), browserRole.value);
+  form.x = 0; form.y = 0; form.w = toCount(row.rect.width); form.h = toCount(row.rect.height);
+}
+
 onMounted(() => {
   applyTheme(theme.value);
   const facade = cafeFacade();
@@ -831,6 +1020,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  closeWindowBrowser();
   diagnosticsSeq += 1;
   if (stopControls !== null) {
     try {
@@ -858,7 +1048,56 @@ onBeforeUnmount(() => {
       <template #actions><span aria-hidden="true"></span></template>
       <template #primary><span aria-hidden="true"></span></template>
     </TopBar>
-    <main class="cafe-main">
+    <nav class="cafe-desktop-toolbar" aria-label="Escritorio">
+      <button class="cafe-button" type="button" :disabled="availReason !== '' || capsules.length >= 2" @click="onCreateCapsule">Nueva cápsula</button>
+      <button class="cafe-button" type="button" :disabled="availReason !== ''" @click="openWindowBrowser()">Ventanas</button>
+      <button class="cafe-button" type="button" :disabled="availReason !== ''" @click="onChooseFolder">Carpeta de grabación</button>
+      <span class="cafe-desktop-config">Carpeta: {{ folderConfigured ? 'Configurada' : 'Sin elegir' }} · FFmpeg: {{ ffmpegConfigured ? 'Configurado' : 'Sin elegir' }}</span>
+      <button class="cafe-button" type="button" @click="helpMenuOpen = !helpMenuOpen">Ayuda</button>
+      <div v-if="helpMenuOpen" class="cafe-desktop-help" role="menu">
+        <button class="cafe-button" type="button" @click="showPage('diagnostics'); helpMenuOpen = false">Diagnóstico</button>
+        <button class="cafe-button" type="button" :disabled="availReason !== ''" @click="onChooseFfmpeg">Elegir FFmpeg</button>
+        <button class="cafe-button" type="button" @click="toggleTheme">Cambiar tema</button>
+      </div>
+    </nav>
+    <main class="cafe-main cafe-desktop-main">
+      <section v-if="activePage === 'capsules'" class="cafe-desktop-workspace" aria-label="Escritorio de cápsulas">
+        <p v-if="availReason !== ''" class="cafe-warning" role="status">{{ availReason }} · Comprueba que Café está conectado antes de grabar.</p>
+        <p v-if="notice !== ''" class="cafe-error" role="alert">{{ notice }}</p>
+        <div :inert="browserOpen ? true : undefined">
+        <CapsuleGrid :capsuleIDs="rawCapsuleIds" :available="gridAvailable" @add-capsule="onCreateCapsule">
+          <template #capsule="{ id }">
+            <article v-if="capsuleById(id) !== undefined" class="cafe-capsule cafe-desktop-capsule">
+              <CapsuleTopbar :slotLabel="slotLabelFor(id)" :capsuleLabel="cname(capsuleById(id))" :state="headerStateFor(capsuleById(id))" />
+              <CapsuleControl :recordReason="recordReasonFor(capsuleById(id))" :stopReason="stopReasonFor(capsuleById(id))" :obsReason="obsReasonFor(capsuleById(id))" :busy="isPending || browserPending" @record="onCardRecord(id)" @stop="onCardStop(id)" @obs="onCardObs(id)" />
+              <div class="cafe-desktop-media"><p>Preview not available.</p><small>La vista previa aún está pendiente. El estado de grabación lo confirma Café.</small></div>
+              <div class="cafe-desktop-feeds">
+                <div v-for="role in pairRoles" :key="role" class="cafe-desktop-feed">
+                  <strong>{{ slotTitle(role) }}</strong>
+                  <span>{{ feedFor(capsuleById(id), role) === undefined ? 'Sin ventana' : 'Ventana emparejada' }}</span>
+                  <button class="cafe-button" type="button" :disabled="availReason !== '' || feedFor(capsuleById(id), role) !== undefined" @click="openWindowBrowser(id, role)">{{ role === 'game' ? 'Elegir ventana' : 'Elegir cámara' }}</button>
+                </div>
+              </div>
+              <p class="cafe-text">Recording state: {{ textOf(recFor(capsuleById(id))?.state, 'Not recording') }}</p>
+            </article>
+          </template>
+        </CapsuleGrid>
+        </div>
+      </section>
+      <WindowBrowser v-if="browserOpen" :windows="browserRows" :currentPage="{ offset: 0, nextOffset: null }" :total="browserTotal" :status="browserStatus" :busy="browserPending" :selectedId="browserSelected" @select="selectBrowserWindow" @refresh="refreshBrowser" @close="closeWindowBrowser" @pair="pairBrowserWindow">
+        <template #advanced>
+          <details v-if="browserSelected && capsuleById(browserCapsule)" class="cafe-desktop-crop">
+            <summary>Recorte avanzado</summary>
+            <p>Ventana completa por defecto. Ajusta estos valores solo para excluir bordes o una zona de la ventana.</p>
+            <button class="cafe-button" type="button" @click="resetBrowserCrop">Ventana completa</button>
+            <div class="cafe-crop">
+              <label v-for="field in ['x', 'y', 'w', 'h']" :key="field">{{ { x: 'Izquierda', y: 'Arriba', w: 'Ancho', h: 'Alto' }[field] }}<input class="cafe-input" type="number" v-model.number="pairForm(ckey(capsuleById(browserCapsule), capsuleIndexFor(browserCapsule)), browserRole)[field]" :disabled="browserPending" /></label>
+            </div>
+          </details>
+        </template>
+      </WindowBrowser>
+      <div v-if="activePage === 'diagnostics'" class="cafe-desktop-diagnostics">
+        <button class="cafe-button" type="button" @click="showPage('capsules')">Volver al escritorio</button>
       <section class="cafe-panel" aria-labelledby="cafe-status-title">
         <h1 id="cafe-status-title" class="cafe-title">Café workspace</h1>
         <p class="cafe-status" role="status">Bridge status: {{ statusLabel }}</p>
@@ -1013,7 +1252,7 @@ onBeforeUnmount(() => {
                   class="cafe-button"
                   type="button"
                   :disabled="pairBlock(capsule, index, role) !== ''"
-                  @click="onPair(capsule, index, role)"
+                  @click="openWindowBrowser(cid(capsule), role)"
                 >
                   Pair {{ role }}
                 </button>
@@ -1200,7 +1439,13 @@ onBeforeUnmount(() => {
           <p v-if="chatReason !== ''" class="cafe-reason">{{ chatReason }}</p>
         </div>
       </section>
+      </div>
     </main>
     <StatusBar :shortcuts="[]" :crumbs="crumbs" :telemetry="telemetry" />
   </div>
 </template>
+<style scoped>
+.cafe-controls { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.cafe-capsule { display: grid; gap: var(--space-2); }
+@media (max-width: 30rem) { .cafe-controls { gap: var(--space-2); } }
+</style>

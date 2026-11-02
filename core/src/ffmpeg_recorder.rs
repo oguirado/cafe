@@ -19,7 +19,7 @@ impl Encoder {
     pub fn name(self)->&'static str{match self{Self::Ffv1=>"ffv1",Self::Nvenc=>"h264_nvenc",Self::Amf=>"h264_amf",Self::Qsv=>"h264_qsv"}}
 }
 #[derive(Clone,Debug)]
-pub enum EncoderUse { Development, Production { audited_sha256:String } }
+pub enum EncoderUse { Development, Production { audited_sha256:String }, OperatorApprovedExternalTest { audited_sha256:String } }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub struct VideoProfile {
     pub width:u32,pub height:u32,pub fps_num:u32,pub fps_den:u32,
@@ -54,7 +54,10 @@ fn validate_plan(root:&Path,plan:&RecordingPlan)->Result<(),RecorderError>{
 }
 fn binary_digest(binary:&Path)->Result<String,RecorderError>{let bytes=std::fs::read(binary).map_err(|_|RecorderError::Spawn)?;Ok(Sha256::digest(bytes).iter().map(|byte|format!("{byte:02x}")).collect())}
 fn complete_argv(profile:VideoProfile,encoder:Encoder,output:&Path)->Vec<std::ffi::OsString>{
-    ["-hide_banner","-loglevel","error","-nostdin","-n","-f","rawvideo","-pixel_format","bgra","-video_size",&format!("{}x{}",profile.width,profile.height),"-framerate",&format!("{}/{}",profile.fps_num,profile.fps_den),"-i","pipe:0","-an","-c:v",encoder.name(),"-f","matroska"].into_iter().map(std::ffi::OsString::from).chain(std::iter::once(output.as_os_str().to_owned())).collect()
+    let mut args:Vec<std::ffi::OsString>=["-hide_banner","-loglevel","error","-nostdin","-n","-f","rawvideo","-pixel_format","bgra","-video_size",&format!("{}x{}",profile.width,profile.height),"-framerate",&format!("{}/{}",profile.fps_num,profile.fps_den)].into_iter().map(std::ffi::OsString::from).collect();
+    // Bounded hardware input thread absorbs encoder startup; no software fallback.
+    if encoder!=Encoder::Ffv1 { args.extend(["-thread_queue_size".into(),"16".into()]); }
+    args.extend(["-i","pipe:0","-an","-c:v",encoder.name(),"-f","matroska"].into_iter().map(std::ffi::OsString::from));args.push(output.as_os_str().to_owned());args
 }
 async fn bounded_read<R:AsyncRead+Unpin>(mut reader:R,limit:usize)->Result<Vec<u8>,RecorderError>{
     let mut output=Vec::new();let mut chunk=[0u8;4096];let mut exceeded=false;
@@ -109,10 +112,11 @@ async fn validate_artifact(binary:&Path,path:&Path,expected:u64,deadline:Duratio
 }
 pub async fn preflight(binary:&Path,encoder:Encoder,usage:EncoderUse,profile:VideoProfile,probe_path:&Path)->Result<Preflight,RecorderError>{
     let profile=profile.validate()?;if std::fs::symlink_metadata(probe_path).is_ok(){return Err(RecorderError::InvalidPath);}let digest=binary_digest(binary)?;
+    if let EncoderUse::OperatorApprovedExternalTest{audited_sha256}=&usage{if !external_test_pin_approved(encoder,&digest,audited_sha256){return Err(RecorderError::BlockedAudit);}}
     if let EncoderUse::Production{audited_sha256}=usage{
         if encoder==Encoder::Ffv1 || audited_sha256.len()!=64 || audited_sha256!=digest{return Err(RecorderError::BlockedAudit);}
         let version=tool_output(binary,&["-version".into()],profile.stop_timeout).await?;let text=String::from_utf8_lossy(&version);
-        if !text.starts_with("ffmpeg version 8.1.3") || ["--enable-libx264","--enable-gpl","--enable-nonfree"].iter().any(|flag|text.contains(flag)){return Err(RecorderError::BlockedAudit);}
+        if !strict_production_build(&text){return Err(RecorderError::BlockedAudit);}
     }
     let inventory=tool_output(binary,&["-hide_banner".into(),"-encoders".into()],profile.stop_timeout).await?;
     require_encoder(&inventory,encoder)?;
@@ -129,6 +133,14 @@ fn require_encoder(inventory:&[u8],encoder:Encoder)->Result<(),RecorderError>{if
 // above owns preflight, policy, artifact validation and child supervision.
 
 /// Single-owner paced recorder: pacer, bounded queue and supervised child.
+struct WriteAck { index: u64, bytes: usize, confirmed: usize, outcome: Result<(), RecorderError> }
+struct InFlightWrite {
+    task: JoinHandle<ChildStdin>,
+    sender: tokio::sync::mpsc::Sender<OutputFrame>,
+    acknowledgments: tokio::sync::mpsc::Receiver<WriteAck>,
+    outstanding: usize,
+}
+
 pub struct Recorder {
     profile: VideoProfile,
     root: PathBuf,
@@ -142,6 +154,8 @@ pub struct Recorder {
     encoder: Encoder,
     preview: Option<PreviewSelector>,
     latest_preview: Option<Arc<OwnedFrame>>,
+    in_flight: Option<InFlightWrite>,
+    fresh_origin: bool,
     #[cfg(test)]
     disk_full: bool,
 }
@@ -155,6 +169,28 @@ impl Recorder {
         journal: &mut Journal,
         origin: Instant,
     ) -> Result<Self, RecorderError> {
+        Self::start_with_clock(approval, root, plan, journal, Some(origin)).await.map(|(recorder, _)| recorder)
+    }
+
+    /// Start a live timeline after digest, durable intent and child creation.
+    /// Startup work is not a missed media deadline. Explicit-clock callers of
+    /// `start` retain their original timeline and all lateness limits.
+    pub async fn start_ready(
+        approval: Preflight,
+        root: &Path,
+        plan: RecordingPlan,
+        journal: &mut Journal,
+    ) -> Result<(Self, Instant), RecorderError> {
+        Self::start_with_clock(approval, root, plan, journal, None).await
+    }
+
+    async fn start_with_clock(
+        approval: Preflight,
+        root: &Path,
+        plan: RecordingPlan,
+        journal: &mut Journal,
+        requested_origin: Option<Instant>,
+    ) -> Result<(Self, Instant), RecorderError> {
         validate_plan(root, &plan)?;
         let profile = approval.profile().validate()?;
         let encoder = approval.encoder();
@@ -168,9 +204,10 @@ impl Recorder {
         let argv = complete_argv(profile, encoder, &output);
         let binary = approval.binary;
         let child = ChildSupervisor::spawn(&binary, &argv, profile)?;
+        let origin = requested_origin.unwrap_or_else(Instant::now);
         let pacer_profile = profile.pacer().map_err(RecorderError::Pacer)?;
         let pacer = Pacer::new(pacer_profile, origin).map_err(RecorderError::Pacer)?;
-        Ok(Self {
+        Ok((Self {
             profile,
             root: root.to_path_buf(),
             plan,
@@ -183,9 +220,11 @@ impl Recorder {
             encoder,
             preview: None,
             latest_preview: None,
+            in_flight: None,
+            fresh_origin: requested_origin.is_none(),
             #[cfg(test)]
             disk_full: false,
-        })
+        }, origin))
     }
 
     /// Current lifecycle state.
@@ -210,7 +249,7 @@ impl Recorder {
 
     /// Number of queued output slots.
     pub fn queue_len(&self) -> usize {
-        self.queue.len()
+        self.queue.len() + self.in_flight.as_ref().map_or(0, |worker| worker.outstanding)
     }
 
     /// Enable bounded preview decimation at `fps_num`/`fps_den`. Off by
@@ -265,6 +304,12 @@ impl Recorder {
             self.state = RecordingState::Interrupted;
             return Err(RecorderError::InvalidProfile);
         }
+        if self.fresh_origin {
+            // No media slot has been admitted yet. Setup of another feed must
+            // not consume this feed's first deadline.
+            self.pacer = Pacer::new(self.profile.pacer().map_err(RecorderError::Pacer)?, now).map_err(RecorderError::Pacer)?;
+            self.fresh_origin = false;
+        }
         if let Err(err) = self.pacer.offer(frame, now) {
             self.latest_preview = None;
             self.state = RecordingState::Interrupted;
@@ -279,7 +324,7 @@ impl Recorder {
         if self.state != RecordingState::Recording {
             return Err(RecorderError::State);
         }
-        if self.queue.len() >= self.profile.queue_capacity {
+        if self.queue_len() >= self.profile.queue_capacity {
             self.counters.queue_full = self.counters.queue_full.saturating_add(1);
             self.counters.backpressure = self.counters.backpressure.saturating_add(1);
             self.latest_preview = None;
@@ -314,57 +359,141 @@ impl Recorder {
     }
 
     /// Write the oldest queued slot to the child. Never retries partials.
-    pub async fn pump_one(&mut self) -> Result<bool, RecorderError> {
-        if self.state != RecordingState::Recording && self.state != RecordingState::Finalizing {
-            return Err(RecorderError::State);
-        }
+    fn check_pump_state(&mut self) -> Result<(), RecorderError> {
+        if self.state != RecordingState::Recording && self.state != RecordingState::Finalizing { return Err(RecorderError::State); }
         #[cfg(test)]
-        if self.disk_full {
-            self.latest_preview = None;
-            self.state = RecordingState::Interrupted;
-            return Err(RecorderError::DiskFull);
-        }
-        let Some(output) = self.queue.pop_front() else {
-            return Ok(false);
-        };
-        if output.index != self.counters.written_frames {
-            self.latest_preview = None;
-            self.state = RecordingState::Interrupted;
-            return Err(RecorderError::State);
-        }
-        let bytes = output.frame.pixels();
-        let len = bytes.len();
-        match self.child.write_frame(bytes).await {
-            Ok(()) => {
-                self.counters.written_frames = self.counters.written_frames.saturating_add(1);
-                self.counters.written_bytes =
-                    self.counters.written_bytes.saturating_add(len as u64);
-                Ok(true)
-            }
-            Err(err) => {
-                self.counters.partial_bytes = self.child.last_partial as u64;
-                if err == RecorderError::WriteTimeout {
-                    self.counters.backpressure = self.counters.backpressure.saturating_add(1);
+        if self.disk_full { self.latest_preview = None; self.state = RecordingState::Interrupted; return Err(RecorderError::DiskFull); }
+        Ok(())
+    }
+
+    /// Submit bounded slots to one ordered pipe owner. The writer can drain
+    /// independently of the capture loop; queued and uncollected acknowledgments
+    /// share queue_capacity. No frame is counted before write plus flush succeeds.
+    pub fn begin_pump(&mut self) -> Result<bool, RecorderError> {
+        self.check_pump_state()?;
+        if self.queue.is_empty() { return Ok(false); }
+        if self.in_flight.is_none() {
+            let mut stdin = self.child.stdin.take().ok_or(RecorderError::State)?;
+            let (sender, mut input) = tokio::sync::mpsc::channel::<OutputFrame>(self.profile.queue_capacity);
+            let (acknowledge, acknowledgments) = tokio::sync::mpsc::channel(self.profile.queue_capacity);
+            let timeout = self.child.write_timeout;
+            let mut expected = self.counters.written_frames;
+            let task = tokio::spawn(async move {
+                while let Some(output) = input.recv().await {
+                    let bytes = output.frame.pixels().len(); let mut confirmed = 0;
+                    let outcome = if output.index != expected { Err(RecorderError::State) } else {
+                        match tokio::time::timeout(timeout, write_confirmed_chunks(&mut stdin, output.frame.pixels(), &mut confirmed)).await {
+                            Ok(value) => value, Err(_) => Err(RecorderError::WriteTimeout),
+                        }
+                    };
+                    let failed = outcome.is_err();
+                    let ack = WriteAck { index: output.index, bytes, confirmed, outcome };
+                    drop(output);
+                    if acknowledge.send(ack).await.is_err() || failed { break; }
+                    expected = expected.saturating_add(1);
                 }
-                self.latest_preview = None;
-                self.state = RecordingState::Interrupted;
-                Err(err)
+                stdin
+            });
+            self.in_flight = Some(InFlightWrite { task, sender, acknowledgments, outstanding: 0 });
+        }
+        let worker = self.in_flight.as_mut().ok_or(RecorderError::State)?;
+        let mut submitted = false;
+        while let Some(output) = self.queue.pop_front() {
+            if output.index != self.counters.written_frames.saturating_add(worker.outstanding as u64) {
+                self.latest_preview = None; self.state = RecordingState::Interrupted; return Err(RecorderError::State);
+            }
+            match worker.sender.try_send(output) {
+                Ok(()) => { worker.outstanding += 1; submitted = true; },
+                Err(tokio::sync::mpsc::error::TrySendError::Full(output)) => { self.queue.push_front(output); break; },
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    self.latest_preview = None; self.state = RecordingState::Interrupted; return Err(RecorderError::WriteFailed);
+                },
             }
         }
+        Ok(submitted)
+    }
+
+    fn accept_write(&mut self, ack: WriteAck) -> Result<bool, RecorderError> {
+        let worker = self.in_flight.as_mut().ok_or(RecorderError::State)?;
+        worker.outstanding = worker.outstanding.checked_sub(1).ok_or(RecorderError::State)?;
+        self.child.last_partial = ack.confirmed;
+        match ack.outcome {
+            Ok(()) if ack.index == self.counters.written_frames && ack.confirmed == ack.bytes => {
+                self.counters.written_frames = self.counters.written_frames.saturating_add(1);
+                self.counters.written_bytes = self.counters.written_bytes.saturating_add(ack.confirmed as u64);
+                Ok(true)
+            },
+            other => {
+                let err = match other { Err(value) => value, Ok(()) => RecorderError::State };
+                self.counters.partial_bytes = ack.confirmed as u64;
+                if err == RecorderError::WriteTimeout { self.counters.backpressure = self.counters.backpressure.saturating_add(1); }
+                self.latest_preview = None; self.state = RecordingState::Interrupted; Err(err)
+            },
+        }
+    }
+
+    async fn finish_write(&mut self) -> Result<bool, RecorderError> {
+        let Some(worker) = self.in_flight.as_mut() else { return Ok(false); };
+        if worker.outstanding == 0 { return Ok(false); }
+        match worker.acknowledgments.recv().await {
+            Some(ack) => self.accept_write(ack),
+            None => { self.latest_preview = None; self.state = RecordingState::Interrupted; Err(RecorderError::WriteFailed) },
+        }
+    }
+
+    /// Collect confirmed acknowledgments without waiting on pipe I/O.
+    pub async fn poll_pump(&mut self) -> Result<bool, RecorderError> {
+        self.check_pump_state()?; let mut written = false;
+        loop {
+            let Some(worker) = self.in_flight.as_mut() else { break; };
+            match worker.acknowledgments.try_recv() {
+                Ok(ack) => { self.accept_write(ack)?; written = true; },
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) if worker.outstanding == 0 => break,
+                Err(_) => { self.latest_preview = None; self.state = RecordingState::Interrupted; return Err(RecorderError::WriteFailed); },
+            }
+        }
+        Ok(written)
+    }
+
+    /// Compatibility/drain API: collect exactly one confirmed frame.
+    pub async fn pump_one(&mut self) -> Result<bool, RecorderError> {
+        self.begin_pump()?;
+        self.finish_write().await
+    }
+
+    async fn close_writer(&mut self) -> Result<(), RecorderError> {
+        if let Some(mut worker) = self.in_flight.take() {
+            drop(worker.sender);
+            match tokio::time::timeout(self.child.stop_timeout, &mut worker.task).await {
+                Ok(Ok(stdin)) => self.child.stdin = Some(stdin),
+                _ => { worker.task.abort(); let _ = worker.task.await; return Err(RecorderError::StopTimeout); },
+            }
+        }
+        Ok(())
+    }
+
+    async fn abort_writer(&mut self) -> Result<(), RecorderError> {
+        let outcome = self.child.abort().await;
+        if let Some(mut worker) = self.in_flight.take() {
+            drop(worker.sender);
+            if tokio::time::timeout(self.child.stop_timeout, &mut worker.task).await.is_err() { worker.task.abort(); let _ = worker.task.await; }
+        }
+        outcome
     }
 
     /// Abort the child and keep partial evidence; no receipt is emitted.
     pub async fn interrupt(&mut self) -> Result<(), RecorderError> {
         self.latest_preview = None;
         self.state = RecordingState::Interrupted;
-        self.child.abort().await
+        self.abort_writer().await
     }
 
     /// Drain, finish the child, decode-validate, then publish durably.
     pub async fn stop(&mut self, journal: &mut Journal) -> Result<RecordingReceipt, RecorderError> {
         if self.state == RecordingState::Interrupted {
             self.latest_preview = None;
-            let _ = self.child.abort().await;
+            let _ = self.abort_writer().await;
             return Err(RecorderError::State);
         }
         if self.state == RecordingState::Complete {
@@ -379,15 +508,19 @@ impl Recorder {
                 Err(err) => {
                     self.latest_preview = None;
                     self.state = RecordingState::Interrupted;
-                    let _ = self.child.abort().await;
+                    let _ = self.abort_writer().await;
                     return Err(err);
                 }
             }
         }
+        if let Err(err) = self.close_writer().await {
+            self.latest_preview = None; self.state = RecordingState::Interrupted;
+            let _ = self.abort_writer().await; return Err(err);
+        }
         if let Err(err) = self.child.finish().await {
             self.latest_preview = None;
             self.state = RecordingState::Interrupted;
-            let _ = self.child.abort().await;
+            let _ = self.abort_writer().await;
             return Err(err);
         }
         if self.counters.written_frames == 0 {
@@ -451,7 +584,7 @@ impl Recorder {
         let profile=profile.validate()?;validate_plan(root,&plan)?;
         journal.append_media_intent(&plan.intent_event,&plan.media_id,&plan.published_name).map_err(|_|RecorderError::Journal)?;
         let child=ChildSupervisor::fixture(mode,profile,root)?;
-        Ok(Self{profile,root:root.to_path_buf(),plan,pacer:Pacer::new(profile.pacer().map_err(RecorderError::Pacer)?,origin).map_err(RecorderError::Pacer)?,queue:VecDeque::new(),child,state:RecordingState::Recording,counters:RecorderCounters::default(),binary:std::env::current_exe().map_err(|_|RecorderError::Spawn)?,encoder:Encoder::Ffv1,preview:None,latest_preview:None,disk_full:false})
+        Ok(Self{profile,root:root.to_path_buf(),plan,pacer:Pacer::new(profile.pacer().map_err(RecorderError::Pacer)?,origin).map_err(RecorderError::Pacer)?,queue:VecDeque::new(),child,state:RecordingState::Recording,counters:RecorderCounters::default(),binary:std::env::current_exe().map_err(|_|RecorderError::Spawn)?,encoder:Encoder::Ffv1,preview:None,latest_preview:None,in_flight:None,fresh_origin:false,disk_full:false})
     }
     pub(crate) fn test_disk_full(&mut self){self.disk_full=true;}
     pub(crate) fn test_argv(profile:VideoProfile,encoder:Encoder,path:&Path)->Vec<std::ffi::OsString>{complete_argv(profile,encoder,path)}
@@ -470,4 +603,43 @@ pub(crate) async fn write_confirmed_chunks<W:tokio::io::AsyncWrite+Unpin>(writer
         *confirmed+=count;
     }
     Ok(())
+}
+
+// OK-5 authorizes this exact external tool for operator trials, not distribution
+// or certification as the audited production build. Never a software fallback.
+const OPERATOR_EXTERNAL_TEST_SHA256: &str = "c6caa1894d3276556c84b36acc1d219d69f972c0a7525b23f1cad2bdf05c4231";
+impl EncoderUse {
+    pub(crate) fn operator_selected(sha256: String) -> Self {
+        if sha256 == OPERATOR_EXTERNAL_TEST_SHA256 { Self::OperatorApprovedExternalTest { audited_sha256: sha256 } }
+        else { Self::Production { audited_sha256: sha256 } }
+    }
+}
+fn external_test_pin_approved(encoder: Encoder, actual: &str, supplied: &str) -> bool {
+    encoder != Encoder::Ffv1 && actual == OPERATOR_EXTERNAL_TEST_SHA256 && supplied == OPERATOR_EXTERNAL_TEST_SHA256
+}
+fn strict_production_build(text: &str) -> bool {
+    text.starts_with("ffmpeg version 8.1.3") && !["--enable-libx264","--enable-gpl","--enable-nonfree"].iter().any(|flag| text.contains(flag))
+}
+#[cfg(test)] mod approved_external_policy_tests {
+    use super::*;
+    #[test] fn approved_external_requires_exact_pin_and_hardware() {
+        for encoder in [Encoder::Nvenc, Encoder::Amf, Encoder::Qsv] {
+            assert!(external_test_pin_approved(encoder, OPERATOR_EXTERNAL_TEST_SHA256, OPERATOR_EXTERNAL_TEST_SHA256));
+            assert!(!external_test_pin_approved(encoder, &"f".repeat(64), OPERATOR_EXTERNAL_TEST_SHA256));
+            assert!(!external_test_pin_approved(encoder, OPERATOR_EXTERNAL_TEST_SHA256, &"f".repeat(64)));
+        }
+        assert!(!external_test_pin_approved(Encoder::Ffv1, OPERATOR_EXTERNAL_TEST_SHA256, OPERATOR_EXTERNAL_TEST_SHA256));
+    }
+    #[test] fn operator_selection_never_falls_back_to_development() {
+        assert!(matches!(EncoderUse::operator_selected(OPERATOR_EXTERNAL_TEST_SHA256.into()), EncoderUse::OperatorApprovedExternalTest { .. }));
+        assert!(matches!(EncoderUse::operator_selected("f".repeat(64)), EncoderUse::Production { .. }));
+    }
+    #[test] fn strict_production_policy_is_preserved() {
+        assert!(strict_production_build("ffmpeg version 8.1.3\nconfiguration: --enable-nvenc"));
+        for text in ["ffmpeg version n8.1.3", "ffmpeg version 8.1.4", "ffmpeg version 8.1.3 --enable-gpl", "ffmpeg version 8.1.3 --enable-libx264", "ffmpeg version 8.1.3 --enable-nonfree"] { assert!(!strict_production_build(text)); }
+    }
+}
+
+impl Drop for Recorder {
+    fn drop(&mut self) { if let Some(pending) = self.in_flight.take() { pending.task.abort(); } }
 }

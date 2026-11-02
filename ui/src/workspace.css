@@ -1,0 +1,93 @@
+/* Desktop presentation only: Cafe tokens supply the complete palette. */
+.cafe-desktop {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 28rem;
+  height: calc(100dvh - 12rem);
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, sans-serif;
+}
+.cafe-desktop .cafe-desktop-wall {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  --dv-group-view-background-color: var(--surface);
+  --dv-tabs-and-actions-container-background-color: var(--surface);
+  --dv-activegroup-visiblepanel-tab-background-color: var(--surface);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--bg);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--surface);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--bg);
+  --dv-activegroup-visiblepanel-tab-color: var(--fg);
+  --dv-activegroup-hiddenpanel-tab-color: var(--muted);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--fg);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--muted);
+  --dv-tab-divider-color: var(--border);
+  --dv-separator-border: var(--border);
+  --dv-paneview-header-border-color: var(--border);
+  --dv-sash-color: var(--border);
+  --dv-active-sash-color: var(--accent);
+  --dv-drag-over-background-color: var(--surface);
+  --dv-drag-over-border-color: var(--accent);
+  --dv-drag-over-border: 1px solid var(--accent);
+  --dv-paneview-active-outline-color: var(--accent);
+  --dv-icon-hover-background-color: var(--surface);
+  --dv-tab-group-color-grey: var(--muted);
+  --dv-tab-group-color-blue: var(--accent);
+  --dv-tab-group-color-red: var(--accent);
+  --dv-tab-group-color-yellow: var(--accent);
+  --dv-tab-group-color-green: var(--accent);
+  --dv-tab-group-color-pink: var(--accent);
+  --dv-tab-group-color-purple: var(--accent);
+  --dv-tab-group-color-cyan: var(--accent);
+  --dv-tab-group-color-orange: var(--accent);
+  --dv-overlay-z-index: 10;
+  --dv-border-radius: 0px;
+  --dv-spacing-padding: 0px;
+  --dv-tab-margin: 0;
+  --dv-tab-border-radius: 0px;
+  --dv-tabs-and-actions-container-height: 36px;
+  --dv-tab-font-size: var(--text-sm, .875rem);
+}
+.cafe-desktop .cafe-desktop-panel {
+  height: 100%;
+  min-width: 0;
+  overflow: auto;
+  padding: var(--space-3, 12px);
+  box-sizing: border-box;
+  background: var(--surface);
+}
+.cafe-desktop .cafe-desktop-tab {
+  display: block;
+  max-width: 18rem;
+  padding-inline: var(--space-3, 12px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: system-ui, sans-serif;
+}
+.cafe-desktop .cafe-desktop-empty {
+  display: grid;
+  gap: var(--space-3, 12px);
+  justify-items: start;
+  margin: auto;
+  padding: var(--space-4, 16px);
+}
+.cafe-desktop .cafe-desktop-empty button {
+  font: inherit;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  padding: var(--space-2, 8px) var(--space-4, 16px);
+  cursor: pointer;
+}
+.cafe-desktop .cafe-desktop-empty button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

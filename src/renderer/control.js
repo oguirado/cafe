@@ -37,7 +37,7 @@ export function createControls(bridge, idFactory = () => globalThis.crypto.rando
       const page=state.window_page;
       if(!object(page)||!unsigned(page.offset)||!unsigned(page.total)||!(page.next_offset===null||unsigned(page.next_offset)))throw rejected();
       const recordings=Array.isArray(state.recordings)?state.recordings.map(row=>({capsule_id:row.capsule_id,state:row.state,feeds:Array.isArray(row.feeds)?row.feeds .map((/** @type {any} */ feed)=>({feed_id:feed.feed_id,state:feed.state,written_frames:clock(feed.written_frames)?feed.written_frames:null,backpressure:clock(feed.backpressure)?feed.backpressure:null})):[]})):[];
-      const last=object(state.last_result)&&['observed','committed','rejected','pending','blocked','interrupted','configured'].includes(state.last_result.state)?{state:state.last_result.state,code:'runtime_'+state.last_result.state}:null;
+      const last=object(state.last_result)&&['observed','committed','rejected','pending','blocked','interrupted','configured'].includes(state.last_result.state)?{state:state.last_result.state,code:'runtime_'+state.last_result.state,requestId:identifier(state.last_result.request_id)?state.last_result.request_id:null}:null;
       return {availability:'available',platform:state.platform==='windows'?'windows':'unsupported',capsules,windows,windowPage:{offset:page.offset,nextOffset:page.next_offset,total:page.total},recordings,folderConfigured:state.folder_configured===true,ffmpegConfigured:state.recording_configured===true,obsReady:state.obs_available===true,obsConfigurable:state.obs_configurable===true,chatReady:state.chat_available===true,chatConfigurable:state.chat_configurable===true,lastResult:last};
     } catch { return {...empty,availability:'unavailable'}; }
   }
@@ -66,10 +66,10 @@ export function createControls(bridge, idFactory = () => globalThis.crypto.rando
   function subscribe(listener){if(disposed||typeof listener!=='function'||listeners.size>=16)throw rejected();listeners.add(listener);listener(getState());return ()=>{listeners.delete(listener);};}
   function dispose(){if(disposed)return;disposed=true;listeners.clear();if(detach){try{detach();}catch{}detach=null;} /* never stop authority or recording */}
   function nonce(){const value=idFactory();if(!identifier(value))throw rejected();return value;}
-  /** @param {Record<string,unknown>} body */
-  async function send(body){
+  /** @param {Record<string,unknown>} body @param {string} [requestId] */
+  async function send(body,requestId=nonce()){
     if(disposed||pending||getState().availability!=='available'||!current||!object(bridge)||typeof bridge.submitIntent!=='function')throw rejected();
-    const request={schema:'cafe.operator.v1',kind:'operator_intent',request_id:nonce(),authority_epoch:current.authority_epoch,expected_revision:current.revision,body};
+    const request={schema:'cafe.operator.v1',kind:'operator_intent',request_id:requestId,authority_epoch:current.authority_epoch,expected_revision:current.revision,body};
     pending=true;
     try{const reply=await bridge.submitIntent(request);if(!object(reply)||!(reply.queued===true||(reply.queued===false&&reply.cancelled===true)))throw rejected();return reply;}
     catch{throw rejected();}finally{pending=false;}
@@ -77,7 +77,7 @@ export function createControls(bridge, idFactory = () => globalThis.crypto.rando
   /** @param {string} personLabel */
   async function createCapsule(personLabel){if(!text(personLabel,128)||getState().capsules.length>=2)throw rejected();return send({op:'create_capsule',capsule_id:'cap-'+nonce(),person_label:personLabel});}
   /** @param {number} [offset] */
-  async function refreshWindows(offset=0){if(!unsigned(offset)||offset>1000000)throw rejected();return send({op:'list_windows',offset});}
+  async function refreshWindows(offset=0){if(!unsigned(offset)||offset>1000000)throw rejected();const requestId=nonce();const reply=await send({op:'list_windows',offset},requestId);return {queued:reply.queued===true,cancelled:reply.cancelled===true,request_id:requestId};}
   /** @param {any} value */
   async function pairWindow(value){
     if(!object(value)||!identifier(value.capsuleId)||!['game','camera'].includes(value.role)||!text(value.windowToken,128)||!clock(value.windowGeneration)||!clock(value.layoutRevision)||!object(value.crop))throw rejected();
@@ -113,6 +113,19 @@ const DIAGNOSTIC_CODES = new Set([
   'old_authority_epoch', 'request_id_conflict', 'operator_frame_rejected',
   'window_paired', 'windows_refreshed', 'capsule_created', 'authority_started',
   'native_enumeration_unavailable', 'window_page_invalidated', 'projection_budget_exceeded',
+  'ffmpeg_startup_selection_blocked', 'hardware_preflight_required', 'recording_ffmpeg_not_approved', 'recording_hardware_preflight_blocked', 'recording_capture_unavailable',
+  'recording_first_frame_timeout', 'recording_capture_unhealthy', 'recording_binding_changed',
+  'recording_capture_minimized',
+  'recording_capture_frozen',
+  'recording_capture_closed',
+  'recording_capture_device_lost',
+  'recording_capture_resize_required',
+  'recording_capture_generation_mismatch',
+  'recording_capture_backpressure',
+  'recording_capture_border_unavailable',
+  'recording_capture_source_failed',
+  'recording_capture_clock_regression',
+  'recording_crop_invalid', 'recording_recorder_start_failed', 'recording_setup_failed', 'recording_effect_interrupted',
 ]);
 /** @param {unknown} snapshot */
 export function buildDiagnosticReport(snapshot) {

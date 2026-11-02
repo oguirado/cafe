@@ -94,3 +94,28 @@ test('external FFmpeg rejects oversize and empty selections before hashing', () 
   fs.truncateSync(file, 512 * 1024 * 1024 + 1);
   assert.throws(() => select(file), /AUTHORITY_FILE_REJECTED/);
 }));
+
+
+test('optional native default is verified and child environment stays pruned', () => fixture((resources, root) => {
+  const api = require('node:child_process'), original = api.spawn;
+  const file = path.join(root, 'synthetic-default.exe'); fs.writeFileSync(file, 'synthetic external choice');
+  const pin = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  const receipt = path.join(resources, 'cafe-build.json'), data = JSON.parse(fs.readFileSync(receipt, 'utf8'));
+  data.ffmpeg_binary = { path: fs.realpathSync.native(file), sha256: pin }; fs.writeFileSync(receipt, JSON.stringify(data));
+  let captured;
+  api.spawn = (_command, _args, options) => { captured = options.env; const child = new EventEmitter(); return Object.assign(child, { pid: undefined, stdout: new EventEmitter(), stderr: new EventEmitter(), stdin: Object.assign(new EventEmitter(), { write: () => true, writableLength: 0 }), kill: () => { throw new Error('unexpected signal'); } }); };
+  try { const supervisor = createPackagedBackend(options(resources, root)); supervisor.start(); supervisor.dispose(); }
+  finally { api.spawn = original; }
+  assert.equal(captured.CAFE_FFMPEG_PATH, data.ffmpeg_binary.path); assert.equal(captured.CAFE_FFMPEG_SHA256, pin);
+  assert.equal(captured.CAFE_FFMPEG_STARTUP_BLOCKED, undefined); assert.equal(captured.NODE_OPTIONS, undefined); assert.equal(captured.OPENAI_API_KEY, undefined); assert.equal(captured.PATH, undefined);
+}));
+test('invalid optional native default remains unconfigured without breaking manual setup', () => fixture((resources, root) => {
+  const api = require('node:child_process'), original = api.spawn;
+  const receipt = path.join(resources, 'cafe-build.json'), data = JSON.parse(fs.readFileSync(receipt, 'utf8'));
+  data.ffmpeg_binary = { path: 'relative.exe', sha256: 'f'.repeat(64) }; fs.writeFileSync(receipt, JSON.stringify(data));
+  let captured;
+  api.spawn = (_command, _args, options) => { captured = options.env; const child = new EventEmitter(); return Object.assign(child, { pid: undefined, stdout: new EventEmitter(), stderr: new EventEmitter(), stdin: Object.assign(new EventEmitter(), { write: () => true, writableLength: 0 }), kill: () => { throw new Error('unexpected signal'); } }); };
+  try { const supervisor = createPackagedBackend(options(resources, root)); supervisor.start(); supervisor.dispose(); }
+  finally { api.spawn = original; }
+  assert.equal(captured.CAFE_FFMPEG_PATH, undefined); assert.equal(captured.CAFE_FFMPEG_SHA256, undefined); assert.equal(captured.CAFE_FFMPEG_STARTUP_BLOCKED, '1');
+}));

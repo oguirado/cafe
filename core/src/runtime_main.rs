@@ -104,7 +104,7 @@ fn mutate(request:OperatorRequest,runtime:&mut ControlRuntime<ControlCommandSend
   },
  }
 }
-async fn execute_effect(job:&crate::control_intents::ActorControlJob,authority:&mut ControlRuntime<ControlCommandSender>,windows:&mut WindowRegistry,adapter:&mut NativeAdapter,book:&PairingBook,engine:&mut RuntimeEffects<RecordingSource>,ffmpeg:Option<&ExternalFfmpeg>,services:&mut ServiceClient)->Option<ActorCompletion> {
+async fn execute_effect(job:&crate::control_intents::ActorControlJob,authority:&mut ControlRuntime<ControlCommandSender>,windows:&mut WindowRegistry,adapter:&mut NativeAdapter,book:&PairingBook,engine:&mut RuntimeEffects<RecordingSource>,ffmpeg:Option<&ExternalFfmpeg>,services:&mut ServiceClient,failure:&mut Option<&'static str>)->Option<ActorCompletion> {
  let interrupted=Some(ActorCompletion::Interrupted);
  if matches!(&job.action,ActorControlAction::SendToObs(_))&&adapter.enumerate(windows).is_err(){return interrupted;}
  if job.authority_epoch!=authority.capsule_snapshot().authority_epoch{return interrupted;}
@@ -121,10 +121,10 @@ async fn execute_effect(job:&crate::control_intents::ActorControlJob,authority:&
    // Finish all slow hardware trials before starting any native capture.
    let mut prepared=Vec::new();for (index,binding) in job.window_bindings.iter().enumerate(){
     let media_key=format!("rec-{}-{index}",crate::authority_journal::sha256_hex(job.effect_id.as_bytes()));
-    match crate::runtime_recording::prepare_feed(approval,binding,&media_key,root).await{Ok(value)=>prepared.push((binding,media_key,value)),Err(_)=>return interrupted,}
+    match crate::runtime_recording::prepare_feed(approval,binding,&media_key,root).await{Ok(value)=>prepared.push((binding,media_key,value)),Err(code)=>{*failure=Some(recording_failure_code(code));return interrupted;},}
    }
    let mut feeds=Vec::new();for (binding,media_key,approved) in prepared{
-    match crate::runtime_recording::build_feed(approved,binding,&media_key,windows,adapter,root,authority.journal_for_media_actor()).await{Ok(pipeline)=>feeds.push((binding.feed_id.clone(),pipeline)),Err(_)=>{for (_,pipeline) in &mut feeds{let _=pipeline.abort().await;}return interrupted;}}
+    match crate::runtime_recording::build_feed(approved,binding,&media_key,windows,adapter,root,authority.journal_for_media_actor()).await{Ok(pipeline)=>feeds.push((binding.feed_id.clone(),pipeline)),Err(code)=>{*failure=Some(recording_failure_code(code));for (_,pipeline) in &mut feeds{let _=pipeline.abort().await;}return interrupted;}}
    }
    if engine.attach_capsule(capsule.capsule_id.clone(),feeds).await.is_ok(){Some(ActorCompletion::Applied)}else{interrupted}
   },
@@ -157,11 +157,11 @@ pub(crate) fn run()->Result<(),&'static str>{
   let (requests_tx,mut requests_rx)=tokio::sync::mpsc::channel(8);let client=ControlActorClient::new(requests_tx,Duration::from_secs(4))?;
   let broker=BrokerAuthority::start_control(&storage.session.join("broker"),"127.0.0.1",storage.epoch.0,Box::new(client)).await.map_err(|_|"runtime_broker_unavailable")?;
   let mut windows=WindowRegistry::new(storage.epoch);let mut adapter=NativeAdapter::new(storage.epoch);let mut book=PairingBook::new();let mut engine=RuntimeEffects::<RecordingSource>::new(2,4).map_err(|_|"runtime_effect_budget_invalid")?;
-  let mut services=ServiceClient::packaged(storage.chat.clone(),storage.epoch.0);let mut ffmpeg=None;let mut window_offset=0;let input=input();let output=output();let mut last=result("observed","authority_started");output.publish(snapshot(&authority,&windows,&last,ffmpeg.is_some(),&engine,window_offset,&services));
+  let mut services=ServiceClient::packaged(storage.chat.clone(),storage.epoch.0);let (mut ffmpeg,start_state,start_code)=startup_ffmpeg(std::env::var_os("CAFE_FFMPEG_PATH").map(PathBuf::from),std::env::var("CAFE_FFMPEG_SHA256").ok(),std::env::var_os("CAFE_FFMPEG_STARTUP_BLOCKED").is_some());let mut window_offset=0;let input=input();let output=output();let mut last=result(start_state,start_code);output.publish(snapshot(&authority,&windows,&last,ffmpeg.is_some(),&engine,window_offset,&services));
   loop{
-   let mut changed=false;for _ in 0..4{match input.try_recv(){Ok(bytes)=>{last=match decode_operator(&bytes){Ok(request)=>mutate(request,&mut authority,&mut windows,&mut adapter,&mut book,&bindings,&mut ffmpeg,&mut window_offset,&mut services),Err(code)=>result("rejected",code)};changed=true;},Err(std::sync::mpsc::TryRecvError::Empty)=>break,Err(std::sync::mpsc::TryRecvError::Disconnected)=>{let _=engine.abort_all().await;services.close().await;drop(broker);return Ok(());}}}
+   let mut changed=false;for _ in 0..4{match input.try_recv(){Ok(bytes)=>{last=match decode_operator(&bytes){Ok(request)=>{let query_id=if matches!(&request.body,OperatorBody::ListWindows{..}){Some(request.request_id.clone())}else{None};let mut reply=mutate(request,&mut authority,&mut windows,&mut adapter,&mut book,&bindings,&mut ffmpeg,&mut window_offset,&mut services);if let Some(id)=query_id{reply["request_id"]=json!(id);}reply},Err(code)=>result("rejected",code)};changed=true;},Err(std::sync::mpsc::TryRecvError::Empty)=>break,Err(std::sync::mpsc::TryRecvError::Disconnected)=>{let _=engine.abort_all().await;services.close().await;drop(broker);return Ok(());}}}
    for _ in 0..8{match requests_rx.try_recv(){Ok(request)=>{request.execute_on(&mut authority);changed=true;},Err(_)=>break}}
-   for _ in 0..8{match effects_rx.try_recv(){Ok(job)=>{let outcome=execute_effect(&job,&mut authority,&mut windows,&mut adapter,&book,&mut engine,ffmpeg.as_ref(),&mut services).await;if let Some(outcome)=outcome{let reply=authority.complete_from_actor(&job.effect_id,outcome);last=serde_json::to_value(reply).unwrap_or_else(|_|result("blocked","reply_encoding_failed"));}changed=true;},Err(_)=>break}}
+   for _ in 0..8{match effects_rx.try_recv(){Ok(job)=>{let mut failure=None;let outcome=execute_effect(&job,&mut authority,&mut windows,&mut adapter,&book,&mut engine,ffmpeg.as_ref(),&mut services,&mut failure).await;if let Some(outcome)=outcome{let recording_failed=matches!(&outcome,ActorCompletion::Interrupted)&&matches!(&job.action,ActorControlAction::StartRecording{..}|ActorControlAction::StopRecording(_));let reply=authority.complete_from_actor(&job.effect_id,outcome);last=serde_json::to_value(reply).unwrap_or_else(|_|result("blocked","reply_encoding_failed"));if recording_failed && last.get("state").and_then(serde_json::Value::as_str)==Some("interrupted"){last["code"]=json!(failure.unwrap_or("recording_effect_interrupted"));}}changed=true;},Err(_)=>break}}
    let (completed,service_changed)=services.drain();changed|=service_changed;
    for (key,applied) in completed {match key{
     ServiceKey::Configuration(_)=>last=if applied{result("configured","service_configured")}else{result("blocked","service_operation_failed")},
@@ -195,4 +195,82 @@ pub(crate) fn run()->Result<(),&'static str>{
  #[test]fn pairing_authority_error_never_exposes_its_payload(){
   assert_eq!(pair_rejection_code(&PairError::AuthorityRejected("SYNTHETIC_SECRET_CANARY".into())),"pair_authority_rejected");
  }
+}
+
+// Public diagnostic values are closed literals, never child output or paths.
+fn recording_failure_code(code: &str) -> &'static str {
+    match code {
+        "ffmpeg_audit_blocked" => "recording_ffmpeg_not_approved",
+        "hardware_encoder_blocked" => "recording_hardware_preflight_blocked",
+        "capture_start_unavailable" => "recording_capture_unavailable",
+        "capture_first_frame_timeout" => "recording_first_frame_timeout",
+        "capture_not_healthy" => "recording_capture_unhealthy",
+        "capture_minimized" => "recording_capture_minimized",
+        "capture_frozen" => "recording_capture_frozen",
+        "capture_closed" => "recording_capture_closed",
+        "capture_device_lost" => "recording_capture_device_lost",
+        "capture_resize_required" => "recording_capture_resize_required",
+        "capture_generation_mismatch" => "recording_capture_generation_mismatch",
+        "capture_backpressure" => "recording_capture_backpressure",
+        "capture_border_unavailable" => "recording_capture_border_unavailable",
+        "capture_source_failed" => "recording_capture_source_failed",
+        "capture_clock_regression" => "recording_capture_clock_regression",
+        "window_layout_changed" => "recording_binding_changed",
+        "crop_resource_bound" | "observed_crop_outside_frame" | "observed_crop_overflow" | "crop_pool_exhausted" => "recording_crop_invalid",
+        "recorder_start_failed" => "recording_recorder_start_failed",
+        _ => "recording_setup_failed",
+    }
+}
+#[cfg(test)] mod recording_diagnostic_tests {
+    use super::recording_failure_code;
+    #[test] fn approved_recording_failures_have_static_categories() {
+        assert_eq!(recording_failure_code("ffmpeg_audit_blocked"), "recording_ffmpeg_not_approved");
+        assert_eq!(recording_failure_code("hardware_encoder_blocked"), "recording_hardware_preflight_blocked");
+        assert_eq!(recording_failure_code("capture_first_frame_timeout"), "recording_first_frame_timeout");
+        assert_eq!(recording_failure_code("observed_crop_outside_frame"), "recording_crop_invalid");
+    }
+    #[test] fn capture_state_failures_have_closed_public_categories() {
+        assert_eq!(recording_failure_code("capture_not_healthy"), "recording_capture_unhealthy");
+        for (internal,public) in [
+            ("capture_minimized","recording_capture_minimized"),
+            ("capture_frozen","recording_capture_frozen"),
+            ("capture_closed","recording_capture_closed"),
+            ("capture_device_lost","recording_capture_device_lost"),
+            ("capture_resize_required","recording_capture_resize_required"),
+            ("capture_generation_mismatch","recording_capture_generation_mismatch"),
+            ("capture_backpressure","recording_capture_backpressure"),
+            ("capture_border_unavailable","recording_capture_border_unavailable"),
+            ("capture_source_failed","recording_capture_source_failed"),
+            ("capture_clock_regression","recording_capture_clock_regression"),
+        ] { assert_eq!(recording_failure_code(internal),public); }
+    }
+    #[test] fn unknown_recording_errors_never_escape() {
+        for code in ["SYNTHETIC_SECRET_CANARY", "capture_SYNTHETIC_SECRET_CANARY", "capture_source_failed:SYNTHETIC_SECRET_CANARY"] {
+            assert_eq!(recording_failure_code(code), "recording_setup_failed");
+        }
+    }
+}
+
+fn startup_ffmpeg(path: Option<PathBuf>, sha256: Option<String>, blocked: bool) -> (Option<ExternalFfmpeg>, &'static str, &'static str) {
+    if path.is_none() && sha256.is_none() && !blocked { return (None, "observed", "authority_started"); }
+    if !blocked { if let (Some(path), Some(digest)) = (path, sha256) {
+        if matches!(crate::ffmpeg_recorder::EncoderUse::operator_selected(digest.clone()), crate::ffmpeg_recorder::EncoderUse::OperatorApprovedExternalTest { .. }) {
+            if let Ok(selected) = ExternalFfmpeg::select(&path, &digest) { return (Some(selected), "configured", "hardware_preflight_required"); }
+        }
+    }}
+    (None, "blocked", "ffmpeg_startup_selection_blocked")
+}
+#[cfg(test)] mod startup_ffmpeg_tests {
+    use super::startup_ffmpeg;
+    use std::path::PathBuf;
+    #[test] fn no_default_preserves_manual_setup() {
+        let (selected,state,code) = startup_ffmpeg(None,None,false);
+        assert!(selected.is_none()); assert_eq!((state,code),("observed","authority_started"));
+    }
+    #[test] fn incomplete_or_unapproved_defaults_never_configure() {
+        for (path,pin,blocked) in [(None,None,true),(Some(PathBuf::from("synthetic.exe")),None,false),(None,Some("f".repeat(64)),false),(Some(PathBuf::from("synthetic.exe")),Some("f".repeat(64)),false)] {
+            let (selected,state,code) = startup_ffmpeg(path,pin,blocked);
+            assert!(selected.is_none()); assert_eq!((state,code),("blocked","ffmpeg_startup_selection_blocked"));
+        }
+    }
 }

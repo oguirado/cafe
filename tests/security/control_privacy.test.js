@@ -9,3 +9,32 @@ test('read action calls getSnapshot only and never mutates',async()=>{const{read
 test('bridge exceptions are replaced without leaking messages',async()=>{const{readDiagnostics}=await load();const r=await readDiagnostics({getSnapshot:async()=>{throw new Error('PRIVATE_PASSWORD_CANARY');}});assert.equal(r.bridge,'unknown');assert.equal(JSON.stringify(r).includes('PRIVATE_'),false);});
 
 test('missing per-window evidence is null instead of a healthy zero',async()=>{const{buildDiagnosticReport}=await load();const s=value();s.state.windows=[{}];const r=buildDiagnosticReport(s);assert.equal(r.listed_window_count,1);assert.equal(r.minimized_window_count,null);assert.equal(r.visible_window_count,null);});
+
+test('recording and startup diagnostics preserve fixed codes only',async()=>{const{buildDiagnosticReport}=await load();for(const code of ['recording_ffmpeg_not_approved','recording_hardware_preflight_blocked','recording_first_frame_timeout','recording_crop_invalid','recording_effect_interrupted','ffmpeg_startup_selection_blocked']){const s=value();s.state.last_result={state:'interrupted',code,error:'PRIVATE_ERROR_CANARY'};const r=buildDiagnosticReport(s);assert.equal(r.result_code,code);assert.equal(JSON.stringify(r).includes('PRIVATE_'),false);}});
+
+test('capture state rejection diagnostics preserve only approved closed codes',async()=>{
+  const{buildDiagnosticReport}=await load();
+  for(const code of [
+    'recording_capture_unhealthy',
+    'recording_capture_minimized',
+    'recording_capture_frozen',
+    'recording_capture_closed',
+    'recording_capture_device_lost',
+    'recording_capture_resize_required',
+    'recording_capture_generation_mismatch',
+    'recording_capture_backpressure',
+    'recording_capture_border_unavailable',
+    'recording_capture_source_failed',
+    'recording_capture_clock_regression',
+  ]){
+    const s=value();s.state.last_result={state:'interrupted',code,error:'PRIVATE_ERROR_CANARY'};
+    const r=buildDiagnosticReport(s);assert.equal(r.result_code,code);
+    assert.equal(JSON.stringify(r).includes('PRIVATE_'),false);
+    assert.ok(Buffer.byteLength(JSON.stringify(r))<4096);
+  }
+  for(const code of ['recording_capture_PRIVATE_ERROR_CANARY','recording_capture_source_failed:PRIVATE_ERROR_CANARY']){
+    const s=value();s.state.last_result={state:'interrupted',code};
+    const r=buildDiagnosticReport(s);assert.equal(r.result_code,'unknown_result');
+    assert.equal(JSON.stringify(r).includes('PRIVATE_'),false);
+  }
+});

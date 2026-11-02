@@ -236,7 +236,7 @@ def _argument_schema(kind):
             'maximum': {'limit': 200, 'window': 1440, 'bucket': 3600}[kind]}
 
 
-def tools(control_enabled=False):
+def tools(control_enabled=False, diagnostics_enabled=False, chat_enabled=True):
     base = [{'name': name, 'description': 'Read-only chat query: ' + name,
              'inputSchema': {'type': 'object', 'additionalProperties': False,
                              'properties': {key: _argument_schema(kind) for key, kind in fields.items()},
@@ -244,6 +244,14 @@ def tools(control_enabled=False):
              'annotations': {'readOnlyHint': True, 'destructiveHint': False,
                              'idempotentHint': True, 'openWorldHint': False}}
             for name, fields in _TOOL_ARGUMENTS.items()]
+    if not chat_enabled:
+        base = []
+    if diagnostics_enabled:
+        base.append({'name': 'recent_diagnostics', 'description': 'Read-only sanitized runtime diagnostics',
+                     'inputSchema': {'type': 'object', 'additionalProperties': False,
+                                     'properties': {'limit': {'type': 'integer', 'minimum': 1, 'maximum': 32}}},
+                     'annotations': {'readOnlyHint': True, 'destructiveHint': False,
+                                     'idempotentHint': True, 'openWorldHint': False}})
     if not control_enabled:
         return base
     return base + [{'name': name, 'description': 'Authority control: ' + name,
@@ -256,6 +264,13 @@ def tools(control_enabled=False):
 
 
 def validate_arguments(name, arguments):
+    if name == 'recent_diagnostics':
+        if type(arguments) is not dict or set(arguments) - {'limit'}:
+            raise ValueError('invalid_params')
+        limit = arguments.get('limit', 32)
+        if type(limit) is not int or not 1 <= limit <= 32:
+            raise ValueError('invalid_params')
+        return {'limit': limit}
     if name in _CONTROL_TOOL_NAMES:
         if type(arguments) is not dict:
             raise ValueError('invalid_params')
@@ -325,8 +340,11 @@ def _query_now_ns(clock):
 
 
 class Server:
-    def __init__(self, data, *, query=None, clock=None, control=None):
-        self.data = _canonical_root(data)
+    def __init__(self, data=None, *, query=None, clock=None, control=None, diagnostics=None):
+        if data is None and diagnostics is None:
+            raise ValueError('data_unavailable')
+        self.data = _canonical_root(data) if data is not None else None
+        self.diagnostics = diagnostics
         self.state = 'new'; self.clock = clock; self.control = control
         if query is None:
             from .mcp_queries import execute
@@ -357,7 +375,7 @@ class Server:
         if self.state != 'ready':
             return _error(identity, -32600)
         if method == 'tools/list':
-            return _result(identity, {'tools': tools(control_enabled=self.control is not None)}) if params == {} else _error(identity, -32602)
+            return _result(identity, {'tools': tools(control_enabled=self.control is not None, diagnostics_enabled=self.diagnostics is not None, chat_enabled=self.data is not None)}) if params == {} else _error(identity, -32602)
         if method != 'tools/call':
             return _error(identity, -32601)
         if type(params) is not dict or set(params) - {'name', 'arguments'} or type(params.get('name')) is not str:
@@ -365,6 +383,23 @@ class Server:
         try:
             args = validate_arguments(params['name'], params.get('arguments', {}))
         except ValueError:
+            return _error(identity, -32602)
+        if params['name'] == 'recent_diagnostics':
+            if self.diagnostics is None:
+                return _error(identity, -32602)
+            try:
+                from .runtime_logging import recent
+                data = recent(self.diagnostics, args['limit'])
+                payload = {'data': data}
+                result = {'content': [{'type': 'text', 'text': json.dumps(payload, separators=(',', ':'), allow_nan=False)}],
+                          'structuredContent': payload, 'isError': False}
+                response = _result(identity, result)
+                if len(json.dumps(response, ensure_ascii=False).encode('utf-8')) + 1 > MAX_RESPONSE:
+                    return _result(identity, _tool_error())
+                return response
+            except (OSError, ValueError, TypeError, RecursionError):
+                return _result(identity, _tool_error())
+        if params['name'] in _TOOL_ARGUMENTS and self.data is None:
             return _error(identity, -32602)
         if params['name'] in _CONTROL_TOOL_NAMES:
             if self.control is None:
@@ -424,10 +459,11 @@ def serve(server, input_stream, output_stream):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--data', required=True)
+    parser.add_argument('--data')
+    parser.add_argument('--diagnostics')
     args = parser.parse_args(argv)
     try:
-        return serve(Server(args.data), sys.stdin.buffer, sys.stdout.buffer)
+        return serve(Server(args.data, diagnostics=args.diagnostics), sys.stdin.buffer, sys.stdout.buffer)
     except (OSError, ValueError):
         return 2
 

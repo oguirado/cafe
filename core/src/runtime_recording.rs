@@ -3,7 +3,7 @@
 use std::{path::{Path,PathBuf,Component},time::{Duration,Instant},sync::Arc};
 use crate::{authority_journal::Journal,capsule_registry::Clock,capsule_pairing::Binding,
  capture_frame_pool::{FramePool,PoolLimits,OwnedFrame,BorrowedFrame},capture_health::{CaptureState,HealthPolicy},
- capture_pipeline::{CapturePipeline,FrameSource},windows_graphics_capture::{NativeCapture,ObservedCaptureConfig,CaptureError},
+ capture_pipeline::{CapturePipeline,FrameSource},windows_graphics_capture::{NativeCapture,ObservedCaptureConfig,CaptureError,trace_stage,initialize_trace},
  windows_window_registry::{WindowRegistry,NativeAdapter},ffmpeg_recorder::{self,Encoder,EncoderUse,VideoProfile,Recorder,RecordingPlan}};
 
 /// Operator-selected external binary. Approval is checked again by preflight and
@@ -39,37 +39,78 @@ impl FrameSource for RecordingSource {
 }
 
 pub(crate) async fn prepare_feed(approval:&ExternalFfmpeg,binding:&Binding,effect_id:&str,folder:&Path)->Result<ffmpeg_recorder::Preflight,&'static str>{
+ initialize_trace();
+ trace_stage("encoder_preflight_begin");
  if binding.crop.width==0||binding.crop.height==0||binding.crop.width>3840||binding.crop.height>2160{return Err("crop_resource_bound");}
-  let profile=VideoProfile{width:binding.crop.width,height:binding.crop.height,fps_num:60,fps_den:1,queue_capacity:3,write_timeout:Duration::from_secs(2),stop_timeout:Duration::from_secs(8),max_lateness_ns:100_000_000,max_hold_ns:250_000_000};
+  let profile=VideoProfile{width:binding.crop.width,height:binding.crop.height,fps_num:60,fps_den:1,queue_capacity:64,write_timeout:Duration::from_secs(2),stop_timeout:Duration::from_secs(8),max_lateness_ns:100_000_000,max_hold_ns:250_000_000};
   let mut selected=None;
   // Every hardware candidate must actually encode and decode. No ffv1/x264 fallback.
-  for encoder in [Encoder::Nvenc,Encoder::Amf,Encoder::Qsv]{let probe=folder.join(format!("probe-{effect_id}.mkv"));if let Ok(value)=ffmpeg_recorder::preflight(&approval.path,encoder,EncoderUse::Production{audited_sha256:approval.sha256.clone()},profile,&probe).await{selected=Some(value);break;}}
+  for encoder in [Encoder::Nvenc,Encoder::Amf,Encoder::Qsv]{let probe=folder.join(format!("probe-{effect_id}.mkv"));match ffmpeg_recorder::preflight(&approval.path,encoder,EncoderUse::operator_selected(approval.sha256.clone()),profile,&probe).await{Ok(value)=>{trace_stage("encoder_preflight_ok");selected=Some(value);break;},Err(ffmpeg_recorder::RecorderError::BlockedAudit)=>return Err("ffmpeg_audit_blocked"),Err(_)=>{},}}
   selected.ok_or("hardware_encoder_blocked")
 
 }
+/// Preserve the first-frame gate while retaining its closed rejection category.
+fn first_frame_failure(state: CaptureState) -> Option<&'static str> {
+ match state {
+  CaptureState::Waiting | CaptureState::Healthy => None,
+  CaptureState::Minimized => Some("capture_minimized"),
+  CaptureState::Frozen => Some("capture_frozen"),
+  CaptureState::Closed => Some("capture_closed"),
+  CaptureState::DeviceLost => Some("capture_device_lost"),
+  CaptureState::ResizeRequired => Some("capture_resize_required"),
+  CaptureState::GenerationMismatch => Some("capture_generation_mismatch"),
+  CaptureState::Backpressure => Some("capture_backpressure"),
+  CaptureState::BorderUnavailable => Some("capture_border_unavailable"),
+  CaptureState::SourceFailed => Some("capture_source_failed"),
+  CaptureState::ClockRegression => Some("capture_clock_regression"),
+ }
+}
+
 pub(crate) async fn build_feed(approved:ffmpeg_recorder::Preflight,binding:&Binding,effect_id:&str,windows:&WindowRegistry,adapter:&mut NativeAdapter,folder:&Path,journal:&mut Journal)->Result<CapturePipeline<RecordingSource>,&'static str>{
  if !cfg!(windows){return Err("native_capture_unsupported");}
  if effect_id.is_empty() || effect_id.len()>96 || !effect_id.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'-'||b==b'_'){return Err("recording_effect_invalid");}
  let view=windows.resolve(&binding.window,binding.window_generation).map_err(|_|"window_reconfirmation_required")?;
  if binding.layout_revision!=view.layout_revision{return Err("window_layout_changed");}
  let config=ObservedCaptureConfig{pool:PoolLimits{slots:8,max_frame_bytes:3840*2160*4,max_width:3840,max_height:2160},health:HealthPolicy{stall_budget:Clock(2_000_000_000)},borderless:false,access_timeout_ms:3000};
- let mut capture=NativeCapture::start_observed(windows,adapter,binding.window.clone(),binding.window_generation,config).await.map_err(|_|"capture_start_unavailable")?;
+ trace_stage("capture_begin");
+ let mut capture=NativeCapture::start_observed(windows,adapter,binding.window.clone(),binding.window_generation,config).await.map_err(|_|{trace_stage("capture_failed");"capture_start_unavailable"})?;
+ trace_stage("capture_started");
  let construction=async {
   let deadline=Instant::now()+Duration::from_secs(3);
-  let first=loop{if let Some(frame)=capture.take_latest(){break frame;}if Instant::now()>=deadline{return Err("capture_first_frame_timeout");}match capture.poll_state(windows){CaptureState::Waiting|CaptureState::Healthy=>{},_=>return Err("capture_not_healthy")};tokio::time::sleep(Duration::from_millis(5)).await;};
-  let pool=FramePool::new(PoolLimits{slots:4,max_frame_bytes:(binding.crop.width as usize).checked_mul(binding.crop.height as usize).and_then(|v|v.checked_mul(4)).filter(|v|*v<=3840*2160*4).ok_or("crop_resource_bound")?,max_width:binding.crop.width,max_height:binding.crop.height}).map_err(|_|"crop_resource_bound")?;
+  trace_stage("first_frame_wait");
+  let first=loop{if let Some(frame)=capture.take_latest(){break frame;}if Instant::now()>=deadline{return Err("capture_first_frame_timeout");}if let Some(code)=first_frame_failure(capture.poll_state(windows)){return Err(code);}tokio::time::sleep(Duration::from_millis(5)).await;};
+  trace_stage("first_frame_ready");
+  let pool=FramePool::new(PoolLimits{slots:68,max_frame_bytes:(binding.crop.width as usize).checked_mul(binding.crop.height as usize).and_then(|v|v.checked_mul(4)).filter(|v|*v<=3840*2160*4).ok_or("crop_resource_bound")?,max_width:binding.crop.width,max_height:binding.crop.height}).map_err(|_|"crop_resource_bound")?;
   // Verify the crop against observed pixels, not only window rectangle metadata.
   drop(crop_frame(&pool,&first,binding.crop)?);
   let plan=RecordingPlan{media_id:format!("media-{effect_id}"),intent_event:format!("intent-{effect_id}"),publish_event:format!("publish-{effect_id}"),staged_name:format!("{effect_id}.partial.mkv"),published_name:format!("{effect_id}.mkv")};
-  let mut recorder=Recorder::start(approved,folder,plan,journal,Instant::now()).await.map_err(|_|"recorder_start_failed")?;
+  trace_stage("recorder_begin");
+  let (mut recorder,_ready)=Recorder::start_ready(approved,folder,plan,journal).await.map_err(|_|"recorder_start_failed")?;
   recorder.enable_preview(10,1).map_err(|_|"recorder_start_failed")?;
+  trace_stage("recorder_ready");
   Ok((first,pool,recorder))
  }.await;
- match construction{Ok((first,pool,recorder))=>Ok(CapturePipeline::new(RecordingSource{capture,first:Some(first),pool,crop:binding.crop,failed:false},recorder)),Err(code)=>{let _=capture.stop();Err(code)}}
+ match construction{Ok((first,pool,recorder))=>Ok(CapturePipeline::new_live(RecordingSource{capture,first:Some(first),pool,crop:binding.crop,failed:false},recorder)),Err(code)=>{trace_stage("capture_failed");let _=capture.stop();Err(code)}}
 }
 
 #[cfg(test)]mod tests{
  use super::*;use crate::capsule_pairing::Crop;
+ #[test]fn first_frame_states_keep_the_exact_admission_boundary(){
+  assert_eq!(first_frame_failure(CaptureState::Waiting),None);
+  assert_eq!(first_frame_failure(CaptureState::Healthy),None);
+  for (state,expected) in [
+   (CaptureState::Minimized,"capture_minimized"),
+   (CaptureState::Frozen,"capture_frozen"),
+   (CaptureState::Closed,"capture_closed"),
+   (CaptureState::DeviceLost,"capture_device_lost"),
+   (CaptureState::ResizeRequired,"capture_resize_required"),
+   (CaptureState::GenerationMismatch,"capture_generation_mismatch"),
+   (CaptureState::Backpressure,"capture_backpressure"),
+   (CaptureState::BorderUnavailable,"capture_border_unavailable"),
+   (CaptureState::SourceFailed,"capture_source_failed"),
+   (CaptureState::ClockRegression,"capture_clock_regression"),
+  ]{assert_eq!(first_frame_failure(state),Some(expected));}
+ }
  #[test]fn crop_uses_actual_rows_and_source_clock(){
   let original=FramePool::new(PoolLimits{slots:1,max_frame_bytes:48,max_width:4,max_height:3}).unwrap();
   let pixels=(0u8..48).collect::<Vec<_>>();let frame=original.copy_from(BorrowedFrame{data:&pixels,width:4,height:3,source_stride:16,source_time:Clock(88)}).unwrap();
