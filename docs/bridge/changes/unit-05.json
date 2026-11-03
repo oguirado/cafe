@@ -1,0 +1,278 @@
+{
+  "id": "PRO-05",
+  "base_commit": "f1e874050e305645a90e64267e50f8625daae9bc",
+  "patch_sha256": "a4b0c5632f89b965458e260a0fff12862ec45e59f3fdc69b898e2239c7f9b118",
+  "paths": [
+    "connectors/cafe/mcp_demo_guide.py",
+    "tests/integration/test_mcp_demo_guide.py",
+    "submission/DEVPOST.md",
+    "submission/VIDEO_SCRIPT.md"
+  ],
+  "transport_paths": [
+    "docs/bridge/changes/unit-05.md",
+    "docs/bridge/changes/unit-05.json"
+  ],
+  "tests_written": [
+    "DemoGuide.test_exact_public_functions_and_frozen_signatures",
+    "DemoGuide.test_full_guide_has_closed_pending_shape_and_dependency_chain",
+    "DemoGuide.test_each_single_step_matches_its_full_definition",
+    "DemoGuide.test_steps_describe_the_required_operator_checks",
+    "DemoGuide.test_invalid_step_values_have_empty_closed_error",
+    "DemoGuide.test_non_objects_and_extra_fields_are_rejected",
+    "DemoGuide.test_inputs_are_not_mutated_or_reflected_in_errors",
+    "DemoGuide.test_resource_accepts_only_the_exact_string_uri",
+    "DemoGuide.test_tool_metadata_has_one_closed_readonly_tool",
+    "DemoGuide.test_resource_metadata_has_one_static_json_resource",
+    "DemoGuide.test_guide_and_resource_results_have_no_shared_mutable_state",
+    "DemoGuide.test_metadata_returns_independent_nested_containers",
+    "DemoGuide.test_source_has_no_imports_dynamic_execution_or_import_time_effects",
+    "DemoGuide.test_import_and_all_function_paths_perform_no_effects",
+    "SubmissionContract.test_all_seven_live_markers_remain_open_in_both_documents",
+    "SubmissionContract.test_devpost_has_seven_aligned_pending_evidence_sections",
+    "SubmissionContract.test_script_segments_cover_exactly_180_seconds_in_step_order",
+    "SubmissionContract.test_submission_preserves_confirmation_and_integration_boundaries",
+    "SubmissionContract.test_all_links_resolve_to_reviewed_paths_at_the_immutable_base"
+  ],
+  "tests_run": [
+    {
+      "command": "python3 -B -m unittest discover -s tests/integration -p test_mcp_demo_guide.py -v",
+      "exit_code": 0,
+      "tests": 19,
+      "result": "OK",
+      "scope": "offline guide contract only"
+    },
+    {
+      "command": "python3 -B -m unittest discover -s tests/integration -p test_mcp_server.py",
+      "exit_code": 0,
+      "tests": 31,
+      "result": "OK",
+      "scope": "existing MCP regression suite; no live acceptance"
+    },
+    {
+      "command": "python3 -B -m unittest discover -s tests/bootstrap -p test_router_index.py",
+      "exit_code": 1,
+      "tests": 26,
+      "failures": 4,
+      "errors": 8,
+      "diagnostic": "source_profile_coverage_incomplete",
+      "scope": "proposal tree with required new source; inherited closed profile"
+    },
+    {
+      "command": "python3 -B -m unittest discover -s tests/bootstrap -p test_router_index.py",
+      "exit_code": 1,
+      "tests": 26,
+      "errors": 11,
+      "diagnostic": "parser_unavailable",
+      "scope": "clean base worktree; local JavaScript parser dependency absent; nothing installed"
+    },
+    {
+      "command": "python3 -B tools/publication_lint.py",
+      "exit_code": 0,
+      "result": "pass",
+      "findings": 0,
+      "scope": "clean base worktree"
+    },
+    {
+      "command": "python3 -B tools/claims_check.py",
+      "exit_code": 0,
+      "result": "pass",
+      "findings": 0,
+      "scope": "clean base worktree"
+    },
+    {
+      "command": "git apply --check <temporary-product-patch>",
+      "exit_code": 0,
+      "result": "pass",
+      "scope": "complete four-file patch against a clean fixed-base worktree; temporary path redacted"
+    },
+    {
+      "command": "python3 -B tools/publication_lint.py",
+      "exit_code": 1,
+      "result": "fail",
+      "findings": 4,
+      "diagnostic": "non_english_or_unreviewed_filename",
+      "scope": "complete six-path proposal; inherited filename vocabulary"
+    },
+    {
+      "command": "python3 -B tools/claims_check.py",
+      "exit_code": 1,
+      "result": "fail",
+      "findings": 16,
+      "diagnostic": "unproven_path_tool_or_flag",
+      "scope": "complete six-path proposal; literal protocol methods and required unified diff syntax misclassified as paths or shell commands"
+    },
+    {
+      "check": "qualify_cafe_router.check_ownership over proposal inventory",
+      "passed": false,
+      "diagnostic": "file does not have exactly one owner",
+      "scope": "complete six-path proposal; submission ownership missing"
+    },
+    {
+      "command": "python -B tools/run_ci.py --stage python",
+      "runner": "ubuntu-latest",
+      "run_id": 41372274512,
+      "job_id": 125045076547,
+      "exit_code": 1,
+      "tests": 342,
+      "failures": 12,
+      "errors": 8,
+      "scope": "hosted bootstrap suite; does not select the new guide tests"
+    },
+    {
+      "command": "python -B tools/run_ci.py --stage python",
+      "runner": "windows-latest",
+      "run_id": 41372274512,
+      "job_id": 125045076576,
+      "exit_code": 1,
+      "tests": 342,
+      "failures": 12,
+      "errors": 8,
+      "scope": "hosted bootstrap suite; does not select the new guide tests"
+    },
+    {
+      "check": "transport Markdown patch SHA-256 equals the complete product patch",
+      "result": "pass"
+    }
+  ],
+  "scope": "unverified_proposal",
+  "live_acceptance": "pending for S01 through S07; no native integration or acceptance is established",
+  "ci": {
+    "proposal_run": {
+      "id": 41372274512,
+      "url": "https://github.com/oguirado/cafe/actions/runs/41372274512",
+      "event": "push",
+      "status": "completed",
+      "conclusion": "failure",
+      "jobs": [
+        {
+          "id": 125045076547,
+          "name": "verify (ubuntu-latest)",
+          "status": "completed",
+          "conclusion": "failure",
+          "failed_step": "Gate python",
+          "bootstrap_tests": 342,
+          "failures": 12,
+          "errors": 8,
+          "log_tail": [
+            "Ran 342 tests in 35.504s",
+            "FAILED (failures=12, errors=8)"
+          ]
+        },
+        {
+          "id": 125045076576,
+          "name": "verify (windows-latest)",
+          "status": "completed",
+          "conclusion": "failure",
+          "failed_step": "Gate python",
+          "bootstrap_tests": 342,
+          "failures": 12,
+          "errors": 8,
+          "log_tail": [
+            "Ran 342 tests in 111.330s",
+            "FAILED (failures=12, errors=8)"
+          ]
+        },
+        {
+          "id": 125045076612,
+          "name": "gitleaks full history and real negative controls",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125045076383,
+          "name": "WGC availability assessment (not native pass)",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "id": 125045628150,
+          "name": "Synthetic owned-window WGC capture",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    "status": "completed",
+    "base_run": {
+      "id": 41369756476,
+      "url": "https://github.com/oguirado/cafe/actions/runs/41369756476",
+      "head_sha": "f1e874050e305645a90e64267e50f8625daae9bc",
+      "status": "completed",
+      "conclusion": "failure",
+      "ubuntu": "success",
+      "windows": "failure at Gate router",
+      "secret_scan": "success",
+      "diagnostic": "portable_router tests/test_T9_gates.py returned rc=1; other base resolver checks passed"
+    },
+    "guide_test_selected_by_existing_workflow": false,
+    "conclusion": "failure",
+    "evidence_head_sha": "773caed440c5edef2dbe67a1a4b5b0e0f57afc0a",
+    "failure_classification": "Required additions conflict with inherited source-profile and document-route coverage, filename vocabulary, submission ownership, and claims heuristics. These are proposal-triggered integration failures, distinct from the separate pre-existing Windows router failure at the base.",
+    "failure_diagnostics": [
+      "source_profile_coverage_incomplete",
+      "non_english_or_unreviewed_filename",
+      "unproven_path_tool_or_flag",
+      "document primary id missing from generic lookup",
+      "file does not have exactly one owner"
+    ],
+    "repair_disposition": "No product-contract defect found by the direct guide suite and independent review. Repairing these CI failures requires paths or validators forbidden by the closed write set. No bypasses, filename substitutions, gate suppression, workflow changes or catalogue changes were made.",
+    "observed_product_rounds": 1,
+    "evidence_scope": "This completed run covers the unchanged four-file product patch. The subsequent commit adds only this CI metadata and triggers a separate check run; its status must be observed independently."
+  },
+  "integration_blockers": [
+    {
+      "kind": "required_names_vs_inherited_validator",
+      "diagnostic": "non_english_or_unreviewed_filename",
+      "paths": [
+        "connectors/cafe/mcp_demo_guide.py",
+        "tests/integration/test_mcp_demo_guide.py",
+        "submission/DEVPOST.md",
+        "submission/VIDEO_SCRIPT.md"
+      ],
+      "required_out_of_scope_change": "review publication filename vocabulary; no renames or validator edits made"
+    },
+    {
+      "kind": "required_source_vs_inherited_catalogue",
+      "diagnostic": "source_profile_coverage_incomplete",
+      "paths": [
+        "connectors/cafe/mcp_demo_guide.py",
+        "docs/bridge/changes/unit-05.md"
+      ],
+      "required_out_of_scope_change": "review source profile and rebuild catalogue/index; no catalogue edits made",
+      "detail": "Hosted bootstrap also reports document primary id missing from generic lookup for the mandated transport Markdown. Both coverage and document routing require catalogue edits outside scope."
+    },
+    {
+      "kind": "submission_ownership",
+      "diagnostic": "file does not have exactly one owner",
+      "paths": [
+        "submission/DEVPOST.md",
+        "submission/VIDEO_SCRIPT.md"
+      ],
+      "required_out_of_scope_change": "declare ownership for submission; no ownership edits made"
+    },
+    {
+      "kind": "protocol_methods_misread_as_paths",
+      "diagnostic": "unproven_path_tool_or_flag",
+      "detail": "The inherited claims checker interprets literal tools/list and tools/call as repository paths, including inside the required complete patch. Protocol names are preserved without obfuscation. Required unified diff headers and Markdown table/regex lines are also misclassified by shell-command or code-span heuristics; the complete patch has not been altered to evade checking.",
+      "required_out_of_scope_change": "review method/path handling in claims checker; no validator edits made"
+    },
+    {
+      "kind": "new_test_not_in_ci_selection",
+      "detail": "The existing workflow and integration runners select other test patterns explicitly. The new guide suite was executed locally; no claim it ran in hosted CI.",
+      "required_out_of_scope_change": "add explicit guide suite discovery in a separate integration; no workflow or runner edits made"
+    }
+  ],
+  "assumptions": [
+    "The complete product patch covers the four frozen new paths; the two explicitly authorized transport files package it and are excluded from their own payload to avoid recursive patching.",
+    "Invalid guide arguments always return empty steps with invalid_arguments; only the exact resource URI succeeds.",
+    "All prior demo steps are prerequisites for the next checkpoint; every live status and all seven documentary markers remain pending.",
+    "Server/resource registration, native providers, CI test selection and inherited gate/catalogue changes require a separate integration outside this closed write set.",
+    "The timed narration uses synthetic identifiers and an unfilled session placeholder; no fixtures or script establish live acceptance."
+  ],
+  "tooling_notes": [
+    "Initial sandbox clone could not connect to its configured proxy; the authorized network retry succeeded.",
+    "The first guide test-harness run had a whitespace-only assertion mismatch; normalized whitespace and reran successfully.",
+    "The first ownership diagnostic print attempted to serialize a Check object directly; dataclass serialization corrected the harness and exposed the actual ownership failure.",
+    "Direct workflow-job metadata URLs were rejected by the GitHub fetch allowlist; supported workflow-job and log tools provided the required CI results."
+  ]
+}
