@@ -297,7 +297,7 @@
     "typescript": "5.9.3",
     "vue": "3.5.43",
     "dockview-core": "8.4.1",
-    "dockview-vue": "8.4.1",
+    "dockview-vue": "8.8.2",
     "openvue": "1.0.0",
     "@openvue/icons": "1.0.0",
     "@openvue/themes": "1.0.0"
