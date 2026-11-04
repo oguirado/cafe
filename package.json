@@ -294,7 +294,7 @@
     }
   },
   "dependencies": {
-    "typescript": "5.9.3",
+    "typescript": "7.0.2",
     "vue": "3.5.43",
     "dockview-core": "8.4.1",
     "dockview-vue": "8.4.1",
